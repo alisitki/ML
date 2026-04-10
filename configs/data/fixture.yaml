@@ -1,0 +1,45 @@
+dataset:
+  dataset_hash: fixture-dataset-v2
+  slice_id: fixture-smoke-btc-eth
+  exchanges: [binance, bybit, okx]
+  symbols: [BTCUSDT, ETHUSDT]
+  stream_universe: [bbo, trade, mark_price, funding, open_interest]
+  available_streams_by_exchange:
+    binance: [bbo, trade, mark_price, funding]
+    bybit: [mark_price, open_interest]
+    okx: [mark_price]
+  # V2: Fine-grain structural availability overrides.
+  # binance does not carry open_interest by contract (not in list above,
+  # explicitly set here for clarity and test assertions).
+  availability_by_contract:
+    binance:
+      open_interest: false
+    bybit:
+      bbo: false
+      trade: false
+      funding: false
+    okx:
+      bbo: false
+      trade: false
+      funding: false
+      open_interest: false
+  # V2: Per-stream mandatory field catalogs.
+  # Omitted streams fall back to REQUIRED_FIELDS_BY_STREAM constant.
+  field_catalogs:
+    - stream: trade
+      fields: [price, qty, side_or_signed_flow_proxy, event_delta, count_or_burst]
+    - stream: bbo
+      fields: [bid_price, ask_price, bid_size, ask_size, spread, mid, imbalance_inputs]
+    - stream: mark_price
+      fields: [mark_price, event_delta, index_price_if_available]
+    - stream: funding
+      fields: [funding_rate, next_funding_time, funding_update_age]
+    - stream: open_interest
+      fields: [open_interest, oi_delta, oi_update_age]
+  train_range:
+    start: 2024-01-01T00:00:00Z
+    end: 2024-01-01T00:03:00Z
+  eval_range:
+    start: 2024-01-01T00:04:00Z
+    end: 2024-01-01T00:06:00Z
+  sampling_interval_seconds: 60

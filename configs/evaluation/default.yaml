@@ -1,0 +1,8 @@
+evaluation:
+  fee_handling: shared_reward_contract
+  funding_handling: carry_from_funding_stream
+  slippage_handling: fixed_bps
+  fill_assumption_mode: next_mark_price
+  timeout_semantics: force_terminal_at_data_end
+  terminal_semantics: trajectory_boundary_is_terminal
+  infeasible_action_treatment: force_abstain

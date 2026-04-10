@@ -1,0 +1,98 @@
+{"event_time": "2024-01-01T00:00:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 100.0, "event_delta": 0.0, "index_price_if_available": 100.0}
+{"event_time": "2024-01-01T00:00:00Z", "exchange": "bybit", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 100.2, "event_delta": 0.0, "index_price_if_available": 100.2}
+{"event_time": "2024-01-01T00:00:00Z", "exchange": "okx", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 99.8, "event_delta": 0.0, "index_price_if_available": 99.8}
+{"event_time": "2024-01-01T00:00:00Z", "exchange": "bybit", "symbol": "BTCUSDT", "stream_type": "open_interest", "open_interest": 1000, "oi_delta": 0.0, "oi_update_age": 0.0}
+{"event_time": "2024-01-01T00:00:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "funding", "funding_rate": 0.0001, "next_funding_time": 28800.0, "funding_update_age": 0.0}
+{"event_time": "2024-01-01T00:00:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "bbo", "bid_price": 99.9, "ask_price": 100.1, "bid_size": 1.0, "ask_size": 1.0, "spread": 0.19999999999998863, "mid": 100.0, "imbalance_inputs": 0.0}
+{"event_time": "2024-01-01T00:00:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "trade", "price": 100.0, "qty": 1.0, "side_or_signed_flow_proxy": 1.0, "event_delta": 0.0, "count_or_burst": 1}
+{"event_time": "2024-01-01T00:00:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 50.0, "event_delta": 0.0, "index_price_if_available": 50.0}
+{"event_time": "2024-01-01T00:00:00Z", "exchange": "bybit", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 49.9, "event_delta": 0.0, "index_price_if_available": 49.9}
+{"event_time": "2024-01-01T00:00:00Z", "exchange": "okx", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 50.1, "event_delta": 0.0, "index_price_if_available": 50.1}
+{"event_time": "2024-01-01T00:00:00Z", "exchange": "bybit", "symbol": "ETHUSDT", "stream_type": "open_interest", "open_interest": 800, "oi_delta": 0.0, "oi_update_age": 0.0}
+{"event_time": "2024-01-01T00:00:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "funding", "funding_rate": 5e-05, "next_funding_time": 28800.0, "funding_update_age": 0.0}
+{"event_time": "2024-01-01T00:00:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "bbo", "bid_price": 49.95, "ask_price": 50.05, "bid_size": 1.0, "ask_size": 1.0, "spread": 0.09999999999999432, "mid": 50.0, "imbalance_inputs": 0.0}
+{"event_time": "2024-01-01T00:00:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "trade", "price": 50.0, "qty": 1.0, "side_or_signed_flow_proxy": 1.0, "event_delta": 0.0, "count_or_burst": 1}
+{"event_time": "2024-01-01T00:01:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 101.5, "event_delta": 0.0, "index_price_if_available": 101.5}
+{"event_time": "2024-01-01T00:01:00Z", "exchange": "bybit", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 101.3, "event_delta": 0.0, "index_price_if_available": 101.3}
+{"event_time": "2024-01-01T00:01:00Z", "exchange": "okx", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 101.0, "event_delta": 0.0, "index_price_if_available": 101.0}
+{"event_time": "2024-01-01T00:01:00Z", "exchange": "bybit", "symbol": "BTCUSDT", "stream_type": "open_interest", "open_interest": 1005, "oi_delta": 0.0, "oi_update_age": 0.0}
+{"event_time": "2024-01-01T00:01:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "funding", "funding_rate": 0.00012, "next_funding_time": 28800.0, "funding_update_age": 0.0}
+{"event_time": "2024-01-01T00:01:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "bbo", "bid_price": 101.4, "ask_price": 101.6, "bid_size": 1.0, "ask_size": 1.0, "spread": 0.19999999999998863, "mid": 101.5, "imbalance_inputs": 0.0}
+{"event_time": "2024-01-01T00:01:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "trade", "price": 101.5, "qty": 1.0, "side_or_signed_flow_proxy": 1.0, "event_delta": 0.0, "count_or_burst": 1}
+{"event_time": "2024-01-01T00:01:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 50.6, "event_delta": 0.0, "index_price_if_available": 50.6}
+{"event_time": "2024-01-01T00:01:00Z", "exchange": "bybit", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 50.5, "event_delta": 0.0, "index_price_if_available": 50.5}
+{"event_time": "2024-01-01T00:01:00Z", "exchange": "okx", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 50.7, "event_delta": 0.0, "index_price_if_available": 50.7}
+{"event_time": "2024-01-01T00:01:00Z", "exchange": "bybit", "symbol": "ETHUSDT", "stream_type": "open_interest", "open_interest": 805, "oi_delta": 0.0, "oi_update_age": 0.0}
+{"event_time": "2024-01-01T00:01:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "funding", "funding_rate": 4e-05, "next_funding_time": 28800.0, "funding_update_age": 0.0}
+{"event_time": "2024-01-01T00:01:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "bbo", "bid_price": 50.55, "ask_price": 50.65, "bid_size": 1.0, "ask_size": 1.0, "spread": 0.10000000000000142, "mid": 50.599999999999994, "imbalance_inputs": 0.0}
+{"event_time": "2024-01-01T00:01:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "trade", "price": 50.6, "qty": 1.0, "side_or_signed_flow_proxy": 1.0, "event_delta": 0.0, "count_or_burst": 1}
+{"event_time": "2024-01-01T00:02:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 103.0, "event_delta": 0.0, "index_price_if_available": 103.0}
+{"event_time": "2024-01-01T00:02:00Z", "exchange": "bybit", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 102.8, "event_delta": 0.0, "index_price_if_available": 102.8}
+{"event_time": "2024-01-01T00:02:00Z", "exchange": "okx", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 102.6, "event_delta": 0.0, "index_price_if_available": 102.6}
+{"event_time": "2024-01-01T00:02:00Z", "exchange": "bybit", "symbol": "BTCUSDT", "stream_type": "open_interest", "open_interest": 1010, "oi_delta": 0.0, "oi_update_age": 0.0}
+{"event_time": "2024-01-01T00:02:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "funding", "funding_rate": 0.00011, "next_funding_time": 28800.0, "funding_update_age": 0.0}
+{"event_time": "2024-01-01T00:02:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "bbo", "bid_price": 102.9, "ask_price": 103.1, "bid_size": 1.0, "ask_size": 1.0, "spread": 0.19999999999998863, "mid": 103.0, "imbalance_inputs": 0.0}
+{"event_time": "2024-01-01T00:02:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "trade", "price": 103.0, "qty": 1.0, "side_or_signed_flow_proxy": 1.0, "event_delta": 0.0, "count_or_burst": 1}
+{"event_time": "2024-01-01T00:02:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 50.3, "event_delta": 0.0, "index_price_if_available": 50.3}
+{"event_time": "2024-01-01T00:02:00Z", "exchange": "bybit", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 50.4, "event_delta": 0.0, "index_price_if_available": 50.4}
+{"event_time": "2024-01-01T00:02:00Z", "exchange": "okx", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 50.5, "event_delta": 0.0, "index_price_if_available": 50.5}
+{"event_time": "2024-01-01T00:02:00Z", "exchange": "bybit", "symbol": "ETHUSDT", "stream_type": "open_interest", "open_interest": 810, "oi_delta": 0.0, "oi_update_age": 0.0}
+{"event_time": "2024-01-01T00:02:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "funding", "funding_rate": 6e-05, "next_funding_time": 28800.0, "funding_update_age": 0.0}
+{"event_time": "2024-01-01T00:02:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "bbo", "bid_price": 50.25, "ask_price": 50.35, "bid_size": 1.0, "ask_size": 1.0, "spread": 0.10000000000000142, "mid": 50.3, "imbalance_inputs": 0.0}
+{"event_time": "2024-01-01T00:02:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "trade", "price": 50.3, "qty": 1.0, "side_or_signed_flow_proxy": 1.0, "event_delta": 0.0, "count_or_burst": 1}
+{"event_time": "2024-01-01T00:03:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 102.0, "event_delta": 0.0, "index_price_if_available": 102.0}
+{"event_time": "2024-01-01T00:03:00Z", "exchange": "bybit", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 101.9, "event_delta": 0.0, "index_price_if_available": 101.9}
+{"event_time": "2024-01-01T00:03:00Z", "exchange": "okx", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 101.7, "event_delta": 0.0, "index_price_if_available": 101.7}
+{"event_time": "2024-01-01T00:03:00Z", "exchange": "bybit", "symbol": "BTCUSDT", "stream_type": "open_interest", "open_interest": 1008, "oi_delta": 0.0, "oi_update_age": 0.0}
+{"event_time": "2024-01-01T00:03:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "funding", "funding_rate": 9e-05, "next_funding_time": 28800.0, "funding_update_age": 0.0}
+{"event_time": "2024-01-01T00:03:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "bbo", "bid_price": 101.9, "ask_price": 102.1, "bid_size": 1.0, "ask_size": 1.0, "spread": 0.19999999999998863, "mid": 102.0, "imbalance_inputs": 0.0}
+{"event_time": "2024-01-01T00:03:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "trade", "price": 102.0, "qty": 1.0, "side_or_signed_flow_proxy": 1.0, "event_delta": 0.0, "count_or_burst": 1}
+{"event_time": "2024-01-01T00:03:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 50.9, "event_delta": 0.0, "index_price_if_available": 50.9}
+{"event_time": "2024-01-01T00:03:00Z", "exchange": "bybit", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 50.8, "event_delta": 0.0, "index_price_if_available": 50.8}
+{"event_time": "2024-01-01T00:03:00Z", "exchange": "okx", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 51.0, "event_delta": 0.0, "index_price_if_available": 51.0}
+{"event_time": "2024-01-01T00:03:00Z", "exchange": "bybit", "symbol": "ETHUSDT", "stream_type": "open_interest", "open_interest": 815, "oi_delta": 0.0, "oi_update_age": 0.0}
+{"event_time": "2024-01-01T00:03:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "funding", "funding_rate": 5e-05, "next_funding_time": 28800.0, "funding_update_age": 0.0}
+{"event_time": "2024-01-01T00:03:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "bbo", "bid_price": 50.85, "ask_price": 50.95, "bid_size": 1.0, "ask_size": 1.0, "spread": 0.10000000000000142, "mid": 50.900000000000006, "imbalance_inputs": 0.0}
+{"event_time": "2024-01-01T00:03:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "trade", "price": 50.9, "qty": 1.0, "side_or_signed_flow_proxy": 1.0, "event_delta": 0.0, "count_or_burst": 1}
+{"event_time": "2024-01-01T00:04:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 104.0, "event_delta": 0.0, "index_price_if_available": 104.0}
+{"event_time": "2024-01-01T00:04:00Z", "exchange": "bybit", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 103.8, "event_delta": 0.0, "index_price_if_available": 103.8}
+{"event_time": "2024-01-01T00:04:00Z", "exchange": "okx", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 103.6, "event_delta": 0.0, "index_price_if_available": 103.6}
+{"event_time": "2024-01-01T00:04:00Z", "exchange": "bybit", "symbol": "BTCUSDT", "stream_type": "open_interest", "open_interest": 1015, "oi_delta": 0.0, "oi_update_age": 0.0}
+{"event_time": "2024-01-01T00:04:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "funding", "funding_rate": 0.0001, "next_funding_time": 28800.0, "funding_update_age": 0.0}
+{"event_time": "2024-01-01T00:04:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "bbo", "bid_price": 103.9, "ask_price": 104.1, "bid_size": 1.0, "ask_size": 1.0, "spread": 0.19999999999998863, "mid": 104.0, "imbalance_inputs": 0.0}
+{"event_time": "2024-01-01T00:04:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "trade", "price": 104.0, "qty": 1.0, "side_or_signed_flow_proxy": 1.0, "event_delta": 0.0, "count_or_burst": 1}
+{"event_time": "2024-01-01T00:04:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 51.4, "event_delta": 0.0, "index_price_if_available": 51.4}
+{"event_time": "2024-01-01T00:04:00Z", "exchange": "bybit", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 51.3, "event_delta": 0.0, "index_price_if_available": 51.3}
+{"event_time": "2024-01-01T00:04:00Z", "exchange": "okx", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 51.5, "event_delta": 0.0, "index_price_if_available": 51.5}
+{"event_time": "2024-01-01T00:04:00Z", "exchange": "bybit", "symbol": "ETHUSDT", "stream_type": "open_interest", "open_interest": 820, "oi_delta": 0.0, "oi_update_age": 0.0}
+{"event_time": "2024-01-01T00:04:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "funding", "funding_rate": 4e-05, "next_funding_time": 28800.0, "funding_update_age": 0.0}
+{"event_time": "2024-01-01T00:04:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "bbo", "bid_price": 51.35, "ask_price": 51.45, "bid_size": 1.0, "ask_size": 1.0, "spread": 0.10000000000000142, "mid": 51.400000000000006, "imbalance_inputs": 0.0}
+{"event_time": "2024-01-01T00:04:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "trade", "price": 51.4, "qty": 1.0, "side_or_signed_flow_proxy": 1.0, "event_delta": 0.0, "count_or_burst": 1}
+{"event_time": "2024-01-01T00:05:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 105.5, "event_delta": 0.0, "index_price_if_available": 105.5}
+{"event_time": "2024-01-01T00:05:00Z", "exchange": "bybit", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 105.2, "event_delta": 0.0, "index_price_if_available": 105.2}
+{"event_time": "2024-01-01T00:05:00Z", "exchange": "okx", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 105.0, "event_delta": 0.0, "index_price_if_available": 105.0}
+{"event_time": "2024-01-01T00:05:00Z", "exchange": "bybit", "symbol": "BTCUSDT", "stream_type": "open_interest", "open_interest": 1020, "oi_delta": 0.0, "oi_update_age": 0.0}
+{"event_time": "2024-01-01T00:05:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "funding", "funding_rate": 8e-05, "next_funding_time": 28800.0, "funding_update_age": 0.0}
+{"event_time": "2024-01-01T00:05:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "bbo", "bid_price": 105.4, "ask_price": 105.6, "bid_size": 1.0, "ask_size": 1.0, "spread": 0.19999999999998863, "mid": 105.5, "imbalance_inputs": 0.0}
+{"event_time": "2024-01-01T00:05:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "trade", "price": 105.5, "qty": 1.0, "side_or_signed_flow_proxy": 1.0, "event_delta": 0.0, "count_or_burst": 1}
+{"event_time": "2024-01-01T00:05:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 51.1, "event_delta": 0.0, "index_price_if_available": 51.1}
+{"event_time": "2024-01-01T00:05:00Z", "exchange": "bybit", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 51.0, "event_delta": 0.0, "index_price_if_available": 51.0}
+{"event_time": "2024-01-01T00:05:00Z", "exchange": "okx", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 51.2, "event_delta": 0.0, "index_price_if_available": 51.2}
+{"event_time": "2024-01-01T00:05:00Z", "exchange": "bybit", "symbol": "ETHUSDT", "stream_type": "open_interest", "open_interest": 818, "oi_delta": 0.0, "oi_update_age": 0.0}
+{"event_time": "2024-01-01T00:05:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "funding", "funding_rate": 6e-05, "next_funding_time": 28800.0, "funding_update_age": 0.0}
+{"event_time": "2024-01-01T00:05:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "bbo", "bid_price": 51.05, "ask_price": 51.15, "bid_size": 1.0, "ask_size": 1.0, "spread": 0.10000000000000142, "mid": 51.099999999999994, "imbalance_inputs": 0.0}
+{"event_time": "2024-01-01T00:05:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "trade", "price": 51.1, "qty": 1.0, "side_or_signed_flow_proxy": 1.0, "event_delta": 0.0, "count_or_burst": 1}
+{"event_time": "2024-01-01T00:06:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 104.5, "event_delta": 0.0, "index_price_if_available": 104.5}
+{"event_time": "2024-01-01T00:06:00Z", "exchange": "bybit", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 104.4, "event_delta": 0.0, "index_price_if_available": 104.4}
+{"event_time": "2024-01-01T00:06:00Z", "exchange": "okx", "symbol": "BTCUSDT", "stream_type": "mark_price", "mark_price": 104.2, "event_delta": 0.0, "index_price_if_available": 104.2}
+{"event_time": "2024-01-01T00:06:00Z", "exchange": "bybit", "symbol": "BTCUSDT", "stream_type": "open_interest", "open_interest": 1018, "oi_delta": 0.0, "oi_update_age": 0.0}
+{"event_time": "2024-01-01T00:06:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "funding", "funding_rate": 7e-05, "next_funding_time": 28800.0, "funding_update_age": 0.0}
+{"event_time": "2024-01-01T00:06:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "bbo", "bid_price": 104.4, "ask_price": 104.6, "bid_size": 1.0, "ask_size": 1.0, "spread": 0.19999999999998863, "mid": 104.5, "imbalance_inputs": 0.0}
+{"event_time": "2024-01-01T00:06:00Z", "exchange": "binance", "symbol": "BTCUSDT", "stream_type": "trade", "price": 104.5, "qty": 1.0, "side_or_signed_flow_proxy": 1.0, "event_delta": 0.0, "count_or_burst": 1}
+{"event_time": "2024-01-01T00:06:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 51.7, "event_delta": 0.0, "index_price_if_available": 51.7}
+{"event_time": "2024-01-01T00:06:00Z", "exchange": "bybit", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 51.6, "event_delta": 0.0, "index_price_if_available": 51.6}
+{"event_time": "2024-01-01T00:06:00Z", "exchange": "okx", "symbol": "ETHUSDT", "stream_type": "mark_price", "mark_price": 51.8, "event_delta": 0.0, "index_price_if_available": 51.8}
+{"event_time": "2024-01-01T00:06:00Z", "exchange": "bybit", "symbol": "ETHUSDT", "stream_type": "open_interest", "open_interest": 825, "oi_delta": 0.0, "oi_update_age": 0.0}
+{"event_time": "2024-01-01T00:06:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "funding", "funding_rate": 5e-05, "next_funding_time": 28800.0, "funding_update_age": 0.0}
+{"event_time": "2024-01-01T00:06:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "bbo", "bid_price": 51.65, "ask_price": 51.75, "bid_size": 1.0, "ask_size": 1.0, "spread": 0.10000000000000142, "mid": 51.7, "imbalance_inputs": 0.0}
+{"event_time": "2024-01-01T00:06:00Z", "exchange": "binance", "symbol": "ETHUSDT", "stream_type": "trade", "price": 51.7, "qty": 1.0, "side_or_signed_flow_proxy": 1.0, "event_delta": 0.0, "count_or_burst": 1}

@@ -1,0 +1,10 @@
+reward:
+  horizon_steps: 1
+  fee_bps: 2.5
+  slippage_bps: 1.0
+  risk_aversion: 0.25
+  turnover_penalty: 0.0005
+  funding_weight: 1.0
+  timestamping: next_mark_price
+  realized_event: next_observation_close
+  infeasible_action_penalty: -0.001

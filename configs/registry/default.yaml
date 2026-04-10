@@ -1,0 +1,4 @@
+registry:
+  root: outputs/registry
+  comparison_metric: composite_rank
+  champion_policy_id: null
