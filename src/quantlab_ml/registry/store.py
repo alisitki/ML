@@ -51,7 +51,7 @@ class LocalRegistryStore:
             slice_id=bundle.dataset_spec.slice_id,
             reward_config_hash=reward_config_hash,
             training_config_hash=training_config_hash,
-            parent_policy_id=artifact.executor_metadata.lineage_pointer.parent_policy_id,
+            parent_policy_id=artifact.runtime_metadata.lineage_pointer.parent_policy_id,
             lineage_chain=_lineage_chain(artifact),
             status="candidate",
             train_window=bundle.dataset_spec.train_range,
@@ -145,6 +145,6 @@ def _merge_ranges(left: TimeRange, right: TimeRange) -> TimeRange:
 
 
 def _lineage_chain(artifact: PolicyArtifact) -> list[str]:
-    if artifact.executor_metadata.lineage_pointer.parent_policy_id is None:
+    if artifact.runtime_metadata.lineage_pointer.parent_policy_id is None:
         return []
-    return [artifact.executor_metadata.lineage_pointer.parent_policy_id]
+    return [artifact.runtime_metadata.lineage_pointer.parent_policy_id]

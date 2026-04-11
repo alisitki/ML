@@ -79,9 +79,9 @@ def test_stale_funding_missing_false_stale_true(
     ]
 
     bundle = _build_bundle_from_lines(gap_lines, tmp_path, dataset_spec, training_bundle, reward_spec)
-    first_eval_step = bundle.splits["eval"][0].steps[-1]
-    schema = first_eval_step.observation.observation_schema
-    tensor = first_eval_step.observation.raw_surface["1m"]
+    first_final_test_step = bundle.splits["final_untouched_test"][0].steps[-1]
+    schema = first_final_test_step.observation.observation_schema
+    tensor = first_final_test_step.observation.raw_surface["1m"]
     coords = _find_stream_coords(schema, tensor, "binance", "funding")
 
     stale_found = False

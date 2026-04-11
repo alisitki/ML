@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import Field, model_validator
 
 from quantlab_ml.contracts.common import InvalidActionMaskSemantics, NumericBand, QuantBaseModel
-from quantlab_ml.contracts.dataset import DatasetSpec
+from quantlab_ml.contracts.dataset import DatasetSpec, WalkForwardSpec
 from quantlab_ml.contracts.rewards import RewardContext, RewardEventSpec, RewardSnapshot, RewardTimeline
 
 
@@ -362,7 +362,7 @@ class TrajectoryStep(QuantBaseModel):
 
 class TrajectoryRecord(QuantBaseModel):
     trajectory_id: str
-    split: Literal["train", "eval"]
+    split: Literal["train", "validation", "final_untouched_test"]
     target_symbol: str
     start_time: datetime
     end_time: datetime
@@ -377,10 +377,71 @@ class TrajectoryRecord(QuantBaseModel):
         return self
 
 
+class SplitWindow(QuantBaseModel):
+    start: datetime
+    end: datetime
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> "SplitWindow":
+        if self.end < self.start:
+            raise ValueError("split window end must be greater than or equal to start")
+        return self
+
+
+class WalkForwardFold(QuantBaseModel):
+    fold_id: str
+    train_window: SplitWindow
+    validation_window: SplitWindow
+    purge_width_steps: int
+    embargo_width_steps: int
+    horizon_steps: int
+
+    @model_validator(mode="after")
+    def validate_fold(self) -> "WalkForwardFold":
+        if self.train_window.end >= self.validation_window.start:
+            raise ValueError("walk-forward train window must end before validation window starts")
+        if self.purge_width_steps < 0 or self.embargo_width_steps < 0:
+            raise ValueError("purge/embargo widths must be non-negative")
+        if self.horizon_steps <= 0:
+            raise ValueError("walk-forward fold horizon_steps must be positive")
+        return self
+
+
+class SplitArtifact(QuantBaseModel):
+    split_version: str
+    purge_width_steps: int
+    embargo_width_steps: int
+    fold_generation_config: WalkForwardSpec
+    development_window: SplitWindow
+    train_window: SplitWindow
+    validation_window: SplitWindow
+    final_untouched_test_window: SplitWindow
+    folds: list[WalkForwardFold]
+
+    @model_validator(mode="after")
+    def validate_folds(self) -> "SplitArtifact":
+        if self.split_version != "split_v1_walkforward":
+            raise ValueError("split artifact must use split_v1_walkforward")
+        if not self.folds:
+            raise ValueError("split artifact must contain at least one walk-forward fold")
+        return self
+
+
 class TrajectoryBundle(QuantBaseModel):
     dataset_spec: DatasetSpec
     trajectory_spec: TrajectorySpec
     action_space: ActionSpaceSpec
     reward_spec: RewardEventSpec
     observation_schema: ObservationSchema
+    split_artifact: SplitArtifact
     splits: dict[str, list[TrajectoryRecord]]
+
+    @model_validator(mode="after")
+    def validate_split_keys(self) -> "TrajectoryBundle":
+        required_keys = {"train", "validation", "final_untouched_test"}
+        actual_keys = set(self.splits)
+        if actual_keys != required_keys:
+            raise ValueError(
+                f"trajectory bundle splits must match canonical keys {sorted(required_keys)}; got {sorted(actual_keys)}"
+            )
+        return self

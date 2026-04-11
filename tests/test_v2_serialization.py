@@ -22,6 +22,7 @@ def test_v2_trajectory_bundle_round_trip(
     loaded = TrajectoryStore.read(path)
 
     assert loaded.dataset_spec.dataset_hash == trajectory_bundle.dataset_spec.dataset_hash
+    assert loaded.split_artifact.split_version == trajectory_bundle.split_artifact.split_version
     # V2 scale_preset round-trips correctly
     orig_labels = [s.label for s in trajectory_bundle.trajectory_spec.scale_preset]
     loaded_labels = [s.label for s in loaded.trajectory_spec.scale_preset]
@@ -44,6 +45,8 @@ def test_v2_policy_artifact_round_trip(
     dump_model(path, policy_artifact)
     loaded = load_model(path, PolicyArtifact)
     assert loaded.policy_id == policy_artifact.policy_id
+    assert loaded.artifact_id == policy_artifact.artifact_id
+    assert loaded.runtime_metadata.allowed_venues == policy_artifact.runtime_metadata.allowed_venues
     assert loaded.training_summary.get("surface_version") == "v2"
 
 

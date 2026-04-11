@@ -1,11 +1,19 @@
 """MomentumBaselineTrainer — V2 surface uyumlu; compat adapter üzerinden çalışır."""
 from __future__ import annotations
 
-import json
 from statistics import quantiles
 
-from quantlab_ml.common import hash_payload, utcnow
-from quantlab_ml.contracts import ExecutorMetadata, LineagePointer, OpaquePolicyPayload, PolicyArtifact, TrajectoryBundle
+from quantlab_ml.common import current_code_commit_hash, hash_payload, utcnow
+from quantlab_ml.contracts import (
+    ACTION_SPACE_VERSION,
+    DYNAMIC_TARGET_ASSET,
+    OBSERVATION_SCHEMA_VERSION,
+    LineagePointer,
+    OpaquePolicyPayload,
+    PolicyArtifact,
+    RuntimeMetadata,
+    TrajectoryBundle,
+)
 from quantlab_ml.models import MomentumBaselineParameters
 from quantlab_ml.training.compat_adapter import V2toV1BundleAdapter
 from quantlab_ml.training.config import TrainingConfig
@@ -41,6 +49,7 @@ class MomentumBaselineTrainer:
         payload = OpaquePolicyPayload(
             runtime_adapter=self.config.runtime_adapter,
             payload_format="json",
+            payload_format_version="json-v1",
             blob=payload_blob,
             digest=hash_payload(parameters),
         )
@@ -50,9 +59,19 @@ class MomentumBaselineTrainer:
             notes=["v2 surface — compat adapter momentum baseline"],
         )
         policy_id = f"policy-{payload.digest[:12]}"
+        artifact_id = f"artifact-{payload.digest[:12]}"
         confidence = min(0.99, len(steps) / 100.0)
+        training_config_hash = hash_payload(self.config)
+        training_snapshot_id = f"{bundle.dataset_spec.dataset_hash}:{bundle.dataset_spec.slice_id}"
+        evaluation_surface_id = (
+            f"{bundle.dataset_spec.slice_id}:{bundle.split_artifact.split_version}:{bundle.reward_spec.reward_version}"
+        )
+        target_asset = bundle.dataset_spec.symbols[0] if len(bundle.dataset_spec.symbols) == 1 else DYNAMIC_TARGET_ASSET
+        required_context = {}
+        if target_asset == DYNAMIC_TARGET_ASSET:
+            required_context = {"target_symbol_source": "observation.target_symbol"}
 
-        # Best reward: venue=None fallback ActionReward'ından (compat kaydı)
+        # Compat metric: available venue-specific reward'lar arasında en iyi net_reward
         average_best_reward = sum(
             max(
                 (r.net_reward for r in step_view.action_rewards_all() if r.applicable),
@@ -62,27 +81,61 @@ class MomentumBaselineTrainer:
         ) / len(steps)
 
         artifact = PolicyArtifact(
+            artifact_id=artifact_id,
+            artifact_version="policy_artifact_v1",
             policy_id=policy_id,
+            policy_family=self.config.trainer_name,
+            training_snapshot_id=training_snapshot_id,
+            training_config_hash=training_config_hash,
+            code_commit_hash=current_code_commit_hash(),
+            reward_version=bundle.reward_spec.reward_version,
+            evaluation_surface_id=evaluation_surface_id,
+            target_asset=target_asset,
+            allowed_venues=bundle.dataset_spec.exchanges,
+            allowed_action_family=bundle.action_space.action_keys,
+            required_context=required_context,
             created_at=utcnow(),
             observation_schema=bundle.observation_schema,
             action_space=bundle.action_space,
             policy_payload=payload,
-            executor_metadata=ExecutorMetadata(
-                asset_universe=bundle.dataset_spec.symbols,
-                venue_compatibility=bundle.dataset_spec.exchanges,
-                instrument_compatibility=bundle.dataset_spec.symbols,
+            runtime_metadata=RuntimeMetadata(
+                target_asset=target_asset,
+                allowed_venues=bundle.dataset_spec.exchanges,
+                action_space_version=ACTION_SPACE_VERSION,
+                required_streams=bundle.dataset_spec.stream_universe,
+                required_field_families={
+                    stream: bundle.observation_schema.field_axis.get(stream, [])
+                    for stream in bundle.dataset_spec.stream_universe
+                },
+                required_scale_preset=[scale.label for scale in bundle.trajectory_spec.scale_preset],
+                observation_schema_version=OBSERVATION_SCHEMA_VERSION,
+                reward_version=bundle.reward_spec.reward_version,
+                policy_state_requirements=[
+                    "previous_position_side",
+                    "previous_venue",
+                    "hold_age_steps",
+                    "turnover_accumulator",
+                ],
+                expected_return_score=average_best_reward,
+                risk_score=0.0,
+                turnover_score=0.0,
+                confidence_or_quality_score=confidence,
                 min_capital_requirement=500.0,
                 size_bounds=size_band,
                 leverage_bounds=leverage_band,
-                liquidity_flags={"requires_positive_open_interest": True},
-                applicability_flags={"supports_abstain": True, "offline_only": True},
-                expected_return=average_best_reward,
-                risk_score=0.0,
-                turnover_score=0.0,
-                confidence_score=confidence,
-                artifact_version="v2",
+                artifact_compatibility_tags=[
+                    f"runtime_adapter:{self.config.runtime_adapter}",
+                    f"reward:{bundle.reward_spec.reward_version}",
+                    f"split:{bundle.split_artifact.split_version}",
+                    f"observation:{OBSERVATION_SCHEMA_VERSION}",
+                    f"action_space:{ACTION_SPACE_VERSION}",
+                ],
+                runtime_adapter=self.config.runtime_adapter,
+                required_context=required_context,
                 lineage_pointer=lineages,
             ),
+            training_run_id=f"trainrun-{payload.digest[:12]}",
+            parent_artifact_id=parent_policy_id,
             training_summary={
                 "trainer_name": self.config.trainer_name,
                 "train_step_count": len(steps),

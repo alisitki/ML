@@ -17,10 +17,10 @@ This file must stay short and current.
 
 ## Current snapshot
 
-- current_phase: `Phase 0 -> Phase 1 handoff`
-- current_focus: `Freeze governance/spec memory, then align code to observation/reward/split v1 contracts`
+- current_phase: `Phase 2 registry and promotion discipline`
+- current_focus: `QL-005 artifact metadata and execution intent path are complete; enforce registry schema and promotion-gate behavior next`
 - current_blocker: `None`
-- declared_next_task: `Run a gap audit between current implementation and OBSERVATION_SCHEMA + REWARD_SPEC_V1 + SPLIT_POLICY_V1, then open concrete backlog items`
+- declared_next_task: `Implement QL-006 to enforce registry schema, score history, search-budget fields, and champion/challenger constraints`
 - not_now:
   - `TensorRT optimization`
   - `live deployment plumbing`
@@ -30,18 +30,16 @@ This file must stay short and current.
 ## Active work item
 
 ```yaml
-id: QL-001
-title: Gap audit for v1 implementation alignment
+id: QL-006
+title: Registry schema and promotion-gate enforcement
 status: in_progress
 owner: codex
 depends_on:
-  - governance docs frozen
+  - QL-005
 done_when:
-  - current code is compared against OBSERVATION_SCHEMA
-  - current code is compared against REWARD_SPEC_V1
-  - current code is compared against SPLIT_POLICY_V1
-  - concrete mismatches are written into BACKLOG.md
-  - PROJECT_STATE.md is updated with the next recommended task
+  - unscored champion impossible
+  - registry fields match REGISTRY_SCHEMA
+  - promotion prerequisites are checkable
 ```
 
 ## Current blocker details
@@ -54,12 +52,22 @@ None.
 - canonical contract docs written
 - runtime/executor boundary written
 - operational repo-memory layer added
+- QL-001 gap audit completed
+- confirmed split_v1 and reward_v1 mismatches recorded in BACKLOG
+- no confirmed observation blocker was found from current audit evidence
+- QL-002 split_v1 alignment completed
+- canonical train/validation/final untouched test segmentation now exists with persisted split artifacts and walk-forward folds
+- QL-007 minimum turnover-event dependency was resolved inside the reward path without a broader action-space epic
+- QL-003 reward_v1 parity alignment completed
+- effective selected-venue semantics are now explicit in reward context during reward application and evaluation
+- QL-005 policy artifact metadata and execution intent path alignment completed
+- policy artifacts now carry canonical runtime metadata and compatibility tags, and runtime selector output can be materialized as explicit execution intent
 
 ## Immediate next actions
 
-1. Run v1 implementation gap audit.
-2. Convert findings into concrete backlog items.
-3. Start with the highest-priority blocker from the audit.
+1. Implement QL-006 to enforce registry schema and promotion-gate behavior.
+2. Wire search-budget and lineage completeness through the registry path.
+3. Reassess QL-004 only if a concrete observation-schema gap emerges beyond the completed audit.
 
 ## Update rule
 

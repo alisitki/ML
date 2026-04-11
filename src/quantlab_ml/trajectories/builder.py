@@ -23,11 +23,14 @@ from quantlab_ml.contracts import (
     RewardTimeline,
     ScaleSpec,
     TimeRange,
+    SplitArtifact,
+    SplitWindow,
     TrajectoryBundle,
     TrajectoryRecord,
     TrajectorySpec,
     TrajectoryStep,
     VenueExecutionRef,
+    WalkForwardFold,
 )
 from quantlab_ml.rewards import RewardEngine
 
@@ -76,13 +79,21 @@ class TrajectoryBuilder:
 
     def build(self, events: list[NormalizedMarketEvent]) -> TrajectoryBundle:
         indexed = self._index_events(events)
+        self._validate_split_ranges()
         history_start = min(
             (event.event_time for event in events),
             default=self.dataset_spec.train_range.start,
         )
+        split_artifact = self._build_split_artifact()
         splits = {
             "train": self._build_split("train", self.dataset_spec.train_range, indexed, history_start),
-            "eval": self._build_split("eval", self.dataset_spec.eval_range, indexed, history_start),
+            "validation": self._build_split("validation", self.dataset_spec.validation_range, indexed, history_start),
+            "final_untouched_test": self._build_split(
+                "final_untouched_test",
+                self.dataset_spec.final_untouched_test_range,
+                indexed,
+                history_start,
+            ),
         }
         return TrajectoryBundle(
             dataset_spec=self.dataset_spec,
@@ -90,6 +101,7 @@ class TrajectoryBuilder:
             action_space=self.action_space,
             reward_spec=self.reward_spec,
             observation_schema=self.observation_schema,
+            split_artifact=split_artifact,
             splits=splits,
         )
 
@@ -157,6 +169,91 @@ class TrajectoryBuilder:
                     )
                 )
         return trajectories
+
+    def _build_split_artifact(self) -> SplitArtifact:
+        purge_width_steps = self.reward_spec.horizon_steps
+        embargo_width_steps = self.reward_spec.horizon_steps
+        folds = self._generate_walkforward_folds(
+            self._timestamps(self.dataset_spec.development_range),
+            purge_width_steps=purge_width_steps,
+            embargo_width_steps=embargo_width_steps,
+        )
+        return SplitArtifact(
+            split_version="split_v1_walkforward",
+            purge_width_steps=purge_width_steps,
+            embargo_width_steps=embargo_width_steps,
+            fold_generation_config=self.dataset_spec.walkforward,
+            development_window=self._window_from_range(self.dataset_spec.development_range),
+            train_window=self._window_from_range(self.dataset_spec.train_range),
+            validation_window=self._window_from_range(self.dataset_spec.validation_range),
+            final_untouched_test_window=self._window_from_range(self.dataset_spec.final_untouched_test_range),
+            folds=folds,
+        )
+
+    def _generate_walkforward_folds(
+        self,
+        development_timestamps: list[datetime],
+        purge_width_steps: int,
+        embargo_width_steps: int,
+    ) -> list[WalkForwardFold]:
+        config = self.dataset_spec.walkforward
+        if len(development_timestamps) < config.train_window_steps + config.validation_window_steps:
+            raise ValueError("development region is too short for configured walk-forward windows")
+
+        folds: list[WalkForwardFold] = []
+        validation_start_index = config.train_window_steps
+        max_validation_start = len(development_timestamps) - config.validation_window_steps
+        advance = max(config.step_size_steps, config.validation_window_steps + embargo_width_steps)
+
+        while validation_start_index <= max_validation_start:
+            validation_end_index = validation_start_index + config.validation_window_steps - 1
+            train_end_index = validation_start_index - 1
+            folds.append(
+                WalkForwardFold(
+                    fold_id=f"wf-{len(folds):02d}",
+                    train_window=SplitWindow(
+                        start=development_timestamps[0],
+                        end=development_timestamps[train_end_index],
+                    ),
+                    validation_window=SplitWindow(
+                        start=development_timestamps[validation_start_index],
+                        end=development_timestamps[validation_end_index],
+                    ),
+                    purge_width_steps=purge_width_steps,
+                    embargo_width_steps=embargo_width_steps,
+                    horizon_steps=self.reward_spec.horizon_steps,
+                )
+            )
+            validation_start_index += advance
+
+        if not folds:
+            raise ValueError("walk-forward generation produced no folds")
+        return folds
+
+    def _validate_split_ranges(self) -> None:
+        required_timestamp_count = self.reward_spec.horizon_steps + 1
+        segment_ranges = {
+            "train": self.dataset_spec.train_range,
+            "validation": self.dataset_spec.validation_range,
+            "final_untouched_test": self.dataset_spec.final_untouched_test_range,
+        }
+        for split_name, split_range in segment_ranges.items():
+            if len(self._timestamps(split_range)) < required_timestamp_count:
+                raise ValueError(
+                    f"{split_name} split requires at least {required_timestamp_count} timestamps for horizon "
+                    f"{self.reward_spec.horizon_steps}"
+                )
+        if self.dataset_spec.walkforward.validation_window_steps < required_timestamp_count:
+            raise ValueError(
+                "walk-forward validation_window_steps must be at least horizon_steps + 1 to avoid empty folds"
+            )
+        if self.dataset_spec.walkforward.train_window_steps < required_timestamp_count:
+            raise ValueError(
+                "walk-forward train_window_steps must be at least horizon_steps + 1 to avoid empty folds"
+            )
+
+    def _window_from_range(self, split_range: TimeRange) -> SplitWindow:
+        return SplitWindow(start=split_range.start, end=split_range.end)
 
     # ------------------------------------------------------------------
     # Observation Assembly

@@ -48,9 +48,9 @@ def test_raw_surface_contains_values_for_available_streams(
 ) -> None:
     """Available stream koordinatlarında en az bir non-zero, non-NaN değer olmalı."""
     schema = trajectory_bundle.observation_schema
-    # Eval split son step'ini kullan (tam history mevcut)
-    last_eval_step = trajectory_bundle.splits["eval"][0].steps[-1]
-    tensor = last_eval_step.observation.raw_surface["1m"]
+    # Validation split son step'ini kullan (tam history mevcut)
+    last_validation_step = trajectory_bundle.splits["validation"][0].steps[-1]
+    tensor = last_validation_step.observation.raw_surface["1m"]
 
     available_has_value = False
     for i in range(tensor.flat_size):

@@ -373,7 +373,7 @@ def _coerce_event_time(record: dict[str, Any]) -> datetime | str:
 
 def _dataset_days(dataset_spec: DatasetSpec) -> set[str]:
     start = dataset_spec.train_range.start.date()
-    end = dataset_spec.eval_range.end.date()
+    end = dataset_spec.final_untouched_test_range.end.date()
     days: set[str] = set()
     current = start
     while current <= end:

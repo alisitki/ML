@@ -6,7 +6,7 @@ V2 TrajectoryBundle'ı bu adapter aracılığıyla tüketir.
 Adapter:
   - V2 ObservationContext'ten momentum hesabı için gerekli seriyi çıkarır
   - action_mask flat dict'ini ActionFeasibilitySurface'ten türetir
-  - reward_snapshot'tan scalar net_reward'ı alır (venue=None fallback kaydından)
+  - reward_snapshot'taki venue-specific reward kayıtlarını compat amaçlı düzleştirir
 
 Bu modül dışında averaging veya scalar collapse yapılmaz.
 """
@@ -32,7 +32,7 @@ class V2toV1BundleAdapter:
     def eval_steps(self) -> list[_StepView]:
         return [
             _StepView(step)
-            for trajectory in self.bundle.splits.get("eval", [])
+            for trajectory in self.bundle.splits.get("validation", [])
             for step in trajectory.steps
         ]
 

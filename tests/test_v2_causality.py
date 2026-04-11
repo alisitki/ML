@@ -1,6 +1,6 @@
 """test_v2_causality.py
 
-- train/eval boundary geçişinin causal olduğunu
+- train/validation boundary geçişinin causal olduğunu
 - action_feasibility, reward_context ve policy_state'in future kullanmadığını doğrular.
 """
 from __future__ import annotations
@@ -59,11 +59,11 @@ def test_policy_state_derived_from_past_only(trajectory_bundle: TrajectoryBundle
         assert step.policy_state.turnover_accumulator >= 0.0
 
 
-def test_eval_split_starts_with_causal_observation(trajectory_bundle: TrajectoryBundle) -> None:
-    """Eval split ilk step'i causal pre-eval history ile başlar; hard reset yok."""
+def test_validation_split_starts_with_causal_observation(trajectory_bundle: TrajectoryBundle) -> None:
+    """Validation split ilk step'i causal pre-validation history ile başlar; hard reset yok."""
     schema = trajectory_bundle.observation_schema
-    first_eval_step = trajectory_bundle.splits["eval"][0].steps[0]
-    tensor = first_eval_step.observation.raw_surface["1m"]
+    first_validation_step = trajectory_bundle.splits["validation"][0].steps[0]
+    tensor = first_validation_step.observation.raw_surface["1m"]
     # Yeterli tarihçe varsa padding olmamalı
     # (fixture config'de train window yeterlince büyük)
     all_padding = all(
@@ -72,7 +72,7 @@ def test_eval_split_starts_with_causal_observation(trajectory_bundle: Trajectory
         or tensor.missing[i]
         for i in range(tensor.flat_size)
     )
-    assert not all_padding, "Eval first step should have at least some non-padding data"
+    assert not all_padding, "Validation first step should have at least some non-padding data"
 
 
 def test_reward_timeline_length_equals_horizon(trajectory_bundle: TrajectoryBundle) -> None:

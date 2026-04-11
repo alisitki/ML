@@ -8,15 +8,47 @@ from quantlab_ml.contracts.common import QuantBaseModel
 
 
 class RewardEventSpec(QuantBaseModel):
+    reward_version: str = "reward_v1"
     horizon_steps: int = 1
     fee_bps: float
     slippage_bps: float
     risk_aversion: float
     turnover_penalty: float
     funding_weight: float
+    funding_freshness_threshold_seconds: float = 180.0
     timestamping: str
     realized_event: str
     infeasible_action_penalty: float = -0.001
+
+    @model_validator(mode="after")
+    def validate_reward_v1(self) -> "RewardEventSpec":
+        if self.reward_version != "reward_v1":
+            raise ValueError("reward_version must be reward_v1 for the canonical v1 reward path")
+        if self.horizon_steps <= 0:
+            raise ValueError("horizon_steps must be positive")
+        if self.funding_freshness_threshold_seconds < 0.0:
+            raise ValueError("funding_freshness_threshold_seconds must be non-negative")
+        return self
+
+    @property
+    def reward_horizon_steps(self) -> int:
+        return self.horizon_steps
+
+    @property
+    def slippage_proxy_bps(self) -> float:
+        return self.slippage_bps
+
+    @property
+    def risk_aversion_lambda(self) -> float:
+        return self.risk_aversion
+
+    @property
+    def turnover_lambda(self) -> float:
+        return self.turnover_penalty
+
+    @property
+    def infeasible_penalty_lambda(self) -> float:
+        return self.infeasible_action_penalty
 
 
 class ActionReward(QuantBaseModel):
@@ -117,7 +149,7 @@ class RewardSnapshot(QuantBaseModel):
 
         Guarantee: 'abstain' için her zaman çalışır (abstain venue=None ile oluşturulur).
         Directional action'lar için venue=None fallback kaydı artık üretilmiyor;
-        bunun yerine `RewardEngine._select_best_reward()` veya
+        bunun yerine explicit venue ile `RewardEngine._select_reward(...)` veya
         `for_action_venue(action_key, venue)` kullanın.
         """
         for reward in self.action_rewards:

@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 from quantlab_ml.cli.app import app
 from quantlab_ml.common import load_model
-from quantlab_ml.contracts import ExecutorPolicyExport
+from quantlab_ml.contracts import InferenceArtifactExport
 from quantlab_ml.registry import LocalRegistryStore
 
 
@@ -16,7 +16,7 @@ def test_cli_smoke(repo_root: Path, fixture_path: Path, tmp_path: Path) -> None:
     policy = tmp_path / "outputs" / "policy.json"
     evaluation = tmp_path / "outputs" / "evaluation.json"
     score = tmp_path / "outputs" / "score.json"
-    exported = tmp_path / "outputs" / "executor_policy.json"
+    exported = tmp_path / "outputs" / "inference_artifact.json"
     registry_root = tmp_path / "registry"
 
     args_common = [
@@ -102,7 +102,8 @@ def test_cli_smoke(repo_root: Path, fixture_path: Path, tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.stdout
 
-    exported_policy = load_model(exported, ExecutorPolicyExport)
+    exported_policy = load_model(exported, InferenceArtifactExport)
     registry = LocalRegistryStore(registry_root)
     assert exported_policy.score_summary["composite_rank"] != 0.0
+    assert exported_policy.runtime_metadata.allowed_venues
     assert registry.load_index().champion_policy_id == exported_policy.policy_id

@@ -112,7 +112,9 @@ def test_s3_compacted_source_discovers_root_partition_layout() -> None:
             "stream_universe": ["mark_price", "open_interest"],
             "available_streams_by_exchange": {"binance": ["mark_price"]},
             "train_range": {"start": "2026-01-25T00:00:00Z", "end": "2026-01-25T00:01:00Z"},
-            "eval_range": {"start": "2026-01-25T00:02:00Z", "end": "2026-01-25T00:03:00Z"},
+            "validation_range": {"start": "2026-01-25T00:02:00Z", "end": "2026-01-25T00:03:00Z"},
+            "final_untouched_test_range": {"start": "2026-01-25T00:04:00Z", "end": "2026-01-25T00:05:00Z"},
+            "walkforward": {"train_window_steps": 2, "validation_window_steps": 2, "step_size_steps": 1},
             "sampling_interval_seconds": 60,
         }
     )

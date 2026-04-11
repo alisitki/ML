@@ -9,6 +9,7 @@ from quantlab_ml.contracts.dataset import (
     NormalizedMarketEvent,
     REQUIRED_FIELDS_BY_STREAM,
     StreamFieldCatalog,
+    WalkForwardSpec,
 )
 from quantlab_ml.contracts.evaluation import EvaluationBoundary, EvaluationReport, PolicyScore
 from quantlab_ml.contracts.learning_surface import (
@@ -23,16 +24,27 @@ from quantlab_ml.contracts.learning_surface import (
     PolicyState,
     RawScaleTensor,
     ScaleSpec,
+    SplitArtifact,
+    SplitWindow,
     TrajectoryBundle,
     TrajectoryRecord,
     TrajectorySpec,
     TrajectoryStep,
+    WalkForwardFold,
 )
 from quantlab_ml.contracts.policies import (
+    ACTION_SPACE_VERSION,
+    DYNAMIC_TARGET_ASSET,
+    EXECUTION_INTENT_SCHEMA_VERSION,
+    OBSERVATION_SCHEMA_VERSION,
+    POLICY_ARTIFACT_SCHEMA_VERSION,
+    ExecutionIntent,
+    InferenceArtifactExport,
     ExecutorMetadata,
     ExecutorPolicyExport,
     OpaquePolicyPayload,
     PolicyArtifact,
+    RuntimeMetadata,
 )
 from quantlab_ml.contracts.registry import CoverageStats, RegistryIndex, RegistryRecord, ScoreSnapshot
 from quantlab_ml.contracts.rewards import (
@@ -58,6 +70,7 @@ __all__ = [
     "NormalizedMarketEvent",
     "REQUIRED_FIELDS_BY_STREAM",
     "StreamFieldCatalog",
+    "WalkForwardSpec",
     # evaluation
     "EvaluationBoundary",
     "EvaluationReport",
@@ -74,15 +87,26 @@ __all__ = [
     "PolicyState",
     "RawScaleTensor",
     "ScaleSpec",
+    "SplitArtifact",
+    "SplitWindow",
     "TrajectoryBundle",
     "TrajectoryRecord",
     "TrajectorySpec",
     "TrajectoryStep",
+    "WalkForwardFold",
     # policies
+    "ACTION_SPACE_VERSION",
+    "DYNAMIC_TARGET_ASSET",
+    "EXECUTION_INTENT_SCHEMA_VERSION",
+    "ExecutionIntent",
+    "InferenceArtifactExport",
+    "OBSERVATION_SCHEMA_VERSION",
+    "POLICY_ARTIFACT_SCHEMA_VERSION",
     "ExecutorMetadata",
     "ExecutorPolicyExport",
     "OpaquePolicyPayload",
     "PolicyArtifact",
+    "RuntimeMetadata",
     # registry
     "CoverageStats",
     "RegistryIndex",

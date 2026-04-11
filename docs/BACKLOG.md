@@ -16,32 +16,61 @@ Status values:
 
 ### QL-001
 - title: Gap audit for v1 implementation alignment
-- status: in_progress
+- status: done
 - depends_on: governance/spec freeze
 - scope: observation schema, reward_v1, split_v1
 - done_when:
   - doc/code mismatches are listed
   - blockers are separated from non-blockers
   - next task is declared in PROJECT_STATE
+- audit_findings:
+  - observation: no confirmed blocker from audit evidence; current fixture-surface implementation preserves the core observation axes, masks, and causality semantics covered by existing tests
+  - reward_v1: confirmed blocker; evaluation collapses explicit decision venue/size/leverage semantics, reward application still permits venue=None fallback, selected_venue is not propagated, funding freshness/formula semantics drift from reward_v1, and turnover-event semantics are not implemented
+  - split_v1: confirmed blocker; implementation is limited to static train/eval ranges and lacks validation/final untouched test, deterministic walk-forward folds, purge/embargo handling, and split artifacts/version persistence
 
 ### QL-002
 - title: Implement split_v1_walkforward canonical builder behavior
-- status: todo
+- status: done
 - depends_on: QL-001
-- scope: fold generation, purge width, embargo width, split artifacts
+- scope: train/validation/final untouched test segmentation, deterministic walk-forward fold generation, purge width, embargo width, split artifacts, split version persistence
+- blocker_reason:
+  - overlap leakage risk remains without canonical walk-forward plus purge/embargo discipline
+  - official evaluation remains invalid and backtest-overfitting risk remains high without validation/final untouched test segmentation
+  - promotion and out-of-sample discipline cannot be enforced without persisted split artifacts and versioned boundaries
+- completion_notes:
+  - canonical train/validation/final_untouched_test splits now exist in the trajectory bundle
+  - split artifact now persists split_v1_walkforward version, fold generation config, purge/embargo widths, fold boundaries, and final untouched test boundary
+  - default evaluation path now targets validation while final untouched test remains off the default development loop
 - done_when:
+  - deterministic walk-forward folds exist inside the development region
+  - validation and final untouched test segments exist
   - fold boundaries are persisted
-  - purge/embargo widths are persisted
+  - purge/embargo widths equal the maximum information reach
+  - final untouched test boundary is persisted
   - split version is stored
   - overlap case tests pass
 
 ### QL-003
 - title: Enforce reward_v1 math in code
-- status: todo
-- depends_on: QL-001
-- scope: venue-aware reward, no `venue=None` fallback, funding freshness, infeasible-action penalty
+- status: done
+- depends_on: QL-001, QL-007
+- scope: explicit decision venue propagation, no `venue=None` fallback, horizon-end pricing, funding freshness threshold semantics, reward_v1 funding formula, turnover-event semantics, infeasible-action penalty parity
+- blocker_reason:
+  - reward_v1 parity remains broken while official code drifts from the frozen venue, horizon, funding, and turnover semantics
+  - official evaluation validity is weakened if evaluated reward semantics differ from declared reward_v1
+  - promotion and champion comparison semantics drift if candidates are scored under non-canonical reward behavior
+- completion_notes:
+  - evaluation now preserves explicit decision venue, size_band_key, and leverage_band_key semantics instead of flattening to action-only fallback
+  - directional reward evaluation now requires explicit venue selection and no longer uses `venue=None` best-venue fallback
+  - reward math now uses horizon-end pricing, funding freshness thresholding, v1 funding sign semantics, and turnover-event penalties driven by exposure change
+  - effective selected venue is now propagated into `RewardContext` during reward application and evaluation, closing the remaining REWARD_SPEC_V1 context gap
 - done_when:
   - implementation matches REWARD_SPEC_V1
+  - evaluation applies the requested venue semantics instead of implicit best-venue fallback
+  - effective selected venue semantics are explicit in reward context
+  - horizon-end price semantics are used for reward evaluation
+  - funding freshness threshold behavior matches reward_v1
+  - turnover penalty is driven by exposure-state change semantics
   - parity tests pass
   - no hidden averaging remains
 
@@ -57,17 +86,34 @@ Status values:
 
 ### QL-005
 - title: Freeze policy artifact and execution intent path
-- status: todo
+- status: done
 - depends_on: QL-001
 - scope: artifact metadata, compatibility tags, execution intent contract
+- completion_notes:
+  - policy artifacts now carry canonical top-level identity, runtime metadata, compatibility tags, lineage hooks, and reward/evaluation surface linkage
+  - runtime bridge now enforces artifact compatibility against observation schema requirements instead of guessing compatibility
+  - runtime selector output can now be materialized as an explicit execution intent with traceable policy/artifact ids, venue, size, leverage, ttl, and selector trace id
 - done_when:
   - selector output matches EXECUTION_INTENT_SCHEMA
   - executor boundary stays thin
   - artifact compatibility enforcement exists
 
+### QL-007
+- title: Minimal policy-state dependency for reward_v1 turnover-event semantics
+- status: done
+- depends_on: QL-001
+- scope: minimum exposure-state representation and action-to-state mapping needed so reward_v1 can distinguish exposure changes from non-changes for turnover-event semantics
+- completion_notes:
+  - no separate epic was required; reward_v1 turnover-event semantics now derive from existing action metadata plus evaluation-side policy-state transitions
+  - venue/size/leverage ownership remained inside QL-003 because those semantics are part of the core reward application path rather than a separate dependency track
+- done_when:
+  - reward code can determine whether a decision changes exposure state
+  - turnover-event semantics can be implemented without guessing from action labels alone
+  - the dependency stays limited to turnover-event support rather than expanding into a broader action-space epic
+
 ### QL-006
 - title: Registry schema and promotion-gate enforcement
-- status: todo
+- status: in_progress
 - depends_on: QL-005
 - scope: score history, lineage, search-budget fields, champion/challenger constraints
 - done_when:

@@ -25,9 +25,10 @@ def test_registry_tracks_lineage_and_coverage(
     )
     updated = store.append_score(policy_artifact.policy_id, policy_score, evaluation_report)
     index = store.load_index()
+    train_steps = sum(len(trajectory.steps) for trajectory in trajectory_bundle.splits["train"])
 
     assert index.champion_policy_id == policy_artifact.policy_id
-    assert updated.coverage.train_sample_count == 6
+    assert updated.coverage.train_sample_count == train_steps
     assert updated.coverage.eval_sample_count == evaluation_report.total_steps
     assert updated.coverage.reward_event_count == evaluation_report.total_steps
     assert updated.coverage.realized_trade_count == evaluation_report.realized_trade_count

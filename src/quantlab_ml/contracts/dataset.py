@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 
 from quantlab_ml.contracts.common import QuantBaseModel, TimeRange
 
@@ -31,6 +31,26 @@ class StreamFieldCatalog(QuantBaseModel):
         return self
 
 
+class WalkForwardSpec(QuantBaseModel):
+    """Deterministic walk-forward fold generation config."""
+
+    train_window_steps: int
+    validation_window_steps: int
+    step_size_steps: int | None = None
+
+    @model_validator(mode="after")
+    def validate_steps(self) -> "WalkForwardSpec":
+        if self.train_window_steps <= 0:
+            raise ValueError("walkforward train_window_steps must be positive")
+        if self.validation_window_steps <= 0:
+            raise ValueError("walkforward validation_window_steps must be positive")
+        if self.step_size_steps is None:
+            object.__setattr__(self, "step_size_steps", self.validation_window_steps)
+        if self.step_size_steps <= 0:
+            raise ValueError("walkforward step_size_steps must be positive")
+        return self
+
+
 class DatasetSpec(QuantBaseModel):
     dataset_hash: str
     slice_id: str
@@ -39,7 +59,11 @@ class DatasetSpec(QuantBaseModel):
     stream_universe: list[str]
     available_streams_by_exchange: dict[str, list[str]]
     train_range: TimeRange
-    eval_range: TimeRange
+    validation_range: TimeRange = Field(
+        validation_alias=AliasChoices("validation_range", "eval_range"),
+    )
+    final_untouched_test_range: TimeRange
+    walkforward: WalkForwardSpec
     sampling_interval_seconds: int = 60
 
     # V2: Per-stream zorunlu field katalogları.
@@ -68,8 +92,19 @@ class DatasetSpec(QuantBaseModel):
             unknown = set(streams) - set(self.stream_universe)
             if unknown:
                 raise ValueError(f"exchange {exchange} references unknown streams: {sorted(unknown)}")
+        if not self.train_range.end < self.validation_range.start:
+            raise ValueError("train_range must end before validation_range starts")
+        if not self.validation_range.end < self.final_untouched_test_range.start:
+            raise ValueError("validation_range must end before final_untouched_test_range starts")
         if self.sampling_interval_seconds <= 0:
             raise ValueError("sampling interval must be positive")
+        development_steps = _inclusive_step_count(
+            self.train_range.start,
+            self.validation_range.end,
+            self.sampling_interval_seconds,
+        )
+        if self.walkforward.train_window_steps + self.walkforward.validation_window_steps > development_steps:
+            raise ValueError("walkforward windows exceed the train+validation development region")
         # availability_by_contract yalnız bilinen exchange / stream'lere başvurabilir
         for exchange, stream_map in self.availability_by_contract.items():
             if exchange not in self.exchanges:
@@ -114,6 +149,10 @@ class DatasetSpec(QuantBaseModel):
         # Katalog yoksa sabitten bak
         return list(REQUIRED_FIELDS_BY_STREAM.get(stream, []))
 
+    @property
+    def development_range(self) -> TimeRange:
+        return TimeRange(start=self.train_range.start, end=self.validation_range.end)
+
 
 class NormalizedMarketEvent(QuantBaseModel):
     event_time: datetime
@@ -126,3 +165,8 @@ class NormalizedMarketEvent(QuantBaseModel):
     value: float = 0.0  # legacy-compat; yeni kod fields dict'ini kullanır
     fields: dict[str, Any] = Field(default_factory=dict)
     ingest_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+def _inclusive_step_count(start: datetime, end: datetime, sampling_interval_seconds: int) -> int:
+    total_seconds = (end - start).total_seconds()
+    return int(total_seconds // sampling_interval_seconds) + 1

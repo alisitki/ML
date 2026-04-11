@@ -20,6 +20,8 @@ def test_default_and_fixture_profiles_are_distinct(repo_root: Path) -> None:
     assert default_spec.stream_available("binance", "open_interest") is False
     assert default_spec.stream_available("bybit", "open_interest") is True
     assert s3_current_spec.train_range.start.year == 2026
+    assert s3_current_spec.validation_range.start.year == 2026
+    assert s3_current_spec.final_untouched_test_range.end.year == 2026
 
 
 def test_adapter_rejects_binance_open_interest(tmp_path: Path, repo_root: Path) -> None:
@@ -41,3 +43,4 @@ def test_adapter_rejects_binance_open_interest(tmp_path: Path, repo_root: Path) 
 
     assert ("binance", "open_interest") not in {(event.exchange, event.stream_type) for event in events}
     assert ("bybit", "open_interest") in {(event.exchange, event.stream_type) for event in events}
+    assert spec.walkforward.train_window_steps >= 1

@@ -15,7 +15,9 @@ def test_trajectory_builder_preserves_axes_and_masks(trajectory_bundle: Trajecto
     assert schema.scale_axis[0].label == "1m"
     assert schema.scale_axis[0].num_buckets == 4
     assert len(trajectory_bundle.splits["train"]) >= 1
-    assert len(trajectory_bundle.splits["eval"]) >= 1
+    assert len(trajectory_bundle.splits["validation"]) >= 1
+    assert len(trajectory_bundle.splits["final_untouched_test"]) >= 1
+    assert trajectory_bundle.split_artifact.split_version == "split_v1_walkforward"
 
     first_step = trajectory_bundle.splits["train"][0].steps[0]
     # V2: action_feasibility surface
@@ -31,10 +33,10 @@ def test_trajectory_builder_preserves_axes_and_masks(trajectory_bundle: Trajecto
     assert any(tensor.padding) or any(tensor.unavailable_by_contract) or any(tensor.missing)
 
 
-def test_eval_observation_uses_causal_pre_eval_history(trajectory_bundle: TrajectoryBundle) -> None:
-    first_eval_step = trajectory_bundle.splits["eval"][0].steps[0]
-    tensor = first_eval_step.observation.raw_surface["1m"]
-    # eval split'in ilk step'inde padding olmamalı (causal pre-eval history var)
+def test_validation_observation_uses_causal_pre_validation_history(trajectory_bundle: TrajectoryBundle) -> None:
+    first_validation_step = trajectory_bundle.splits["validation"][0].steps[0]
+    tensor = first_validation_step.observation.raw_surface["1m"]
+    # validation split'in ilk step'inde padding olmamalı (causal pre-validation history var)
     assert not any(tensor.padding)
 
 

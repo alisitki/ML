@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from statistics import pstdev
+from datetime import timedelta
 
 from quantlab_ml.common import utcnow
-from quantlab_ml.contracts import EvaluationBoundary, EvaluationReport, PolicyArtifact, TimeRange, TrajectoryBundle
+from quantlab_ml.contracts import EvaluationBoundary, EvaluationReport, PolicyArtifact, PolicyState, TimeRange, TrajectoryBundle
 from quantlab_ml.policies import PolicyRuntimeBridge
 from quantlab_ml.rewards import RewardEngine
 
@@ -13,7 +14,7 @@ class EvaluationEngine:
         self.boundary = boundary
         self.runtime_bridge = PolicyRuntimeBridge()
 
-    def evaluate(self, bundle: TrajectoryBundle, artifact: PolicyArtifact, split: str = "eval") -> EvaluationReport:
+    def evaluate(self, bundle: TrajectoryBundle, artifact: PolicyArtifact, split: str = "validation") -> EvaluationReport:
         self._validate_boundary(bundle)
         trajectories = bundle.splits[split]
         if not trajectories:
@@ -34,15 +35,23 @@ class EvaluationEngine:
         notes: list[str] = []
 
         for trajectory in trajectories:
+            current_policy_state = PolicyState()
             for step in trajectory.steps:
                 total_steps += 1
                 decision = self.runtime_bridge.decide(artifact, step.observation)
                 applied = reward_engine.apply_decision(
                     snapshot=step.reward_snapshot,
                     requested_action_key=decision.action_key,
-                    action_mask=step.action_feasibility.to_flat_mask(),
+                    action_feasibility=step.action_feasibility,
                     infeasible_action_treatment=self.boundary.infeasible_action_treatment,
+                    venue=decision.venue,
+                    size_band_key=decision.size_band_key,
+                    leverage_band_key=decision.leverage_band_key,
+                    policy_state=current_policy_state,
                 )
+                if applied.reward_context is not None:
+                    step.reward_context = applied.reward_context
+                    step.reward_snapshot.context = applied.reward_context
                 if applied.infeasible:
                     infeasible_action_count += 1
                     infeasible_penalty_total += applied.infeasible_penalty
@@ -56,10 +65,13 @@ class EvaluationEngine:
                 slippage_total += applied.slippage
                 if applied.applied_action_key != "abstain":
                     realized_trade_count += 1
+                current_policy_state = reward_engine.advance_policy_state(current_policy_state, applied)
 
+        first_step_time = trajectories[0].steps[0].event_time
+        last_step_time = trajectories[-1].steps[-1].event_time
         active_range = TimeRange(
-            start=trajectories[0].start_time,
-            end=trajectories[-1].end_time,
+            start=first_step_time,
+            end=last_step_time + timedelta(seconds=bundle.dataset_spec.sampling_interval_seconds),
         )
         total_net_return = sum(rewards)
         return EvaluationReport(

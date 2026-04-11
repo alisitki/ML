@@ -38,8 +38,15 @@ dataset:
       fields: [open_interest, oi_delta, oi_update_age]
   train_range:
     start: 2026-01-25T00:00:00Z
-    end: 2026-01-25T00:09:00Z
-  eval_range:
-    start: 2026-01-25T00:10:00Z
+    end: 2026-01-25T00:11:00Z
+  validation_range:
+    start: 2026-01-25T00:12:00Z
+    end: 2026-01-25T00:15:00Z
+  final_untouched_test_range:
+    start: 2026-01-25T00:16:00Z
     end: 2026-01-25T00:19:00Z
+  walkforward:
+    train_window_steps: 8
+    validation_window_steps: 2
+    step_size_steps: 2
   sampling_interval_seconds: 60

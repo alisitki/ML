@@ -125,14 +125,14 @@ def score(
 def export_policy(
     policy: Path = typer.Option(..., exists=True, readable=True),
     score: Path = typer.Option(..., exists=True, readable=True),
-    output: Path = typer.Option(..., help="Executor export output path."),
+    output: Path = typer.Option(..., help="Inference artifact export output path."),
 ) -> None:
     artifact = load_model(policy, PolicyArtifact)
     score_model = load_model(score, PolicyScore)
     bridge = PolicyRuntimeBridge()
     export = bridge.export(artifact, score_model)
     dump_model(output, export)
-    typer.echo(f"wrote executor policy export to {output}")
+    typer.echo(f"wrote inference artifact export to {output}")
 
 
 def main() -> None:
