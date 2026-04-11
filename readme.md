@@ -4,16 +4,16 @@ QuantLab ML is an offline policy-discovery scaffold for raw multi-exchange marke
 streams. The repository is not a live execution engine, a generic backtester, or a
 rule-strategy host. Its intended system boundary is:
 
-`raw multi-exchange streams -> trajectories / learning surface -> offline policy discovery -> policy registry -> thin executor contract`
+`raw multi-exchange streams -> trajectories / learning surface -> offline policy discovery -> policy registry -> runtime selector / inference -> execution intent -> thin executor`
 
 ## Core Guarantees
 
 - Exchange-aware dataset contract with explicit stream availability per venue.
 - Single-asset policy samples built from full cross-symbol and cross-exchange context.
 - Explicit `abstain` / `no-trade` action in the action contract.
-- Opaque policy payloads plus thin executor-facing applicability metadata.
-- Shared reward semantics between training snapshots and evaluation replay.
-- Registry lineage, coverage metadata, and champion-vs-challenger state.
+- Versioned policy artifacts for runtime selector / inference, with explicit execution-intent handoff to the thin executor.
+- Shared economic reward semantics between training and evaluation replay.
+- Registry lineage, score history, and champion-vs-challenger state.
 
 ## Config Profiles
 
@@ -27,7 +27,7 @@ rule-strategy host. Its intended system boundary is:
 
 ```text
 configs/               Dataset, reward, training, evaluation, registry defaults
-docs/                  Architecture, artifact, data-contract, learning-surface notes
+docs/                  Canonical governance, contracts, runbooks, and state
 src/quantlab_ml/
   contracts/           Stable IO models
   data/                Raw source adapters and event normalization
@@ -43,6 +43,16 @@ src/quantlab_ml/
   cli/                 Typer CLI entrypoint
 tests/                 Fixture-driven contract and smoke coverage
 ```
+
+## Canonical Documentation
+
+Use these as source of truth:
+
+- `docs/QUANTLAB_CONSTITUTION.md` and `docs/RUNTIME_BOUNDARY.md` for system identity and boundary.
+- `docs/CANONICAL_MARKET_DATA_CONTRACT.md` and `docs/OBSERVATION_SCHEMA.md` for market-data and observation contracts.
+- `docs/ACTION_SPACE.md`, `docs/REWARD_SPEC_V1.md`, and `docs/SPLIT_POLICY_V1.md` for action, reward, and split semantics.
+- `docs/POLICY_ARTIFACT_SCHEMA.md`, `docs/REGISTRY_SCHEMA.md`, and `docs/EXECUTION_INTENT_SCHEMA.md` for artifact, registry, and executor handoff.
+- `AGENTS.md`, `docs/PROJECT_STATE.md`, `docs/ROADMAP.md`, and `docs/BACKLOG.md` for repo operating flow.
 
 ## Quickstart
 
@@ -138,35 +148,13 @@ exchange=<exchange>/stream=<stream>/symbol=<symbol>/date=<YYYYMMDD>/meta.json
 exchange=<exchange>/stream=<stream>/symbol=<symbol>/date=<YYYYMMDD>/quality_day.json
 ```
 
-## Learning Surface Notes
+## Canonical Learning Surface
 
-- Observation yüzeyi `[scale, time, symbol, exchange, stream, field]` boyutlu çok ölçekli
-  ham tensor bloklarından oluşur; exchange ortalaması veya stream'den tek scalar collapse yoktur.
-- Emitted train/eval steps kendi split pencereleri içinde kalır.
-- Observation lookback causal pre-split geçmişten yararlanır; eval sabit-sıfır reset yapmaz.
-- **`padding`**: yalnızca yetersiz tarihçe — `history_start`'tan önceki bucket'lar.
-- **`unavailable_by_contract`**: yapısal olarak erişilemez `(exchange, stream)` koordinatı.
-- **`missing`**: erişilebilir ama bu adımda hiç event gelmedi.
-- **`stale`**: erişilebilir, event var, freshness bound'u geçmiş.
-- Bu dört mask birbirini dışlar ve karıştırılmaz.
-- Action feasibility `action × venue × size_band × leverage_band` matrisinden türer;
-  yalnızca decision-time bilgi kullanılır.
-- Reward context ve timeline venue-specific'tir; exchange-average kullanılmaz.
-- V1 reduction mantığı (`target_stream_series`, scalar collapse) yalnızca
-  `contracts/compat.py` ve `training/compat_adapter.py`'de yaşar.
+See `docs/CANONICAL_MARKET_DATA_CONTRACT.md` and `docs/OBSERVATION_SCHEMA.md` for observation axes, contract availability semantics, mask behavior, and compatibility boundaries.
 
-## Evaluation Boundary
+## Canonical Evaluation
 
-The v1 replay engine currently supports a narrow boundary:
-
-- fill assumption: `next_mark_price`
-- fee handling: `shared_reward_contract`
-- funding handling: `carry_from_funding_stream`
-- slippage handling: `fixed_bps`
-- terminal semantics: `trajectory_boundary_is_terminal`
-- timeout semantics: `force_terminal_at_data_end`
-- infeasible action treatment: `force_abstain`, with the abstain path applied and the
-  configured infeasible penalty still counted
+See `docs/REWARD_SPEC.md`, `docs/REWARD_SPEC_V1.md`, `docs/SPLIT_POLICY.md`, `docs/SPLIT_POLICY_V1.md`, and `docs/EVALUATION_RUNBOOK.md` for reward math, split discipline, and official evaluation flow.
 
 ## Non-Goals
 
