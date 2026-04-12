@@ -73,3 +73,15 @@ Status values:
 - date: 2026-04-11
 - decision: PyTorch is the training stack; ONNX/TensorRT may be used only for runtime inference acceleration.
 - why: Training and deployment concerns must remain separate, and TensorRT is not the training system.
+
+## D-011 — Temporary NumPy trainer does not supersede the PyTorch target
+- status: accepted
+- date: 2026-04-12
+- decision: The active Phase 5 trainer remains a NumPy-based linear policy trainer for the current remediation window, but this does not replace D-010; PyTorch remains the intended default training stack.
+- why: The repo already depends on the NumPy trainer for train-only normalization, validation-only selection, and search-budgeted candidate generation. Recording this as an explicit temporary drift prevents governance ambiguity while keeping the PyTorch migration out of the current narrow remediation batch.
+
+## D-012 — Strict runtime contract is default; legacy compat is explicit and temporary
+- status: accepted
+- date: 2026-04-12
+- decision: New policy artifacts must carry a strict runtime contract and runtime must reject observation, derived-surface, feature-layout, or adapter mismatches early. Legacy acceptance is allowed only through an explicit temporary compat window for deterministic legacy `linear-policy-v1` artifacts; deprecated `momentum-baseline-v1` artifacts are quarantined from the normal runtime path.
+- why: Batch 1 wired derived features into the shared feature path, which made silent training/runtime mismatch risk materially higher. Strict-by-default enforcement closes the "wrong artifact + wrong observation still looks runnable" failure mode without breaking all historical artifacts at once. A narrow, logged compat window preserves controlled continuity while keeping silent fallback forbidden and leaving a clear removal target for a later batch.

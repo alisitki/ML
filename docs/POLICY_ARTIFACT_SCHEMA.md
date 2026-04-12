@@ -109,6 +109,18 @@ Runtime metadata must include:
 - `leverage_bounds`
 - `artifact_compatibility_tags`
 
+New artifacts must also carry a structured strict runtime contract inside `runtime_metadata`.
+
+That strict contract must include:
+- `runtime_contract_version`
+- `policy_kind`
+- `required_scale_specs`
+- `required_raw_surface_shapes`
+- `derived_contract_version`
+- `derived_channel_templates`
+- `derived_channel_template_signature`
+- `expected_feature_dim`
+
 ## 7. Compatibility requirements
 
 A policy artifact must be rejected by runtime selector if incompatible with:
@@ -118,6 +130,15 @@ A policy artifact must be rejected by runtime selector if incompatible with:
 - allowed venue set
 - runtime adapter
 - required policy state
+
+Runtime rejection must be explicit for at least:
+- observation schema version mismatch
+- scale-spec mismatch
+- raw tensor shape mismatch
+- derived contract/version mismatch
+- derived channel identity/order mismatch
+- feature-dimension mismatch
+- deprecated or unsupported runtime adapter
 
 Compatibility must be explicit, not guessed.
 
@@ -130,6 +151,9 @@ Every policy artifact must carry:
 - optional digest / checksum
 
 Version strings without enforcement are insufficient.
+
+For new artifacts, missing strict runtime-contract metadata is itself a runtime rejection condition.
+Legacy acceptance, if any, must be explicit, version-bounded, logged, and deprecated rather than silent.
 
 ## 9. Runtime selector relation
 
@@ -175,3 +199,5 @@ Forbidden:
 - deployment artifact that requires training code path
 - executor-facing artifact that hides venue or asset ownership
 - policy artifact that cannot be linked back to training/evaluation evidence
+- new deployment artifact with no strict runtime contract
+- silent legacy fallback when compatibility must be inferred

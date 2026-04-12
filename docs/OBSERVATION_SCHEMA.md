@@ -151,6 +151,13 @@ Future timestamps, future prices, future masks, or future feasibility informatio
 
 Legacy scalar reductions may exist only in compatibility adapters.
 
+Runtime must reject observations before inference if the live observation contract diverges from the artifact's required contract, including:
+- observation schema version mismatch
+- scale-spec mismatch
+- raw tensor shape mismatch
+- derived-surface contract/version mismatch
+- derived channel identity/order mismatch
+
 The canonical observation schema is not allowed to regress into:
 - target-only mark-price series
 - exchange-averaged series

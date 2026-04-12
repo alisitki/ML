@@ -18,9 +18,9 @@ This file must stay short and current.
 ## Current snapshot
 
 - current_phase: `Phase 5 real policy-learning implementation complete`
-- current_focus: `Verification gate is now fully green; QL-009 phase-5 candidate search expansion is done`
+- current_focus: `Batch 2 remediation complete: new artifacts now carry a strict runtime contract, runtime rejects observation/feature mismatches early, and only a temporary explicit legacy compat window remains for deterministic legacy linear artifacts`
 - current_blocker: `none`
-- declared_next_task: `Reassess QL-004 (Observation Schema Enforcement) or begin QL-100 (ONNX/TensorRT runtime acceleration)`
+- declared_next_task: `Reassess walk-forward fold consumption before QL-100, then close the remaining QL-004 gaps around the production observation preset and eventual legacy compat-window removal`
 - not_now:
   - `live deployment plumbing`
   - `reward_v2 path-aware redesign`
@@ -29,17 +29,17 @@ This file must stay short and current.
 ## Active work item
 
 ```yaml
-id: none
-title: No active work item — QL-009 complete, verification gate green
+id: remediation-batch-2
+title: Tighten runtime/artifact compatibility so observation, derived-surface, and feature-layout mismatches fail early instead of looking runnable
 status: done
 ```
 
 ## Current blocker details
 
-None. All four verification gates are now clean:
-- `ruff check .` → All checks passed!
-- `mypy src` → Success: no issues found in 41 source files
-- `pytest -q` → 80 passed
+None. Verification gates for the remediation batch are clean:
+- `.venv/bin/ruff check .` → All checks passed!
+- `.venv/bin/mypy src` → Success: no issues found in 42 source files
+- `.venv/bin/pytest` → 96 passed
 - `git diff --check` → clean
 
 ## Recently completed
@@ -66,11 +66,21 @@ None. All four verification gates are now clean:
 - the active training path now fits learned policy weights, records search-budget metadata, and selects checkpoints on validation without touching the final untouched test
 - QL-009 candidate search expansion and repo-wide verification gate cleanup completed
 - explicit candidate_search configs now produce multiple learned candidates; repo-wide ruff/mypy/pytest/diff-check verification gate is now fully clean
+- Remediation Batch 1 verification completed; audit findings are now classified in `docs/REMEDIATION_BATCH_1.md`
+- secret hygiene guardrails now include `.env.example` plus stricter `.gitignore` coverage; current repo inspection found no `.env` path tracked in git history, but local secret rotation remains an external action if those credentials are live
+- NumPy-vs-PyTorch trainer drift is now recorded explicitly in `docs/DECISIONS.md` without changing the constitutional PyTorch target
+- lightweight structured logging now covers trajectory building, training search, and registry mutations
+- the active shared feature extractor now includes derived-surface channels, closing the confirmed Batch 1 observation-path gap
+- `MomentumBaselineTrainer` is no longer a silent alias; it remains import-compatible through a deprecated shim
+- Remediation Batch 2 completed; new artifacts now embed a strict runtime contract and runtime rejects scale-spec, raw-shape, derived-contract, derived-channel, feature-dimension, and deprecated-adapter mismatches before inference
+- a temporary legacy compat window now exists only for deterministic legacy `linear-policy-v1` artifacts; legacy acceptance is explicit, logged, and deprecated rather than silent
+- deprecated `momentum-baseline-v1` artifacts are now quarantined from the normal runtime path and rejected with an explicit retrain/re-export message
+- Batch 2 verification and patch notes are recorded in `docs/REMEDIATION_BATCH_2.md`
 
 ## Immediate next actions
 
-1. Reassess QL-004 (Observation Schema Enforcement) for concrete gaps beyond the completed audit.
-2. If no QL-004 gap emerges, begin QL-100 (ONNX/TensorRT inference acceleration exploration).
+1. Decide whether walk-forward fold consumption should become a dedicated training backlog item before QL-100.
+2. Close the remaining QL-004 gaps: add a production observation preset/config and define the removal plan for the temporary legacy compat window.
 
 ## Update rule
 

@@ -34,10 +34,14 @@ from quantlab_ml.contracts.learning_surface import (
 )
 from quantlab_ml.contracts.policies import (
     ACTION_SPACE_VERSION,
+    DERIVED_CHANNEL_TARGET_PLACEHOLDER,
     DYNAMIC_TARGET_ASSET,
     EXECUTION_INTENT_SCHEMA_VERSION,
+    LEGACY_POLICY_ARTIFACT_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION,
     POLICY_ARTIFACT_SCHEMA_VERSION,
+    STRICT_RUNTIME_CONTRACT_VERSION,
+    DerivedChannelTemplate,
     ExecutionIntent,
     InferenceArtifactExport,
     ExecutorMetadata,
@@ -45,6 +49,7 @@ from quantlab_ml.contracts.policies import (
     OpaquePolicyPayload,
     PolicyArtifact,
     RuntimeMetadata,
+    StrictRuntimeContract,
 )
 from quantlab_ml.contracts.registry import (
     CoverageStats,
@@ -107,17 +112,22 @@ __all__ = [
     "WalkForwardFold",
     # policies
     "ACTION_SPACE_VERSION",
+    "DERIVED_CHANNEL_TARGET_PLACEHOLDER",
     "DYNAMIC_TARGET_ASSET",
     "EXECUTION_INTENT_SCHEMA_VERSION",
     "ExecutionIntent",
     "InferenceArtifactExport",
+    "LEGACY_POLICY_ARTIFACT_SCHEMA_VERSION",
     "OBSERVATION_SCHEMA_VERSION",
     "POLICY_ARTIFACT_SCHEMA_VERSION",
+    "STRICT_RUNTIME_CONTRACT_VERSION",
+    "DerivedChannelTemplate",
     "ExecutorMetadata",
     "ExecutorPolicyExport",
     "OpaquePolicyPayload",
     "PolicyArtifact",
     "RuntimeMetadata",
+    "StrictRuntimeContract",
     # registry
     "CoverageStats",
     "PaperSimEvidenceRecord",

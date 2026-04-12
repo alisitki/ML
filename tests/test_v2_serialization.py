@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from quantlab_ml.common import dump_model, hash_payload, load_model
-from quantlab_ml.contracts import EvaluationReport, PolicyArtifact, TrajectoryBundle
+from quantlab_ml.contracts import EvaluationReport, POLICY_ARTIFACT_SCHEMA_VERSION, PolicyArtifact, TrajectoryBundle
 from quantlab_ml.registry import LocalRegistryStore
 from quantlab_ml.trajectories import TrajectoryStore
 
@@ -44,9 +44,12 @@ def test_v2_policy_artifact_round_trip(
     path = tmp_path / "v2-policy.json"
     dump_model(path, policy_artifact)
     loaded = load_model(path, PolicyArtifact)
+    assert loaded.schema_version == POLICY_ARTIFACT_SCHEMA_VERSION
+    assert loaded.artifact_version == POLICY_ARTIFACT_SCHEMA_VERSION
     assert loaded.policy_id == policy_artifact.policy_id
     assert loaded.artifact_id == policy_artifact.artifact_id
     assert loaded.runtime_metadata.allowed_venues == policy_artifact.runtime_metadata.allowed_venues
+    assert loaded.runtime_metadata.strict_runtime_contract is not None
     assert loaded.training_summary.get("surface_version") == "v2"
 
 

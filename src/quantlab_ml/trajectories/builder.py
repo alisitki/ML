@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -36,6 +37,8 @@ from quantlab_ml.rewards import RewardEngine
 
 # Indeks tipi: (symbol, exchange, stream) → zaman sıralı event listesi
 _Index = dict[tuple[str, str, str], list[NormalizedMarketEvent]]
+
+logger = logging.getLogger(__name__)
 
 
 class TrajectoryBuilder:
@@ -78,6 +81,13 @@ class TrajectoryBuilder:
     # ------------------------------------------------------------------
 
     def build(self, events: list[NormalizedMarketEvent]) -> TrajectoryBundle:
+        logger.info(
+            "trajectory_build_started slice_id=%s event_count=%d symbol_count=%d exchange_count=%d",
+            self.dataset_spec.slice_id,
+            len(events),
+            len(self.dataset_spec.symbols),
+            len(self.dataset_spec.exchanges),
+        )
         indexed = self._index_events(events)
         self._validate_split_ranges()
         history_start = min(
@@ -95,7 +105,7 @@ class TrajectoryBuilder:
                 history_start,
             ),
         }
-        return TrajectoryBundle(
+        bundle = TrajectoryBundle(
             dataset_spec=self.dataset_spec,
             trajectory_spec=self.trajectory_spec,
             action_space=self.action_space,
@@ -104,6 +114,19 @@ class TrajectoryBuilder:
             split_artifact=split_artifact,
             splits=splits,
         )
+        logger.info(
+            "trajectory_build_completed slice_id=%s train_records=%d validation_records=%d "
+            "final_test_records=%d train_steps=%d validation_steps=%d final_test_steps=%d fold_count=%d",
+            self.dataset_spec.slice_id,
+            len(splits["train"]),
+            len(splits["validation"]),
+            len(splits["final_untouched_test"]),
+            sum(len(record.steps) for record in splits["train"]),
+            sum(len(record.steps) for record in splits["validation"]),
+            sum(len(record.steps) for record in splits["final_untouched_test"]),
+            len(split_artifact.folds),
+        )
+        return bundle
 
     # ------------------------------------------------------------------
     # Split & Step Assembly
@@ -459,7 +482,7 @@ class TrajectoryBuilder:
                 )
             )
 
-        return DerivedSurface(channels=channels)
+        return DerivedSurface(channels=sorted(channels, key=lambda channel: channel.key))
 
     # ------------------------------------------------------------------
     # Action Feasibility

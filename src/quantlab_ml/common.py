@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +17,20 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 def utcnow() -> datetime:
     return datetime.now(tz=UTC)
+
+
+def configure_logging(level: str | None = None) -> None:
+    configured_level = level if level is not None else os.getenv("QUANTLAB_ML_LOG_LEVEL", "INFO")
+    resolved_level = configured_level.upper()
+    numeric_level = getattr(logging, resolved_level, logging.INFO)
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+        )
+        root_logger.addHandler(handler)
+    root_logger.setLevel(numeric_level)
 
 
 def ensure_parent_dir(path: Path) -> None:

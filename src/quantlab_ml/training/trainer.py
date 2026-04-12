@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
+import warnings
 
 import numpy as np
 
@@ -15,6 +17,7 @@ from quantlab_ml.contracts import (
     NumericBand,
     OpaquePolicyPayload,
     PolicyArtifact,
+    POLICY_ARTIFACT_SCHEMA_VERSION,
     PolicyScore,
     RuntimeMetadata,
     SearchBudgetSummary,
@@ -23,8 +26,11 @@ from quantlab_ml.contracts import (
 )
 from quantlab_ml.models.features import observation_feature_vector
 from quantlab_ml.models.linear_policy import LinearPolicyParameters
+from quantlab_ml.runtime_contract import build_strict_runtime_contract
 from quantlab_ml.scoring import PolicyScorer
 from quantlab_ml.training.config import TrainingConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +84,13 @@ class LinearPolicyTrainer:
             candidate_specs=candidate_specs,
         )
         search_budget_summary = _search_budget_summary(candidate_specs)
+        logger.info(
+            "training_search_started training_run_id=%s candidate_count=%d split_version=%s reward_version=%s",
+            training_run_id,
+            len(candidate_specs),
+            bundle.split_artifact.split_version,
+            bundle.reward_spec.reward_version,
+        )
 
         candidate_runs = [
             self._train_candidate(
@@ -132,12 +145,22 @@ class LinearPolicyTrainer:
                 )
             )
 
-        return TrainingSearchResult(
+        result = TrainingSearchResult(
             training_run_id=training_run_id,
             selected_artifact=candidate_results[0].artifact,
             candidate_results=candidate_results,
             search_budget_summary=search_budget_summary,
         )
+        logger.info(
+            "training_search_completed training_run_id=%s selected_policy_id=%s candidate_count=%d "
+            "selected_validation_total_net_return=%.6f selected_validation_composite_rank=%.6f",
+            training_run_id,
+            result.selected_artifact.policy_id,
+            len(candidate_results),
+            candidate_results[0].best_validation_total_net_return,
+            candidate_results[0].best_validation_composite_rank,
+        )
+        return result
 
     def _candidate_specs(self) -> list[TrainingCandidateSpec]:
         search = self.config.candidate_search
@@ -206,6 +229,14 @@ class LinearPolicyTrainer:
         venue_labels = np.asarray(
             [venue_choices.index(example.venue) if example.venue is not None else 0 for example in train_examples],
             dtype=np.int64,
+        )
+        logger.info(
+            "training_data_prepared train_examples=%d validation_examples=%d feature_dim=%d action_count=%d venue_count=%d",
+            len(train_examples),
+            len(validation_examples),
+            int(normalized_train.shape[1]),
+            len(action_keys),
+            len(venue_choices),
         )
 
         return _PreparedTrainingData(
@@ -333,6 +364,17 @@ class LinearPolicyTrainer:
         assert best_parameters is not None
         assert best_validation_total_net_return is not None
         assert best_validation_score is not None
+        logger.info(
+            "training_candidate_completed candidate_index=%d seed=%d learning_rate=%.6f l2_weight=%.6f "
+            "best_epoch=%d best_validation_total_net_return=%.6f best_validation_composite_rank=%.6f",
+            candidate_index,
+            candidate_spec.seed,
+            candidate_spec.learning_rate,
+            candidate_spec.l2_weight,
+            best_epoch,
+            best_validation_total_net_return,
+            best_validation_score.composite_rank,
+        )
 
         return _CandidateTrainingRun(
             config=config,
@@ -465,12 +507,22 @@ class LinearPolicyTrainer:
 
         size_band = _band_by_key(bundle.action_space.size_bands, config.preferred_size_band)
         leverage_band = _band_by_key(bundle.action_space.leverage_bands, config.preferred_leverage_band)
+        strict_runtime_contract = build_strict_runtime_contract(
+            bundle.observation_schema,
+            policy_kind=config.runtime_adapter,
+        )
         artifact_tags = [
             f"runtime_adapter:{config.runtime_adapter}",
             f"reward:{bundle.reward_spec.reward_version}",
             f"split:{bundle.split_artifact.split_version}",
             f"observation:{OBSERVATION_SCHEMA_VERSION}",
             f"action_space:{ACTION_SPACE_VERSION}",
+            f"runtime_contract:{strict_runtime_contract.runtime_contract_version}",
+            f"policy_kind:{strict_runtime_contract.policy_kind}",
+            f"derived_contract:{strict_runtime_contract.derived_contract_version}",
+            f"derived_signature:{strict_runtime_contract.derived_channel_template_signature}",
+            f"feature_dim:{strict_runtime_contract.expected_feature_dim}",
+            "compat_mode:strict",
         ]
         if search_metadata is not None:
             artifact_tags.extend(
@@ -484,7 +536,7 @@ class LinearPolicyTrainer:
 
         return PolicyArtifact(
             artifact_id=artifact_id,
-            artifact_version="policy_artifact_v1",
+            artifact_version=POLICY_ARTIFACT_SCHEMA_VERSION,
             policy_id=policy_id,
             policy_family=config.trainer_name,
             training_snapshot_id=training_snapshot_id,
@@ -527,6 +579,7 @@ class LinearPolicyTrainer:
                 leverage_bounds=leverage_band,
                 artifact_compatibility_tags=artifact_tags,
                 runtime_adapter=config.runtime_adapter,
+                strict_runtime_contract=strict_runtime_contract,
                 required_context=required_context,
                 lineage_pointer=lineages,
             ),
@@ -535,8 +588,14 @@ class LinearPolicyTrainer:
             training_summary=training_summary,
         )
 
-
-MomentumBaselineTrainer = LinearPolicyTrainer
+class MomentumBaselineTrainer(LinearPolicyTrainer):
+    def __init__(self, config: TrainingConfig):
+        warnings.warn(
+            "MomentumBaselineTrainer is deprecated; use LinearPolicyTrainer.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(config)
 
 
 @dataclass(slots=True)

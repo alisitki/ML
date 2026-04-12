@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Literal
 
@@ -21,6 +22,8 @@ from quantlab_ml.contracts import (
     TrajectoryBundle,
 )
 from quantlab_ml.selection import CandidateSelector
+
+logger = logging.getLogger(__name__)
 
 
 class LocalRegistryStore:
@@ -93,6 +96,13 @@ class LocalRegistryStore:
         result = self.get_record(artifact.policy_id)
         if result is None:
             raise RuntimeError(f"registry record missing immediately after write for policy {artifact.policy_id}")
+        logger.info(
+            "registry_candidate_registered policy_id=%s artifact_id=%s fold_count=%d train_samples=%d",
+            result.policy_id,
+            result.artifact_id,
+            len(bundle.split_artifact.folds),
+            coverage.train_sample_count,
+        )
         return result
 
     def append_score(
@@ -136,6 +146,13 @@ class LocalRegistryStore:
         result = self.get_record(policy_id)
         if result is None:
             raise RuntimeError(f"registry record missing immediately after write for policy {policy_id}")
+        logger.info(
+            "registry_score_appended policy_id=%s evaluation_id=%s composite_rank=%.6f total_net_return=%.6f",
+            result.policy_id,
+            evaluation_report.evaluation_id,
+            score.composite_rank,
+            evaluation_report.total_net_return,
+        )
         return result
 
     def record_paper_sim_evidence(
@@ -176,6 +193,12 @@ class LocalRegistryStore:
             record.comparison_report_id = comparison_report_id
         record.updated_at = utcnow()
         dump_model(self.records_dir / f"{policy_id}.json", record)
+        logger.info(
+            "registry_paper_sim_recorded policy_id=%s evidence_id=%s comparison_report_id=%s",
+            record.policy_id,
+            evidence_record.evidence_id,
+            comparison_report_id or "",
+        )
         return evidence_record
 
     def promote_candidate(
@@ -329,6 +352,14 @@ class LocalRegistryStore:
 
         dump_model(self.records_dir / f"{record.policy_id}.json", record)
         self._recompute_index()
+        logger.info(
+            "registry_promotion_evaluated policy_id=%s decision=%s failure_count=%d champion_before=%s champion_after=%s",
+            record.policy_id,
+            decision,
+            len(failure_reasons),
+            current_champion.policy_id if current_champion is not None else "",
+            decision_record.champion_policy_id_after or "",
+        )
         return decision_record
 
     def get_record(self, policy_id: str | None) -> RegistryRecord | None:
@@ -385,6 +416,12 @@ class LocalRegistryStore:
         dump_model(
             self.root / "index.json",
             RegistryIndex(champion_policy_id=champion_policy_id, challenger_policy_ids=challenger_ids),
+        )
+        logger.info(
+            "registry_index_recomputed champion_policy_id=%s challenger_count=%d record_count=%d",
+            champion_policy_id or "",
+            len(challenger_ids),
+            len(records),
         )
 
     def _require_record(self, policy_id: str) -> RegistryRecord:

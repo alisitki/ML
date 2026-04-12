@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from quantlab_ml.common import hash_payload
+from quantlab_ml.contracts import POLICY_ARTIFACT_SCHEMA_VERSION
 from quantlab_ml.training import CandidateSearchConfig, LinearPolicyTrainer
 from quantlab_ml.policies import PolicyRuntimeBridge
 
@@ -10,10 +11,13 @@ from quantlab_ml.policies import PolicyRuntimeBridge
 def test_training_loop_records_search_budget_and_validation_selection(policy_artifact) -> None:
     summary = policy_artifact.training_summary
     search_budget = summary.get("search_budget_summary", {})
+    strict_contract = policy_artifact.runtime_metadata.strict_runtime_contract
 
+    assert policy_artifact.artifact_version == POLICY_ARTIFACT_SCHEMA_VERSION
     assert policy_artifact.policy_family == "linear-policy-trainer"
     assert policy_artifact.policy_payload.runtime_adapter == "linear-policy-v1"
     assert policy_artifact.training_run_id.startswith("trainrun-")
+    assert strict_contract is not None
     assert summary.get("selection_split") == "validation"
     assert summary.get("selection_metric") == "total_net_return"
     assert summary.get("final_untouched_test_used") is False
@@ -26,6 +30,11 @@ def test_training_loop_records_search_budget_and_validation_selection(policy_art
     assert search_budget.get("total_candidate_count") == 1
     assert _search_tag_map(policy_artifact)["search_selected"] == "true"
     assert _search_tag_map(policy_artifact)["search_candidate_rank"] == "1"
+    assert _search_tag_map(policy_artifact)["runtime_contract"] == strict_contract.runtime_contract_version
+    assert _search_tag_map(policy_artifact)["policy_kind"] == "linear-policy-v1"
+    assert _search_tag_map(policy_artifact)["derived_contract"] == strict_contract.derived_contract_version
+    assert _search_tag_map(policy_artifact)["feature_dim"] == str(strict_contract.expected_feature_dim)
+    assert _search_tag_map(policy_artifact)["compat_mode"] == "strict"
 
 
 def test_train_search_explicit_candidate_search_produces_ranked_candidates(

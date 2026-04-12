@@ -76,9 +76,20 @@ Status values:
 
 ### QL-004
 - title: Enforce canonical observation schema in code
-- status: todo
+- status: in_progress
 - depends_on: QL-001
-- scope: axes, masks, derived surface, scale preset, causality
+- scope: axes, masks, derived surface, scale preset, causality, runtime compatibility enforcement
+- confirmed_gaps:
+  - Batch 1 verification confirmed that `TrajectoryBuilder` produced `derived_surface` channels while the active feature extractor ignored them; Batch 1 remediation wires those channels into the shared training/runtime feature vector with tests.
+  - The canonical production preset (`1m×8`, `5m×8`, `15m×8`, `60m×12`) still does not exist as an explicit training config; current shipped configs remain fixture/smoke oriented.
+  - The temporary legacy compat window is still open for deterministic legacy `linear-policy-v1` artifacts; this is explicit and logged, but it remains a retirement item rather than a final-state design.
+- completion_notes:
+  - Batch 2 added a structured strict runtime contract to new policy artifacts, including scale specs, raw surface shapes, derived contract/version metadata, derived channel templates/signature, and expected feature dimension.
+  - Runtime now rejects scale-spec mismatches, raw-shape mismatches, derived contract drift, derived channel identity/order drift, feature-dimension mismatches, and deprecated `momentum-baseline-v1` artifacts before inference.
+  - Legacy artifacts are no longer silently accepted; only deterministic legacy `linear-policy-v1` artifacts can enter through a temporary explicit compat window, and acceptance is logged as deprecated.
+- remaining_follow_ups:
+  - add the canonical production observation preset/config (`1m×8`, `5m×8`, `15m×8`, `60m×12`)
+  - remove the temporary legacy compat window after legacy artifact stock is refreshed
 - done_when:
   - code matches OBSERVATION_SCHEMA
   - schema-sensitive tests pass

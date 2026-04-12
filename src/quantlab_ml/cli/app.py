@@ -5,7 +5,7 @@ from pathlib import Path
 
 import typer
 
-from quantlab_ml.common import dump_json_data, dump_model, hash_payload, load_model, load_yaml
+from quantlab_ml.common import configure_logging, dump_json_data, dump_model, hash_payload, load_model, load_yaml
 from quantlab_ml.contracts import (
     ActionSpaceSpec,
     DatasetSpec,
@@ -26,6 +26,11 @@ from quantlab_ml.training import LinearPolicyTrainer, TrainingConfig, TrainingSe
 from quantlab_ml.trajectories import TrajectoryBuilder, TrajectoryStore
 
 app = typer.Typer(help="QuantLab ML scaffold CLI.")
+
+
+@app.callback()
+def app_callback() -> None:
+    configure_logging()
 
 
 @app.command("build-trajectories")

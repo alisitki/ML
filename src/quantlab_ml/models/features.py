@@ -14,6 +14,10 @@ def observation_feature_vector(observation: ObservationContext) -> list[float]:
         features.extend(_bools_to_floats(tensor.missing))
         features.extend(_bools_to_floats(tensor.stale))
 
+    if observation.derived_surface is not None:
+        for channel in sorted(observation.derived_surface.channels, key=lambda item: item.key):
+            features.extend(channel.values)
+
     asset_count = max(len(observation.observation_schema.asset_axis), 1)
     features.append(observation.target_asset_index / float(asset_count))
     return features

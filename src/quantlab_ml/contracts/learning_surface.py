@@ -9,6 +9,9 @@ from quantlab_ml.contracts.common import InvalidActionMaskSemantics, NumericBand
 from quantlab_ml.contracts.dataset import DatasetSpec, WalkForwardSpec
 from quantlab_ml.contracts.rewards import RewardContext, RewardEventSpec, RewardSnapshot, RewardTimeline
 
+OBSERVATION_SCHEMA_VERSION = "observation_schema_v1"
+DERIVED_SURFACE_CONTRACT_VERSION = "derived_surface_v1"
+
 
 # ---------------------------------------------------------------------------
 # Scale & Field Schema
@@ -98,6 +101,18 @@ class DerivedChannel(QuantBaseModel):
     values: list[float]  # scale × time × symbol shape'inde flat; producer belirler
     shape: list[int]
 
+    @model_validator(mode="after")
+    def validate_shape(self) -> "DerivedChannel":
+        expected = 1
+        for dim in self.shape:
+            expected *= dim
+        if expected != len(self.values):
+            raise ValueError(
+                f"derived channel '{self.key}' values length {len(self.values)} "
+                f"does not match declared shape {self.shape}"
+            )
+        return self
+
 
 class DerivedSurface(QuantBaseModel):
     """Raw'ın yanına eklenen target-centric derived sinyaller.
@@ -108,6 +123,7 @@ class DerivedSurface(QuantBaseModel):
     Derived sinyaller raw tensorların yerini almaz.
     """
 
+    contract_version: str = DERIVED_SURFACE_CONTRACT_VERSION
     channels: list[DerivedChannel] = Field(default_factory=list)
 
     def get(self, key: str) -> DerivedChannel | None:
@@ -123,6 +139,7 @@ class DerivedSurface(QuantBaseModel):
 
 
 class ObservationSchema(QuantBaseModel):
+    schema_version: str = OBSERVATION_SCHEMA_VERSION
     # V2: Çok ölçekli zaman ekseni — her ölçek bağımsız bucket + mask mantığına sahip
     scale_axis: list[ScaleSpec]
     asset_axis: list[str]  # symbol listesi
@@ -268,6 +285,13 @@ class ObservationContext(QuantBaseModel):
         for scale_spec in schema.scale_axis:
             if scale_spec.label not in self.raw_surface:
                 raise ValueError(f"raw_surface missing tensor for scale: {scale_spec.label}")
+            expected_shape = list(schema.shape_for_scale(scale_spec.label))
+            actual_shape = self.raw_surface[scale_spec.label].shape
+            if actual_shape != expected_shape:
+                raise ValueError(
+                    f"raw_surface[{scale_spec.label}] shape {actual_shape} "
+                    f"does not match observation schema shape {expected_shape}"
+                )
         return self
 
 
