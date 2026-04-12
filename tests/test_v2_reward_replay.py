@@ -14,7 +14,6 @@ from quantlab_ml.contracts import (
     ActionSpaceSpec,
     FeasibilityCell,
     RewardContext,
-    RewardEventSpec,
     RewardTimeline,
     VenueExecutionRef,
 )

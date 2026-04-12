@@ -69,7 +69,6 @@ def test_runtime_bridge_rejects_incompatible_observation_schema(policy_artifact,
 
 
 def test_runtime_bridge_rejects_unknown_decision_venue(policy_artifact, trajectory_bundle) -> None:
-    bridge = PolicyRuntimeBridge()
     observation = trajectory_bundle.splits["validation"][0].steps[0].observation
 
     class _BadVenueBridge(PolicyRuntimeBridge):

@@ -46,7 +46,18 @@ from quantlab_ml.contracts.policies import (
     PolicyArtifact,
     RuntimeMetadata,
 )
-from quantlab_ml.contracts.registry import CoverageStats, RegistryIndex, RegistryRecord, ScoreSnapshot
+from quantlab_ml.contracts.registry import (
+    CoverageStats,
+    PaperSimEvidenceRecord,
+    PromotionDecisionRecord,
+    PromotionEvidence,
+    RegistryIndex,
+    RegistryRecord,
+    ReproducibilityMetadata,
+    ScoreSnapshot,
+    SearchBudgetSummary,
+    SplitEvidence,
+)
 from quantlab_ml.contracts.rewards import (
     ActionReward,
     RewardContext,
@@ -109,9 +120,15 @@ __all__ = [
     "RuntimeMetadata",
     # registry
     "CoverageStats",
+    "PaperSimEvidenceRecord",
+    "PromotionDecisionRecord",
+    "PromotionEvidence",
     "RegistryIndex",
     "RegistryRecord",
+    "ReproducibilityMetadata",
     "ScoreSnapshot",
+    "SearchBudgetSummary",
+    "SplitEvidence",
     # rewards
     "ActionReward",
     "RewardContext",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal, cast
 
 from quantlab_ml.contracts import (
     ActionFeasibilitySurface,
@@ -212,7 +213,7 @@ class RewardEngine:
             )
         )
 
-        if requested_available:
+        if requested_available and requested_reward is not None:
             turnover_penalty = self._turnover_penalty(previous_position_side, resulting_position_side)
             return AppliedReward(
                 requested_action_key=requested_action_key,
@@ -272,7 +273,10 @@ class RewardEngine:
         )
         previous_venue = applied_reward.venue if applied_reward.resulting_position_side != "flat" else None
         return PolicyState(
-            previous_position_side=applied_reward.resulting_position_side,
+            previous_position_side=cast(
+                Literal["flat", "long", "short"],
+                applied_reward.resulting_position_side,
+            ),
             previous_venue=previous_venue,
             hold_age_steps=hold_age_steps,
             turnover_accumulator=turnover_accumulator,

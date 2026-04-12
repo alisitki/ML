@@ -10,17 +10,26 @@ from quantlab_ml.contracts import (
     PolicyArtifact,
     PolicyScore,
 )
-from quantlab_ml.models import MomentumBaselineModel, MomentumBaselineParameters, RuntimeDecision
+from quantlab_ml.models import (
+    LinearPolicyModel,
+    LinearPolicyParameters,
+    MomentumBaselineModel,
+    MomentumBaselineParameters,
+    RuntimeDecision,
+)
 
 
 class PolicyRuntimeBridge:
     def decide(self, artifact: PolicyArtifact, observation: ObservationContext) -> RuntimeDecision:
         self._validate_artifact_compatibility(artifact, observation)
-        if artifact.policy_payload.runtime_adapter != "momentum-baseline-v1":
-            raise ValueError(f"unsupported runtime adapter: {artifact.policy_payload.runtime_adapter}")
-        parameters = MomentumBaselineParameters.model_validate_json(artifact.policy_payload.blob)
-        model = MomentumBaselineModel(parameters)
-        return model.decide(observation, artifact.action_space)
+        runtime_adapter = artifact.policy_payload.runtime_adapter
+        if runtime_adapter == "momentum-baseline-v1":
+            momentum_params = MomentumBaselineParameters.model_validate_json(artifact.policy_payload.blob)
+            return MomentumBaselineModel(momentum_params).decide(observation, artifact.action_space)
+        if runtime_adapter == "linear-policy-v1":
+            linear_params = LinearPolicyParameters.model_validate_json(artifact.policy_payload.blob)
+            return LinearPolicyModel(linear_params).decide(observation, artifact.action_space)
+        raise ValueError(f"unsupported runtime adapter: {runtime_adapter}")
 
     def export(self, artifact: PolicyArtifact, score: PolicyScore | None) -> InferenceArtifactExport:
         summary: dict[str, float] = {}

@@ -46,5 +46,6 @@ def test_contract_round_trip(
     assert loaded_policy.runtime_metadata.reward_version == trajectory_bundle.reward_spec.reward_version
     assert loaded_report.policy_id == policy_artifact.policy_id
     assert loaded_report.infeasible_penalty_total == evaluation_report.infeasible_penalty_total
-    assert updated.score_history[-1].score.composite_rank == policy_score.composite_rank
+    assert updated.score_history[-1].composite_rank == policy_score.composite_rank
+    assert updated.evaluation_surface_id == loaded_policy.evaluation_surface_id
     assert record.coverage.covered_symbols == trajectory_bundle.dataset_spec.symbols

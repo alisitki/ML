@@ -4,7 +4,7 @@ import math
 from collections import defaultdict
 from datetime import datetime, timedelta
 from itertools import combinations
-from typing import Iterable
+from typing import Iterable, Literal, cast
 
 from quantlab_ml.contracts import (
     ActionFeasibilitySurface,
@@ -159,7 +159,10 @@ class TrajectoryBuilder:
                 trajectories.append(
                     TrajectoryRecord(
                         trajectory_id=f"{split_name}-{symbol.lower()}-{chunk_index}",
-                        split=split_name,
+                        split=cast(
+                            Literal["train", "validation", "final_untouched_test"],
+                            split_name,
+                        ),
                         target_symbol=symbol,
                         start_time=chunk[0].event_time,
                         end_time=chunk[-1].event_time,
@@ -203,7 +206,10 @@ class TrajectoryBuilder:
         folds: list[WalkForwardFold] = []
         validation_start_index = config.train_window_steps
         max_validation_start = len(development_timestamps) - config.validation_window_steps
-        advance = max(config.step_size_steps, config.validation_window_steps + embargo_width_steps)
+        advance = max(
+            config.step_size_steps if config.step_size_steps is not None else config.validation_window_steps,
+            config.validation_window_steps + embargo_width_steps,
+        )
 
         while validation_start_index <= max_validation_start:
             validation_end_index = validation_start_index + config.validation_window_steps - 1
@@ -586,7 +592,10 @@ class TrajectoryBuilder:
             return None
         ctx = prev_step.reward_context
         return PolicyState(
-            previous_position_side=ctx.previous_position_state,
+            previous_position_side=cast(
+                Literal["flat", "long", "short"],
+                ctx.previous_position_state,
+            ),
             previous_venue=ctx.selected_venue,
             hold_age_steps=0,
             turnover_accumulator=ctx.turnover_state,

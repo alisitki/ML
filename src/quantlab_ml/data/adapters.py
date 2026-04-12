@@ -36,7 +36,7 @@ class LocalParquetSource(MarketDataSource):
 
     def load_events(self, dataset_spec: DatasetSpec) -> list[NormalizedMarketEvent]:
         try:
-            import pyarrow.parquet as pq
+            import pyarrow.parquet as pq  # type: ignore[import-untyped]
         except ImportError as exc:  # pragma: no cover - optional dependency boundary
             raise RuntimeError("pyarrow is required for parquet adapter support") from exc
 
@@ -232,7 +232,7 @@ class S3CompactedSource(MarketDataSource):
     def client(self) -> Any:
         if self._client is None:
             try:
-                import boto3
+                import boto3  # type: ignore[import-untyped]
             except ImportError as exc:  # pragma: no cover - dependency guard
                 raise RuntimeError("boto3 is required for S3 compact support") from exc
             session = boto3.session.Session(
@@ -363,9 +363,20 @@ def _canonical_value(record: dict[str, Any]) -> float:
     raise ValueError(f"cannot infer canonical value for stream: {stream_type}")
 
 
-def _coerce_event_time(record: dict[str, Any]) -> datetime | str:
+def _coerce_event_time(record: dict[str, Any]) -> datetime:
+    """Coerce event_time field to a datetime object.
+
+    Accepted surfaces (preserved):
+    - record['event_time']: datetime | str (ISO-8601)
+    - record['ts_event']: numeric millisecond epoch
+    """
     if "event_time" in record:
-        return record["event_time"]
+        val = record["event_time"]
+        if isinstance(val, datetime):
+            return val
+        # str path: ISO-8601; fromisoformat handles 'Z' suffix in Python 3.11+
+        # For 3.12 (required by pyproject) this works natively.
+        return datetime.fromisoformat(str(val).replace("Z", "+00:00"))
     if "ts_event" in record:
         return datetime.fromtimestamp(float(record["ts_event"]) / 1000.0, tz=UTC)
     raise KeyError("event_time")

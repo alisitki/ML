@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from quantlab_ml.contracts import TrajectoryBundle
 from quantlab_ml.contracts.compat import target_stream_series
-from quantlab_ml.data import LocalFixtureSource
-from quantlab_ml.trajectories import TrajectoryBuilder
 
 
 def test_trajectory_builder_preserves_axes_and_masks(trajectory_bundle: TrajectoryBundle) -> None:

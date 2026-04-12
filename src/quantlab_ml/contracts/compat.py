@@ -15,7 +15,7 @@ import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from quantlab_ml.contracts.learning_surface import ObservationContext, ObservationSchema
+    from quantlab_ml.contracts.learning_surface import ObservationContext
     from quantlab_ml.contracts.rewards import RewardSnapshot
 
 
@@ -51,7 +51,6 @@ def target_stream_series(obs: "ObservationContext", stream: str) -> list[float |
     # Her stream'in kaç field'ı var (önceki stream'lerin toplamı = field offset)
     field_counts = [len(fields_by_stream.get(s, [])) for s in streams]
     field_offset_for_stream = sum(field_counts[:stream_idx])
-    stream_field_count = field_counts[stream_idx]
     total_fields = sum(field_counts)
 
     n_sym = len(symbols)

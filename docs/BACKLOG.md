@@ -113,13 +113,51 @@ Status values:
 
 ### QL-006
 - title: Registry schema and promotion-gate enforcement
-- status: in_progress
+- status: done
 - depends_on: QL-005
 - scope: score history, lineage, search-budget fields, champion/challenger constraints
+- completion_notes:
+  - registry records now carry canonical policy identity, search-budget summary, split evidence, runtime compatibility tags, evaluation linkage, and promotion-decision lineage
+  - scored candidates remain challengers until explicit promotion; champion status is no longer assigned automatically from raw score ranking
+  - promotion gate now records auditable decisions and enforces split discipline, leakage checks, search-budget presence, champion comparison, reproducibility, artifact completeness, and runtime boundary evidence
+  - paper/sim evidence is now recorded as a first-class registry-linked evidence record, and promotion consumes typed paper/sim evidence ids instead of ad-hoc report placeholders
 - done_when:
   - unscored champion impossible
   - registry fields match REGISTRY_SCHEMA
   - promotion prerequisites are checkable
+
+### QL-008
+- title: Replace baseline policy-learning path with a real training loop
+- status: done
+- depends_on: phase-4 paper/sim operationalization
+- scope: learned policy fitting on train only, validation-based model selection, search-budget summary recording, policy artifact / inference artifact separation
+- completion_notes:
+  - the active training path now fits learned linear policy weights from train split data instead of using the old momentum-threshold heuristic
+  - learned normalization is fit on train only, best checkpoint selection uses validation only, and final untouched test remains outside the training loop
+  - training artifacts still register cleanly, export to inference artifacts, and remain compatible with evaluation, registry, and promotion-gate flows
+- done_when:
+  - real training loop exists
+  - produced policies carry search-budget transparency metadata
+  - validation-based selection does not consume final untouched test
+  - OOS evidence path remains intact
+
+### QL-009
+- title: Expand the real training path into explicit search-budgeted candidate generation
+- status: done
+- depends_on: QL-008
+- scope: opt-in `candidate_search` config, multi-candidate trainer result surface, backward-compatible selected-artifact CLI flow, registry-visible run linkage without registry schema drift
+- completion_notes:
+  - explicit `candidate_search` configs now produce multiple learned candidates under a shared `training_run_id` and global search-budget summary
+  - validation remains the only development-time selection surface and final untouched test remains outside the loop
+  - `quantlab-ml train` keeps the selected artifact at `--output`, emits a search manifest and sidecar candidate artifacts only for multi-candidate runs, and can register all candidates without widening the registry schema
+  - repo-wide verification gate is now fully green: `ruff check .`, `mypy src`, `pytest -q` (80 passed), `git diff --check` all clean
+  - typing fixes: unused imports, None guards, Literal cast, return type annotations, branch-local type narrowing — no semantic changes
+  - `_coerce_event_time()` typing surface preserved; 4 targeted input-surface tests added
+- done_when:
+  - more than one learned candidate can be produced under explicit search-budget accounting
+  - validation selection remains the only development-time selection surface
+  - produced candidates remain registrable and promotion-gate compatible
+  - full verification gate is green
 
 ## Parked items
 

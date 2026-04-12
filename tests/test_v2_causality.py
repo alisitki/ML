@@ -5,8 +5,6 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
-
 from quantlab_ml.contracts import TrajectoryBundle
 
 
@@ -61,7 +59,6 @@ def test_policy_state_derived_from_past_only(trajectory_bundle: TrajectoryBundle
 
 def test_validation_split_starts_with_causal_observation(trajectory_bundle: TrajectoryBundle) -> None:
     """Validation split ilk step'i causal pre-validation history ile başlar; hard reset yok."""
-    schema = trajectory_bundle.observation_schema
     first_validation_step = trajectory_bundle.splits["validation"][0].steps[0]
     tensor = first_validation_step.observation.raw_surface["1m"]
     # Yeterli tarihçe varsa padding olmamalı

@@ -46,7 +46,7 @@ class WalkForwardSpec(QuantBaseModel):
             raise ValueError("walkforward validation_window_steps must be positive")
         if self.step_size_steps is None:
             object.__setattr__(self, "step_size_steps", self.validation_window_steps)
-        if self.step_size_steps <= 0:
+        if self.step_size_steps is not None and self.step_size_steps <= 0:
             raise ValueError("walkforward step_size_steps must be positive")
         return self
 

@@ -17,12 +17,11 @@ This file must stay short and current.
 
 ## Current snapshot
 
-- current_phase: `Phase 2 registry and promotion discipline`
-- current_focus: `QL-005 artifact metadata and execution intent path are complete; enforce registry schema and promotion-gate behavior next`
-- current_blocker: `None`
-- declared_next_task: `Implement QL-006 to enforce registry schema, score history, search-budget fields, and champion/challenger constraints`
+- current_phase: `Phase 5 real policy-learning implementation complete`
+- current_focus: `Verification gate is now fully green; QL-009 phase-5 candidate search expansion is done`
+- current_blocker: `none`
+- declared_next_task: `Reassess QL-004 (Observation Schema Enforcement) or begin QL-100 (ONNX/TensorRT runtime acceleration)`
 - not_now:
-  - `TensorRT optimization`
   - `live deployment plumbing`
   - `reward_v2 path-aware redesign`
   - `advanced selector heuristics`
@@ -30,21 +29,18 @@ This file must stay short and current.
 ## Active work item
 
 ```yaml
-id: QL-006
-title: Registry schema and promotion-gate enforcement
-status: in_progress
-owner: codex
-depends_on:
-  - QL-005
-done_when:
-  - unscored champion impossible
-  - registry fields match REGISTRY_SCHEMA
-  - promotion prerequisites are checkable
+id: none
+title: No active work item — QL-009 complete, verification gate green
+status: done
 ```
 
 ## Current blocker details
 
-None.
+None. All four verification gates are now clean:
+- `ruff check .` → All checks passed!
+- `mypy src` → Success: no issues found in 41 source files
+- `pytest -q` → 80 passed
+- `git diff --check` → clean
 
 ## Recently completed
 
@@ -62,12 +58,19 @@ None.
 - effective selected-venue semantics are now explicit in reward context during reward application and evaluation
 - QL-005 policy artifact metadata and execution intent path alignment completed
 - policy artifacts now carry canonical runtime metadata and compatibility tags, and runtime selector output can be materialized as explicit execution intent
+- QL-006 registry schema and promotion-gate enforcement completed
+- registry now records auditable promotion decisions and prevents automatic score-only champion promotion
+- Phase 4 paper/sim evidence operationalization completed
+- paper/sim evidence is now attached as a first-class registry-linked record, and promotion decisions can link evaluation, comparison, paper/sim, and deployment evidence without ad-hoc placeholders
+- QL-008 real training loop implementation completed
+- the active training path now fits learned policy weights, records search-budget metadata, and selects checkpoints on validation without touching the final untouched test
+- QL-009 candidate search expansion and repo-wide verification gate cleanup completed
+- explicit candidate_search configs now produce multiple learned candidates; repo-wide ruff/mypy/pytest/diff-check verification gate is now fully clean
 
 ## Immediate next actions
 
-1. Implement QL-006 to enforce registry schema and promotion-gate behavior.
-2. Wire search-budget and lineage completeness through the registry path.
-3. Reassess QL-004 only if a concrete observation-schema gap emerges beyond the completed audit.
+1. Reassess QL-004 (Observation Schema Enforcement) for concrete gaps beyond the completed audit.
+2. If no QL-004 gap emerges, begin QL-100 (ONNX/TensorRT inference acceleration exploration).
 
 ## Update rule
 

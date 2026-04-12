@@ -1,3 +1,24 @@
+Metadata-Version: 2.4
+Name: quantlab-ml
+Version: 0.1.0
+Summary: Offline policy-discovery scaffold for QuantLab market data.
+Requires-Python: <3.13,>=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: boto3<2,>=1.42
+Requires-Dist: pydantic<3,>=2.8
+Requires-Dist: PyYAML<7,>=6.0
+Requires-Dist: typer<1,>=0.12
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8.3; extra == "dev"
+Requires-Dist: ruff<1,>=0.6; extra == "dev"
+Requires-Dist: mypy<2,>=1.11; extra == "dev"
+Provides-Extra: ml
+Requires-Dist: hydra-core<2,>=1.3; extra == "ml"
+Requires-Dist: numpy<3,>=2.0; extra == "ml"
+Requires-Dist: polars<2,>=1.8; extra == "ml"
+Requires-Dist: pyarrow<18,>=17; extra == "ml"
+Requires-Dist: torch<3,>=2.4; extra == "ml"
+
 # QuantLab ML
 
 QuantLab ML is an offline policy-discovery scaffold for raw multi-exchange market
@@ -101,25 +122,6 @@ quantlab-ml export-policy \
   --score outputs/score.json \
   --output outputs/executor-policy.json
 ```
-
-For opt-in candidate search, use `configs/training/search-small.yaml` or another
-training config that sets `trainer.candidate_search`:
-
-```bash
-quantlab-ml train \
-  --trajectories outputs/trajectories.json \
-  --training-config configs/training/search-small.yaml \
-  --output outputs/search-policy.json
-```
-
-The selected artifact still lands at `--output`. When the search produces more
-than one candidate, `train` also writes:
-
-- `<output stem>_search.json` with run-level search metadata and ranked candidates
-- `<output stem>_candidates/` with the non-selected candidate artifacts
-
-`evaluate`, `score`, and `export-policy` remain backward-compatible and continue
-to consume the selected artifact path.
 
 ## S3 Compact Usage
 

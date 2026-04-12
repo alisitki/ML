@@ -1,0 +1,2 @@
+[console_scripts]
+quantlab-ml = quantlab_ml.cli.app:main

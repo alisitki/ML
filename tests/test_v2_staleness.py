@@ -6,8 +6,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from quantlab_ml.contracts import DatasetSpec, TrajectoryBundle
 from quantlab_ml.data import LocalFixtureSource
 from quantlab_ml.trajectories import TrajectoryBuilder

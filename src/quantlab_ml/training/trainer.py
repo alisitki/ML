@@ -1,53 +1,430 @@
-"""MomentumBaselineTrainer — V2 surface uyumlu; compat adapter üzerinden çalışır."""
 from __future__ import annotations
 
-from statistics import quantiles
+from dataclasses import dataclass
+
+import numpy as np
 
 from quantlab_ml.common import current_code_commit_hash, hash_payload, utcnow
 from quantlab_ml.contracts import (
     ACTION_SPACE_VERSION,
     DYNAMIC_TARGET_ASSET,
     OBSERVATION_SCHEMA_VERSION,
+    EvaluationBoundary,
+    EvaluationReport,
     LineagePointer,
+    NumericBand,
     OpaquePolicyPayload,
     PolicyArtifact,
+    PolicyScore,
     RuntimeMetadata,
+    SearchBudgetSummary,
     TrajectoryBundle,
+    TrajectoryStep,
 )
-from quantlab_ml.models import MomentumBaselineParameters
-from quantlab_ml.training.compat_adapter import V2toV1BundleAdapter
+from quantlab_ml.models.features import observation_feature_vector
+from quantlab_ml.models.linear_policy import LinearPolicyParameters
+from quantlab_ml.scoring import PolicyScorer
 from quantlab_ml.training.config import TrainingConfig
 
 
-class MomentumBaselineTrainer:
+@dataclass(frozen=True, slots=True)
+class TrainingCandidateSpec:
+    seed: int
+    learning_rate: float
+    l2_weight: float
+
+    def as_dict(self) -> dict[str, int | float]:
+        return {
+            "seed": self.seed,
+            "learning_rate": self.learning_rate,
+            "l2_weight": self.l2_weight,
+        }
+
+
+@dataclass(slots=True)
+class TrainingCandidateResult:
+    artifact: PolicyArtifact
+    candidate_index: int
+    candidate_rank: int
+    selected_candidate: bool
+    candidate_spec: TrainingCandidateSpec
+    best_validation_total_net_return: float
+    best_validation_composite_rank: float
+
+
+@dataclass(slots=True)
+class TrainingSearchResult:
+    training_run_id: str
+    selected_artifact: PolicyArtifact
+    candidate_results: list[TrainingCandidateResult]
+    search_budget_summary: SearchBudgetSummary
+
+
+class LinearPolicyTrainer:
     def __init__(self, config: TrainingConfig):
         self.config = config
 
     def train(self, bundle: TrajectoryBundle, parent_policy_id: str | None = None) -> PolicyArtifact:
-        adapter = V2toV1BundleAdapter(bundle)
-        steps = adapter.train_steps()
-        if not steps:
-            raise ValueError("train split is empty")
+        return self.train_search(bundle, parent_policy_id=parent_policy_id).selected_artifact
 
-        momentum_samples: list[float] = []
-        for step_view in steps:
-            series = [v for v in step_view.mark_price_series() if v is not None]
-            if len(series) >= 2 and series[-2] != 0.0:
-                momentum_samples.append(abs((series[-1] - series[-2]) / series[-2]))
-
-        abstain_threshold = _quantile(momentum_samples, self.config.abstain_threshold_quantile)
-        size_band = bundle.action_space.size_bands[0]
-        leverage_band = bundle.action_space.leverage_bands[0]
-
-        parameters = MomentumBaselineParameters(
-            abstain_threshold=abstain_threshold,
-            preferred_exchange=self.config.preferred_exchange,
-            preferred_size_band=size_band.key,
-            preferred_leverage_band=leverage_band.key,
+    def train_search(self, bundle: TrajectoryBundle, parent_policy_id: str | None = None) -> TrainingSearchResult:
+        prepared = self._prepare_training_data(bundle)
+        candidate_specs = self._candidate_specs()
+        code_commit_hash = current_code_commit_hash()
+        training_run_id = self._training_run_id(
+            bundle,
+            parent_policy_id=parent_policy_id,
+            code_commit_hash=code_commit_hash,
+            candidate_specs=candidate_specs,
         )
+        search_budget_summary = _search_budget_summary(candidate_specs)
+
+        candidate_runs = [
+            self._train_candidate(
+                bundle=bundle,
+                prepared=prepared,
+                candidate_spec=candidate_spec,
+                candidate_index=candidate_index,
+                parent_policy_id=parent_policy_id,
+                training_run_id=training_run_id,
+                code_commit_hash=code_commit_hash,
+            )
+            for candidate_index, candidate_spec in enumerate(candidate_specs)
+        ]
+        ranked_runs = sorted(candidate_runs, key=_candidate_ranking_key)
+
+        candidate_results: list[TrainingCandidateResult] = []
+        for candidate_rank, candidate_run in enumerate(ranked_runs, start=1):
+            selected_candidate = candidate_rank == 1
+            candidate_summary = self._candidate_training_summary(
+                prepared=prepared,
+                candidate_run=candidate_run,
+                training_run_id=training_run_id,
+                candidate_rank=candidate_rank,
+                selected_candidate=selected_candidate,
+                search_budget_summary=search_budget_summary,
+            )
+            artifact = self._build_artifact(
+                bundle=bundle,
+                config=candidate_run.config,
+                training_run_id=training_run_id,
+                code_commit_hash=code_commit_hash,
+                parameters=candidate_run.best_parameters,
+                parent_policy_id=parent_policy_id,
+                validation_total_net_return=candidate_run.best_validation_total_net_return,
+                validation_score=candidate_run.best_validation_score,
+                training_summary=candidate_summary,
+                search_metadata=_ArtifactSearchMetadata(
+                    candidate_index=candidate_run.candidate_index,
+                    candidate_rank=candidate_rank,
+                    selected_candidate=selected_candidate,
+                ),
+            )
+            candidate_results.append(
+                TrainingCandidateResult(
+                    artifact=artifact,
+                    candidate_index=candidate_run.candidate_index,
+                    candidate_rank=candidate_rank,
+                    selected_candidate=selected_candidate,
+                    candidate_spec=candidate_run.candidate_spec,
+                    best_validation_total_net_return=candidate_run.best_validation_total_net_return,
+                    best_validation_composite_rank=candidate_run.best_validation_score.composite_rank,
+                )
+            )
+
+        return TrainingSearchResult(
+            training_run_id=training_run_id,
+            selected_artifact=candidate_results[0].artifact,
+            candidate_results=candidate_results,
+            search_budget_summary=search_budget_summary,
+        )
+
+    def _candidate_specs(self) -> list[TrainingCandidateSpec]:
+        search = self.config.candidate_search
+        seeds = search.seeds if search is not None and search.seeds else [self.config.seed]
+        learning_rates = search.learning_rates if search is not None and search.learning_rates else [self.config.learning_rate]
+        l2_weights = search.l2_weights if search is not None and search.l2_weights else [self.config.l2_weight]
+
+        seen: set[tuple[int, float, float]] = set()
+        candidate_specs: list[TrainingCandidateSpec] = []
+        for seed in seeds:
+            for learning_rate in learning_rates:
+                for l2_weight in l2_weights:
+                    key = (seed, learning_rate, l2_weight)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    candidate_specs.append(
+                        TrainingCandidateSpec(
+                            seed=seed,
+                            learning_rate=learning_rate,
+                            l2_weight=l2_weight,
+                        )
+                    )
+        return candidate_specs
+
+    def _training_run_id(
+        self,
+        bundle: TrajectoryBundle,
+        *,
+        parent_policy_id: str | None,
+        code_commit_hash: str,
+        candidate_specs: list[TrainingCandidateSpec],
+    ) -> str:
+        run_payload = {
+            "dataset_hash": bundle.dataset_spec.dataset_hash,
+            "slice_id": bundle.dataset_spec.slice_id,
+            "split_version": bundle.split_artifact.split_version,
+            "reward_version": bundle.reward_spec.reward_version,
+            "trainer_config": self.config.model_dump(mode="json", exclude_none=False),
+            "candidate_specs": [candidate_spec.as_dict() for candidate_spec in candidate_specs],
+            "parent_policy_id": parent_policy_id,
+            "code_commit_hash": code_commit_hash,
+        }
+        return f"trainrun-{hash_payload(run_payload)[:12]}"
+
+    def _prepare_training_data(self, bundle: TrajectoryBundle) -> _PreparedTrainingData:
+        train_examples = self._build_examples(bundle, split="train")
+        validation_examples = self._build_examples(bundle, split="validation")
+        if not train_examples:
+            raise ValueError("train split is empty")
+        if not validation_examples:
+            raise ValueError("validation split is empty")
+
+        action_keys = bundle.action_space.action_keys
+        venue_choices = bundle.dataset_spec.exchanges
+        train_matrix = np.asarray([example.features for example in train_examples], dtype=np.float64)
+        feature_mean = train_matrix.mean(axis=0)
+        feature_std = train_matrix.std(axis=0)
+        feature_std = np.where(feature_std < 1e-6, 1.0, feature_std)
+        normalized_train = _normalize(train_matrix, feature_mean, feature_std)
+        action_labels = np.asarray(
+            [action_keys.index(example.action_key) for example in train_examples],
+            dtype=np.int64,
+        )
+        venue_mask = np.asarray([example.venue is not None for example in train_examples], dtype=np.bool_)
+        venue_labels = np.asarray(
+            [venue_choices.index(example.venue) if example.venue is not None else 0 for example in train_examples],
+            dtype=np.int64,
+        )
+
+        return _PreparedTrainingData(
+            train_examples=train_examples,
+            validation_examples=validation_examples,
+            action_keys=action_keys,
+            venue_choices=venue_choices,
+            normalized_train=normalized_train,
+            feature_mean=feature_mean,
+            feature_std=feature_std,
+            action_labels=action_labels,
+            venue_mask=venue_mask,
+            venue_labels=venue_labels,
+        )
+
+    def _train_candidate(
+        self,
+        *,
+        bundle: TrajectoryBundle,
+        prepared: _PreparedTrainingData,
+        candidate_spec: TrainingCandidateSpec,
+        candidate_index: int,
+        parent_policy_id: str | None,
+        training_run_id: str,
+        code_commit_hash: str,
+    ) -> _CandidateTrainingRun:
+        config = self.config.model_copy(
+            update={
+                "seed": candidate_spec.seed,
+                "learning_rate": candidate_spec.learning_rate,
+                "l2_weight": candidate_spec.l2_weight,
+                "candidate_search": None,
+            }
+        )
+        rng = np.random.default_rng(config.seed)
+        action_weight = rng.normal(0.0, 0.01, size=(len(prepared.action_keys), prepared.feature_dim))
+        action_bias = np.zeros(len(prepared.action_keys), dtype=np.float64)
+        venue_weight = rng.normal(0.0, 0.01, size=(len(prepared.venue_choices), prepared.feature_dim))
+        venue_bias = np.zeros(len(prepared.venue_choices), dtype=np.float64)
+
+        loss_history: list[float] = []
+        validation_history: list[float] = []
+        best_validation_total_net_return: float | None = None
+        best_epoch = 0
+        best_parameters: LinearPolicyParameters | None = None
+        best_validation_score = None
+
+        for epoch in range(1, config.epochs + 1):
+            action_logits = prepared.normalized_train @ action_weight.T + action_bias
+            action_probabilities = _softmax_matrix(action_logits)
+            action_loss = _cross_entropy_loss(action_probabilities, prepared.action_labels)
+            action_gradient = action_probabilities
+            action_gradient[np.arange(len(prepared.action_labels)), prepared.action_labels] -= 1.0
+            action_gradient /= len(prepared.action_labels)
+
+            action_weight_gradient = action_gradient.T @ prepared.normalized_train
+            action_bias_gradient = action_gradient.sum(axis=0)
+
+            venue_loss = 0.0
+            venue_weight_gradient = np.zeros_like(venue_weight)
+            venue_bias_gradient = np.zeros_like(venue_bias)
+            if prepared.venue_mask.any():
+                masked_inputs = prepared.normalized_train[prepared.venue_mask]
+                masked_labels = prepared.venue_labels[prepared.venue_mask]
+                venue_logits = masked_inputs @ venue_weight.T + venue_bias
+                venue_probabilities = _softmax_matrix(venue_logits)
+                venue_loss = _cross_entropy_loss(venue_probabilities, masked_labels)
+                venue_gradient = venue_probabilities
+                venue_gradient[np.arange(len(masked_labels)), masked_labels] -= 1.0
+                venue_gradient /= len(masked_labels)
+                venue_weight_gradient = venue_gradient.T @ masked_inputs
+                venue_bias_gradient = venue_gradient.sum(axis=0)
+
+            total_loss = action_loss + venue_loss
+            if config.l2_weight > 0.0:
+                total_loss += config.l2_weight * (
+                    float(np.sum(action_weight**2)) + float(np.sum(venue_weight**2))
+                )
+                action_weight_gradient += config.l2_weight * action_weight
+                venue_weight_gradient += config.l2_weight * venue_weight
+
+            action_weight -= config.learning_rate * action_weight_gradient
+            action_bias -= config.learning_rate * action_bias_gradient
+            venue_weight -= config.learning_rate * venue_weight_gradient
+            venue_bias -= config.learning_rate * venue_bias_gradient
+            loss_history.append(float(total_loss))
+
+            parameters = LinearPolicyParameters(
+                action_keys=prepared.action_keys,
+                venue_choices=prepared.venue_choices,
+                feature_mean=prepared.feature_mean.tolist(),
+                feature_std=prepared.feature_std.tolist(),
+                action_weight=action_weight.tolist(),
+                action_bias=action_bias.tolist(),
+                venue_weight=venue_weight.tolist(),
+                venue_bias=venue_bias.tolist(),
+                preferred_size_band=config.preferred_size_band,
+                preferred_leverage_band=config.preferred_leverage_band,
+            )
+            validation_artifact = self._build_artifact(
+                bundle=bundle,
+                config=config,
+                training_run_id=training_run_id,
+                code_commit_hash=code_commit_hash,
+                parameters=parameters,
+                parent_policy_id=parent_policy_id,
+                validation_total_net_return=0.0,
+                validation_score=None,
+                training_summary={},
+                search_metadata=None,
+            )
+            validation_report = self._validation_report(bundle, validation_artifact)
+            validation_history.append(validation_report.total_net_return)
+            validation_score = PolicyScorer().score(validation_report)
+
+            if (
+                best_validation_total_net_return is None
+                or validation_report.total_net_return > best_validation_total_net_return
+            ):
+                best_validation_total_net_return = validation_report.total_net_return
+                best_epoch = epoch
+                best_parameters = parameters
+                best_validation_score = validation_score
+
+        assert best_parameters is not None
+        assert best_validation_total_net_return is not None
+        assert best_validation_score is not None
+
+        return _CandidateTrainingRun(
+            config=config,
+            candidate_spec=candidate_spec,
+            candidate_index=candidate_index,
+            best_epoch=best_epoch,
+            best_parameters=best_parameters,
+            best_validation_total_net_return=best_validation_total_net_return,
+            best_validation_score=best_validation_score,
+            loss_history=loss_history,
+            validation_history=validation_history,
+        )
+
+    def _candidate_training_summary(
+        self,
+        *,
+        prepared: _PreparedTrainingData,
+        candidate_run: _CandidateTrainingRun,
+        training_run_id: str,
+        candidate_rank: int,
+        selected_candidate: bool,
+        search_budget_summary: SearchBudgetSummary,
+    ) -> dict[str, object]:
+        return {
+            "trainer_name": candidate_run.config.trainer_name,
+            "surface_version": "v2",
+            "training_backend": "numpy",
+            "training_run_id": training_run_id,
+            "train_step_count": len(prepared.train_examples),
+            "validation_step_count": len(prepared.validation_examples),
+            "feature_dim": prepared.feature_dim,
+            "epochs": candidate_run.config.epochs,
+            "seed": candidate_run.config.seed,
+            "learning_rate": candidate_run.config.learning_rate,
+            "l2_weight": candidate_run.config.l2_weight,
+            "candidate_index": candidate_run.candidate_index,
+            "candidate_rank": candidate_rank,
+            "selected_candidate": selected_candidate,
+            "candidate_spec": candidate_run.candidate_spec.as_dict(),
+            "best_epoch": candidate_run.best_epoch,
+            "best_validation_total_net_return": candidate_run.best_validation_total_net_return,
+            "best_validation_composite_rank": candidate_run.best_validation_score.composite_rank,
+            "selection_split": "validation",
+            "selection_metric": "total_net_return",
+            "final_untouched_test_used": False,
+            "learned_normalization_fit_split": "train",
+            "training_loss_history": candidate_run.loss_history,
+            "validation_objective_history": candidate_run.validation_history,
+            "search_budget_summary": search_budget_summary.model_dump(mode="json"),
+        }
+
+    def _build_examples(self, bundle: TrajectoryBundle, split: str) -> list[_TrainingExample]:
+        trajectories = bundle.splits.get(split, [])
+        examples: list[_TrainingExample] = []
+        for trajectory in trajectories:
+            for step in trajectory.steps:
+                features = observation_feature_vector(step.observation)
+                action_key, venue = _best_label(step)
+                examples.append(_TrainingExample(features=features, action_key=action_key, venue=venue))
+        return examples
+
+    def _validation_report(self, bundle: TrajectoryBundle, artifact: PolicyArtifact) -> EvaluationReport:
+        from quantlab_ml.evaluation import EvaluationEngine
+
+        boundary = EvaluationBoundary(
+            fee_handling="shared_reward_contract",
+            funding_handling="carry_from_funding_stream",
+            slippage_handling="fixed_bps",
+            fill_assumption_mode=bundle.reward_spec.timestamping,
+            timeout_semantics="force_terminal_at_data_end",
+            terminal_semantics="trajectory_boundary_is_terminal",
+            infeasible_action_treatment="force_abstain",
+        )
+        return EvaluationEngine(boundary).evaluate(bundle, artifact, split="validation")
+
+    def _build_artifact(
+        self,
+        *,
+        bundle: TrajectoryBundle,
+        config: TrainingConfig,
+        training_run_id: str,
+        code_commit_hash: str,
+        parameters: LinearPolicyParameters,
+        parent_policy_id: str | None,
+        validation_total_net_return: float,
+        validation_score: PolicyScore | None,
+        training_summary: dict[str, object],
+        search_metadata: _ArtifactSearchMetadata | None,
+    ) -> PolicyArtifact:
         payload_blob = parameters.model_dump_json()
         payload = OpaquePolicyPayload(
-            runtime_adapter=self.config.runtime_adapter,
+            runtime_adapter=config.runtime_adapter,
             payload_format="json",
             payload_format_version="json-v1",
             blob=payload_blob,
@@ -56,38 +433,63 @@ class MomentumBaselineTrainer:
         lineages = LineagePointer(
             parent_policy_id=parent_policy_id,
             generation=0 if parent_policy_id is None else 1,
-            notes=["v2 surface — compat adapter momentum baseline"],
+            notes=["v2 surface - real supervised linear policy trainer"],
         )
-        policy_id = f"policy-{payload.digest[:12]}"
-        artifact_id = f"artifact-{payload.digest[:12]}"
-        confidence = min(0.99, len(steps) / 100.0)
-        training_config_hash = hash_payload(self.config)
+        training_config_hash = hash_payload(config)
         training_snapshot_id = f"{bundle.dataset_spec.dataset_hash}:{bundle.dataset_spec.slice_id}"
+        artifact_identity = hash_payload(
+            {
+                "payload_digest": payload.digest,
+                "training_config_hash": training_config_hash,
+                "training_snapshot_id": training_snapshot_id,
+                "training_run_id": training_run_id,
+            }
+        )
+        policy_id = f"policy-{artifact_identity[:12]}"
+        artifact_id = f"artifact-{artifact_identity[:12]}"
         evaluation_surface_id = (
             f"{bundle.dataset_spec.slice_id}:{bundle.split_artifact.split_version}:{bundle.reward_spec.reward_version}"
         )
         target_asset = bundle.dataset_spec.symbols[0] if len(bundle.dataset_spec.symbols) == 1 else DYNAMIC_TARGET_ASSET
-        required_context = {}
+        required_context: dict[str, object] = {}
         if target_asset == DYNAMIC_TARGET_ASSET:
             required_context = {"target_symbol_source": "observation.target_symbol"}
 
-        # Compat metric: available venue-specific reward'lar arasında en iyi net_reward
-        average_best_reward = sum(
-            max(
-                (r.net_reward for r in step_view.action_rewards_all() if r.applicable),
-                default=0.0,
-            )
-            for step_view in steps
-        ) / len(steps)
+        expected_return_score = validation_total_net_return / max(
+            sum(len(item.steps) for item in bundle.splits["validation"]),
+            1,
+        )
+        risk_score = best_effort_metric(validation_score, "risk_score")
+        turnover_score = best_effort_metric(validation_score, "turnover_score")
+        confidence_or_quality_score = min(0.99, max(best_effort_metric(validation_score, "composite_rank"), 0.0))
 
-        artifact = PolicyArtifact(
+        size_band = _band_by_key(bundle.action_space.size_bands, config.preferred_size_band)
+        leverage_band = _band_by_key(bundle.action_space.leverage_bands, config.preferred_leverage_band)
+        artifact_tags = [
+            f"runtime_adapter:{config.runtime_adapter}",
+            f"reward:{bundle.reward_spec.reward_version}",
+            f"split:{bundle.split_artifact.split_version}",
+            f"observation:{OBSERVATION_SCHEMA_VERSION}",
+            f"action_space:{ACTION_SPACE_VERSION}",
+        ]
+        if search_metadata is not None:
+            artifact_tags.extend(
+                [
+                    f"search_run_id:{training_run_id}",
+                    f"search_candidate_index:{search_metadata.candidate_index}",
+                    f"search_candidate_rank:{search_metadata.candidate_rank}",
+                    f"search_selected:{str(search_metadata.selected_candidate).lower()}",
+                ]
+            )
+
+        return PolicyArtifact(
             artifact_id=artifact_id,
             artifact_version="policy_artifact_v1",
             policy_id=policy_id,
-            policy_family=self.config.trainer_name,
+            policy_family=config.trainer_name,
             training_snapshot_id=training_snapshot_id,
             training_config_hash=training_config_hash,
-            code_commit_hash=current_code_commit_hash(),
+            code_commit_hash=code_commit_hash,
             reward_version=bundle.reward_spec.reward_version,
             evaluation_surface_id=evaluation_surface_id,
             target_asset=target_asset,
@@ -116,41 +518,129 @@ class MomentumBaselineTrainer:
                     "hold_age_steps",
                     "turnover_accumulator",
                 ],
-                expected_return_score=average_best_reward,
-                risk_score=0.0,
-                turnover_score=0.0,
-                confidence_or_quality_score=confidence,
+                expected_return_score=expected_return_score,
+                risk_score=risk_score,
+                turnover_score=turnover_score,
+                confidence_or_quality_score=confidence_or_quality_score,
                 min_capital_requirement=500.0,
                 size_bounds=size_band,
                 leverage_bounds=leverage_band,
-                artifact_compatibility_tags=[
-                    f"runtime_adapter:{self.config.runtime_adapter}",
-                    f"reward:{bundle.reward_spec.reward_version}",
-                    f"split:{bundle.split_artifact.split_version}",
-                    f"observation:{OBSERVATION_SCHEMA_VERSION}",
-                    f"action_space:{ACTION_SPACE_VERSION}",
-                ],
-                runtime_adapter=self.config.runtime_adapter,
+                artifact_compatibility_tags=artifact_tags,
+                runtime_adapter=config.runtime_adapter,
                 required_context=required_context,
                 lineage_pointer=lineages,
             ),
-            training_run_id=f"trainrun-{payload.digest[:12]}",
+            training_run_id=training_run_id,
             parent_artifact_id=parent_policy_id,
-            training_summary={
-                "trainer_name": self.config.trainer_name,
-                "train_step_count": len(steps),
-                "abstain_threshold": abstain_threshold,
-                "surface_version": "v2",
-            },
+            training_summary=training_summary,
         )
-        return artifact
 
 
-def _quantile(values: list[float], probability: float) -> float:
-    if not values:
+MomentumBaselineTrainer = LinearPolicyTrainer
+
+
+@dataclass(slots=True)
+class _ArtifactSearchMetadata:
+    candidate_index: int
+    candidate_rank: int
+    selected_candidate: bool
+
+
+@dataclass(slots=True)
+class _TrainingExample:
+    features: list[float]
+    action_key: str
+    venue: str | None
+
+
+@dataclass(slots=True)
+class _PreparedTrainingData:
+    train_examples: list[_TrainingExample]
+    validation_examples: list[_TrainingExample]
+    action_keys: list[str]
+    venue_choices: list[str]
+    normalized_train: np.ndarray
+    feature_mean: np.ndarray
+    feature_std: np.ndarray
+    action_labels: np.ndarray
+    venue_mask: np.ndarray
+    venue_labels: np.ndarray
+
+    @property
+    def feature_dim(self) -> int:
+        return int(self.normalized_train.shape[1])
+
+
+@dataclass(slots=True)
+class _CandidateTrainingRun:
+    config: TrainingConfig
+    candidate_spec: TrainingCandidateSpec
+    candidate_index: int
+    best_epoch: int
+    best_parameters: LinearPolicyParameters
+    best_validation_total_net_return: float
+    best_validation_score: PolicyScore
+    loss_history: list[float]
+    validation_history: list[float]
+
+
+def _search_budget_summary(candidate_specs: list[TrainingCandidateSpec]) -> SearchBudgetSummary:
+    unique_hyperparameters = {(candidate.learning_rate, candidate.l2_weight) for candidate in candidate_specs}
+    return SearchBudgetSummary(
+        tried_models=len(candidate_specs),
+        tried_seeds=len({candidate.seed for candidate in candidate_specs}),
+        tried_architectures=1,
+        tried_reward_variants=1,
+        tried_hyperparameter_variants=len(unique_hyperparameters),
+        total_candidate_count=len(candidate_specs),
+    )
+
+
+def _candidate_ranking_key(candidate_run: _CandidateTrainingRun) -> tuple[float, float, int]:
+    return (
+        -candidate_run.best_validation_total_net_return,
+        -float(candidate_run.best_validation_score.composite_rank),
+        candidate_run.candidate_index,
+    )
+
+
+def _best_label(step: TrajectoryStep) -> tuple[str, str | None]:
+    abstain_reward = step.reward_snapshot.for_action("abstain").net_reward
+    best_directional = None
+    for reward in step.reward_snapshot.action_rewards:
+        if reward.action_key == "abstain" or not reward.applicable:
+            continue
+        if best_directional is None or reward.net_reward > best_directional.net_reward:
+            best_directional = reward
+    if best_directional is None or best_directional.net_reward <= abstain_reward:
+        return "abstain", None
+    return best_directional.action_key, best_directional.venue
+
+
+def _softmax_matrix(logits: np.ndarray) -> np.ndarray:
+    shifted = logits - np.max(logits, axis=1, keepdims=True)
+    exps = np.exp(shifted)
+    return exps / np.sum(exps, axis=1, keepdims=True)
+
+
+def _cross_entropy_loss(probabilities: np.ndarray, labels: np.ndarray) -> float:
+    chosen = probabilities[np.arange(len(labels)), labels]
+    clipped = np.clip(chosen, 1e-12, 1.0)
+    return float(-np.mean(np.log(clipped)))
+
+
+def _normalize(matrix: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
+    return (matrix - mean) / std
+
+
+def _band_by_key(bands: list[NumericBand], key: str) -> NumericBand:
+    for band in bands:
+        if band.key == key:
+            return band
+    raise KeyError(f"unknown numeric band key: {key}")
+
+
+def best_effort_metric(score: PolicyScore | None, field_name: str) -> float:
+    if score is None:
         return 0.0
-    if len(values) == 1:
-        return values[0]
-    buckets = quantiles(values, n=100, method="inclusive")
-    index = min(98, max(0, int(probability * 100) - 1))
-    return buckets[index]
+    return float(getattr(score, field_name))

@@ -1,12 +1,12 @@
 """test_v2_compat_adapter.py
 
-Mevcut baseline trainer/runtime'ın yeni bundle'ı
-legacy adapter üzerinden hâlâ tüketebildiğini doğrular.
+Explicit compatibility adapter'ın v2 bundle'ı
+legacy-style accessors üzerinden tüketebildiğini doğrular.
 """
 from __future__ import annotations
 
 from quantlab_ml.contracts import TrajectoryBundle
-from quantlab_ml.contracts.compat import flat_action_mask, flat_value_cube, target_stream_series
+from quantlab_ml.contracts.compat import flat_value_cube, target_stream_series
 from quantlab_ml.training.compat_adapter import V2toV1BundleAdapter
 
 
@@ -49,7 +49,7 @@ def test_compat_flat_value_cube_length(trajectory_bundle: TrajectoryBundle) -> N
 def test_trainer_runs_with_v2_bundle(
     trajectory_bundle: TrajectoryBundle, policy_artifact
 ) -> None:
-    """MomentumBaselineTrainer V2 bundle'ı adapter üzerinden işleyebilmeli."""
+    """Aktif trainer V2 bundle'dan artifact üretebilmeli."""
     assert policy_artifact.policy_id.startswith("policy-")
     assert policy_artifact.training_summary.get("surface_version") == "v2"
     assert policy_artifact.training_summary.get("train_step_count", 0) > 0

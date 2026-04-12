@@ -61,7 +61,8 @@ Required outputs:
 
 ### Step 5 — Paper/sim gate
 If candidate passes evaluation:
-- produce or schedule paper/sim evidence
+- produce paper/sim evidence and record it as a first-class registry-linked evidence record
+- link the paper/sim evidence to the evaluation report and comparison report if one exists
 - do not promote directly from offline evaluation alone
 
 ## 4. Failure handling
@@ -82,6 +83,7 @@ If official evaluation fails:
 A completed official evaluation should leave behind:
 - evaluation report
 - comparison report
+- paper/sim evidence record once paper/sim is completed
 - registry updates
 - linked artifact ids
 - search-budget summary

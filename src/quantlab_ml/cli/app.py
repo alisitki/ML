@@ -14,6 +14,7 @@ from quantlab_ml.contracts import (
     PolicyArtifact,
     PolicyScore,
     RewardEventSpec,
+    TrajectoryBundle,
     TrajectorySpec,
 )
 from quantlab_ml.data import LocalFixtureSource, LocalParquetSource, S3CompactedSource
@@ -21,7 +22,7 @@ from quantlab_ml.evaluation import EvaluationEngine
 from quantlab_ml.policies import PolicyRuntimeBridge
 from quantlab_ml.registry import LocalRegistryStore
 from quantlab_ml.scoring import PolicyScorer
-from quantlab_ml.training import MomentumBaselineTrainer, TrainingConfig
+from quantlab_ml.training import LinearPolicyTrainer, TrainingConfig, TrainingSearchResult
 from quantlab_ml.trajectories import TrajectoryBuilder, TrajectoryStore
 
 app = typer.Typer(help="QuantLab ML scaffold CLI.")
@@ -73,17 +74,14 @@ def train(
 ) -> None:
     bundle = TrajectoryStore.read(trajectories)
     _, _, training_config_model = _load_training_bundle(training_config)
-    trainer = MomentumBaselineTrainer(training_config_model)
-    artifact = trainer.train(bundle, parent_policy_id=parent_policy_id)
-    dump_model(output, artifact)
+    trainer = LinearPolicyTrainer(training_config_model)
+    search_result = trainer.train_search(bundle, parent_policy_id=parent_policy_id)
+    dump_model(output, search_result.selected_artifact)
+    if len(search_result.candidate_results) > 1:
+        _write_search_artifacts(output, search_result)
     if registry_root is not None:
         registry = LocalRegistryStore(registry_root)
-        registry.register_candidate(
-            artifact,
-            bundle,
-            reward_config_hash=hash_payload(bundle.reward_spec),
-            training_config_hash=hash_payload(training_config_model),
-        )
+        _register_training_candidates(registry, bundle, search_result)
     typer.echo(f"wrote policy artifact to {output}")
 
 
@@ -135,6 +133,22 @@ def export_policy(
     typer.echo(f"wrote inference artifact export to {output}")
 
 
+@app.command("record-paper-sim")
+def record_paper_sim(
+    registry_root: Path = typer.Option(..., help="Registry root."),
+    policy_id: str = typer.Option(..., help="Registered policy id."),
+    report: Path = typer.Option(..., exists=True, readable=True, help="Paper/sim report path."),
+    comparison_report_id: str | None = typer.Option(None, help="Optional comparison report id."),
+) -> None:
+    registry = LocalRegistryStore(registry_root)
+    evidence = registry.record_paper_sim_evidence(
+        policy_id,
+        report,
+        comparison_report_id=comparison_report_id,
+    )
+    typer.echo(f"recorded paper/sim evidence {evidence.evidence_id}")
+
+
 def main() -> None:
     app()
 
@@ -178,3 +192,59 @@ def _load_training_bundle(path: Path) -> tuple[TrajectorySpec, ActionSpaceSpec, 
     action_space = ActionSpaceSpec.model_validate(config["action_space"])
     training_config = TrainingConfig.model_validate(config["trainer"])
     return trajectory, action_space, training_config
+
+
+def _write_search_artifacts(output: Path, search_result: TrainingSearchResult) -> None:
+    candidate_dir = output.with_name(f"{output.stem}_candidates")
+    manifest_path = output.with_name(f"{output.stem}_search.json")
+    candidates: list[dict[str, object]] = []
+
+    for candidate in search_result.candidate_results:
+        artifact_path = output
+        if not candidate.selected_candidate:
+            artifact_path = candidate_dir / f"{candidate.artifact.policy_id}.json"
+            dump_model(artifact_path, candidate.artifact)
+        candidates.append(
+            {
+                "policy_id": candidate.artifact.policy_id,
+                "artifact_id": candidate.artifact.artifact_id,
+                "artifact_path": str(artifact_path),
+                "candidate_index": candidate.candidate_index,
+                "candidate_rank": candidate.candidate_rank,
+                "selected_candidate": candidate.selected_candidate,
+                "candidate_spec": candidate.candidate_spec.as_dict(),
+                "best_validation_total_net_return": candidate.best_validation_total_net_return,
+                "best_validation_composite_rank": candidate.best_validation_composite_rank,
+            }
+        )
+
+    dump_json_data(
+        manifest_path,
+        {
+            "training_run_id": search_result.training_run_id,
+            "selected_policy_id": search_result.selected_artifact.policy_id,
+            "selected_artifact_path": str(output),
+            "search_budget_summary": search_result.search_budget_summary.model_dump(mode="json"),
+            "candidates": candidates,
+        },
+    )
+
+
+def _register_training_candidates(
+    registry: LocalRegistryStore,
+    bundle: TrajectoryBundle,
+    search_result: TrainingSearchResult,
+) -> None:
+    reward_config_hash = hash_payload(bundle.reward_spec)
+    candidates = (
+        search_result.candidate_results
+        if len(search_result.candidate_results) > 1
+        else [search_result.candidate_results[0]]
+    )
+    for candidate in candidates:
+        registry.register_candidate(
+            candidate.artifact,
+            bundle,
+            reward_config_hash=reward_config_hash,
+            training_config_hash=candidate.artifact.training_config_hash,
+        )

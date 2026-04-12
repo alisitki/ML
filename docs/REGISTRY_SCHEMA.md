@@ -23,7 +23,7 @@ Registry must support at least:
 
 - candidate policy record
 - evaluation record
-- paper/sim record linkage
+- paper/sim evidence record
 - champion / challenger state
 - lineage linkage
 - artifact linkage
@@ -123,7 +123,7 @@ Lineage must not stop at only one direct parent if deeper ancestry is available.
 A deployable record must link to:
 - deployment artifact
 - evaluation report
-- paper/sim report
+- paper/sim evidence record
 - runtime compatibility metadata
 
 ## 11. Prohibited registry failures

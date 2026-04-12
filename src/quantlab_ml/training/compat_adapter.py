@@ -1,6 +1,6 @@
 """training/compat_adapter.py — V2 → V1 Bundle Adapter
 
-MomentumBaselineTrainer ve EvaluationEngine gibi mevcut bileşenler
+Compatibility consumers ve eski-style helpers
 V2 TrajectoryBundle'ı bu adapter aracılığıyla tüketir.
 
 Adapter:
@@ -12,7 +12,9 @@ Bu modül dışında averaging veya scalar collapse yapılmaz.
 """
 from __future__ import annotations
 
-from quantlab_ml.contracts import TrajectoryBundle, TrajectoryStep
+from datetime import datetime
+
+from quantlab_ml.contracts import ActionReward, RewardSnapshot, TrajectoryBundle, TrajectoryStep
 from quantlab_ml.contracts.compat import target_stream_series
 
 
@@ -44,11 +46,11 @@ class _StepView:
         self._step = step
 
     @property
-    def event_time(self):
+    def event_time(self) -> "datetime":
         return self._step.event_time
 
     @property
-    def reward_snapshot(self):
+    def reward_snapshot(self) -> RewardSnapshot:
         return self._step.reward_snapshot
 
     def mark_price_series(self) -> list[float | None]:
@@ -70,5 +72,5 @@ class _StepView:
         # reward_spec'e doğrudan erişim yok; penalty sabit negatif sentinel.
         return max(rewards) if rewards else -0.001  # infeasible_action_penalty varsayılanı
 
-    def action_rewards_all(self):
+    def action_rewards_all(self) -> list[ActionReward]:
         return self._step.reward_snapshot.action_rewards

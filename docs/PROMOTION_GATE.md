@@ -61,6 +61,7 @@ A candidate policy or model may be promoted only if every mandatory item below i
 - [ ] deployment / inference artifact exists
 - [ ] evaluation report exists
 - [ ] paper/sim report exists
+- [ ] paper/sim evidence is linked in the registry
 - [ ] registry entry is complete
 
 ## H. Runtime discipline

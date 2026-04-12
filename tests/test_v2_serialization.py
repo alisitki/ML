@@ -83,4 +83,5 @@ def test_v2_registry_stores_v2_bundle(
     )
     updated = registry.append_score(policy_artifact.policy_id, policy_score, evaluation_report)
     assert record.coverage.covered_symbols == trajectory_bundle.dataset_spec.symbols
-    assert updated.score_history[-1].score.composite_rank == policy_score.composite_rank
+    assert updated.score_history[-1].composite_rank == policy_score.composite_rank
+    assert updated.search_budget_summary.total_candidate_count == 1

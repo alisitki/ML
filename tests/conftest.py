@@ -10,13 +10,13 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from quantlab_ml.common import load_yaml
-from quantlab_ml.contracts import ActionSpaceSpec, DatasetSpec, EvaluationBoundary, RewardEventSpec, ScaleSpec, TrajectorySpec
-from quantlab_ml.data import LocalFixtureSource
-from quantlab_ml.evaluation import EvaluationEngine
-from quantlab_ml.scoring import PolicyScorer
-from quantlab_ml.training import MomentumBaselineTrainer, TrainingConfig
-from quantlab_ml.trajectories import TrajectoryBuilder
+from quantlab_ml.common import load_yaml  # noqa: E402
+from quantlab_ml.contracts import ActionSpaceSpec, DatasetSpec, EvaluationBoundary, RewardEventSpec, TrajectorySpec  # noqa: E402
+from quantlab_ml.data import LocalFixtureSource  # noqa: E402
+from quantlab_ml.evaluation import EvaluationEngine  # noqa: E402
+from quantlab_ml.scoring import PolicyScorer  # noqa: E402
+from quantlab_ml.training import LinearPolicyTrainer, TrainingConfig  # noqa: E402
+from quantlab_ml.trajectories import TrajectoryBuilder  # noqa: E402
 
 
 @pytest.fixture
@@ -37,6 +37,16 @@ def dataset_spec(repo_root: Path) -> DatasetSpec:
 @pytest.fixture
 def training_bundle(repo_root: Path) -> tuple[TrajectorySpec, ActionSpaceSpec, TrainingConfig]:
     raw = load_yaml(repo_root / "configs" / "training" / "default.yaml")
+    return (
+        TrajectorySpec.model_validate(raw["trajectory"]),
+        ActionSpaceSpec.model_validate(raw["action_space"]),
+        TrainingConfig.model_validate(raw["trainer"]),
+    )
+
+
+@pytest.fixture
+def search_training_bundle(repo_root: Path) -> tuple[TrajectorySpec, ActionSpaceSpec, TrainingConfig]:
+    raw = load_yaml(repo_root / "configs" / "training" / "search-small.yaml")
     return (
         TrajectorySpec.model_validate(raw["trajectory"]),
         ActionSpaceSpec.model_validate(raw["action_space"]),
@@ -76,7 +86,7 @@ def policy_artifact(
     training_bundle: tuple[TrajectorySpec, ActionSpaceSpec, TrainingConfig],
 ):
     _, _, training_config = training_bundle
-    trainer = MomentumBaselineTrainer(training_config)
+    trainer = LinearPolicyTrainer(training_config)
     return trainer.train(trajectory_bundle)
 
 
