@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 import logging
+from typing import Literal
 import warnings
 
 import numpy as np
@@ -22,7 +24,9 @@ from quantlab_ml.contracts import (
     RuntimeMetadata,
     SearchBudgetSummary,
     TrajectoryBundle,
+    TrajectoryRecord,
     TrajectoryStep,
+    WalkForwardFold,
 )
 from quantlab_ml.models.features import observation_feature_vector
 from quantlab_ml.models.linear_policy import LinearPolicyParameters
@@ -66,6 +70,31 @@ class TrainingSearchResult:
     search_budget_summary: SearchBudgetSummary
 
 
+@dataclass(frozen=True, slots=True)
+class FoldValidationScore:
+    fold_id: str
+    validation_total_net_return: float
+    validation_composite_rank: float
+    validation_step_count: int
+
+    def as_dict(self) -> dict[str, str | float | int]:
+        return {
+            "fold_id": self.fold_id,
+            "validation_total_net_return": self.validation_total_net_return,
+            "validation_composite_rank": self.validation_composite_rank,
+            "validation_step_count": self.validation_step_count,
+        }
+
+
+@dataclass(slots=True)
+class _CandidateSelectionRun:
+    candidate_spec: TrainingCandidateSpec
+    candidate_index: int
+    fold_scores: list[FoldValidationScore]
+    selection_total_net_return: float
+    selection_composite_rank: float
+
+
 class LinearPolicyTrainer:
     def __init__(self, config: TrainingConfig):
         self.config = config
@@ -74,7 +103,6 @@ class LinearPolicyTrainer:
         return self.train_search(bundle, parent_policy_id=parent_policy_id).selected_artifact
 
     def train_search(self, bundle: TrajectoryBundle, parent_policy_id: str | None = None) -> TrainingSearchResult:
-        prepared = self._prepare_training_data(bundle)
         candidate_specs = self._candidate_specs()
         code_commit_hash = current_code_commit_hash()
         training_run_id = self._training_run_id(
@@ -91,11 +119,9 @@ class LinearPolicyTrainer:
             bundle.split_artifact.split_version,
             bundle.reward_spec.reward_version,
         )
-
-        candidate_runs = [
-            self._train_candidate(
+        selection_runs = [
+            self._select_candidate_via_walkforward(
                 bundle=bundle,
-                prepared=prepared,
                 candidate_spec=candidate_spec,
                 candidate_index=candidate_index,
                 parent_policy_id=parent_policy_id,
@@ -104,14 +130,25 @@ class LinearPolicyTrainer:
             )
             for candidate_index, candidate_spec in enumerate(candidate_specs)
         ]
-        ranked_runs = sorted(candidate_runs, key=_candidate_ranking_key)
+        ranked_selections = sorted(selection_runs, key=_selection_ranking_key)
+        prepared = self._prepare_training_data(bundle)
 
         candidate_results: list[TrainingCandidateResult] = []
-        for candidate_rank, candidate_run in enumerate(ranked_runs, start=1):
+        for candidate_rank, selection_run in enumerate(ranked_selections, start=1):
             selected_candidate = candidate_rank == 1
+            candidate_run = self._train_candidate(
+                bundle=bundle,
+                prepared=prepared,
+                candidate_spec=selection_run.candidate_spec,
+                candidate_index=selection_run.candidate_index,
+                parent_policy_id=parent_policy_id,
+                training_run_id=training_run_id,
+                code_commit_hash=code_commit_hash,
+            )
             candidate_summary = self._candidate_training_summary(
                 prepared=prepared,
                 candidate_run=candidate_run,
+                selection_run=selection_run,
                 training_run_id=training_run_id,
                 candidate_rank=candidate_rank,
                 selected_candidate=selected_candidate,
@@ -128,7 +165,7 @@ class LinearPolicyTrainer:
                 validation_score=candidate_run.best_validation_score,
                 training_summary=candidate_summary,
                 search_metadata=_ArtifactSearchMetadata(
-                    candidate_index=candidate_run.candidate_index,
+                    candidate_index=selection_run.candidate_index,
                     candidate_rank=candidate_rank,
                     selected_candidate=selected_candidate,
                 ),
@@ -136,10 +173,10 @@ class LinearPolicyTrainer:
             candidate_results.append(
                 TrainingCandidateResult(
                     artifact=artifact,
-                    candidate_index=candidate_run.candidate_index,
+                    candidate_index=selection_run.candidate_index,
                     candidate_rank=candidate_rank,
                     selected_candidate=selected_candidate,
-                    candidate_spec=candidate_run.candidate_spec,
+                    candidate_spec=selection_run.candidate_spec,
                     best_validation_total_net_return=candidate_run.best_validation_total_net_return,
                     best_validation_composite_rank=candidate_run.best_validation_score.composite_rank,
                 )
@@ -251,6 +288,126 @@ class LinearPolicyTrainer:
             venue_mask=venue_mask,
             venue_labels=venue_labels,
         )
+
+    def _select_candidate_via_walkforward(
+        self,
+        *,
+        bundle: TrajectoryBundle,
+        candidate_spec: TrainingCandidateSpec,
+        candidate_index: int,
+        parent_policy_id: str | None,
+        training_run_id: str,
+        code_commit_hash: str,
+    ) -> _CandidateSelectionRun:
+        fold_scores: list[FoldValidationScore] = []
+
+        for fold in bundle.split_artifact.folds:
+            fold_bundle = self._build_fold_bundle(bundle, fold)
+            prepared = self._prepare_training_data(fold_bundle)
+            fold_run = self._train_candidate(
+                bundle=fold_bundle,
+                prepared=prepared,
+                candidate_spec=candidate_spec,
+                candidate_index=candidate_index,
+                parent_policy_id=parent_policy_id,
+                training_run_id=f"{training_run_id}:{fold.fold_id}",
+                code_commit_hash=code_commit_hash,
+            )
+            fold_step_count = len(prepared.validation_examples)
+            fold_scores.append(
+                FoldValidationScore(
+                    fold_id=fold.fold_id,
+                    validation_total_net_return=fold_run.best_validation_total_net_return,
+                    validation_composite_rank=fold_run.best_validation_score.composite_rank,
+                    validation_step_count=fold_step_count,
+                )
+            )
+
+        selection_total_net_return = _weighted_mean(
+            [score.validation_total_net_return for score in fold_scores],
+            [score.validation_step_count for score in fold_scores],
+        )
+        selection_composite_rank = _weighted_mean(
+            [score.validation_composite_rank for score in fold_scores],
+            [score.validation_step_count for score in fold_scores],
+        )
+        logger.info(
+            "training_candidate_walkforward_completed candidate_index=%d seed=%d learning_rate=%.6f "
+            "l2_weight=%.6f fold_count=%d selection_total_net_return=%.6f selection_composite_rank=%.6f",
+            candidate_index,
+            candidate_spec.seed,
+            candidate_spec.learning_rate,
+            candidate_spec.l2_weight,
+            len(fold_scores),
+            selection_total_net_return,
+            selection_composite_rank,
+        )
+        return _CandidateSelectionRun(
+            candidate_spec=candidate_spec,
+            candidate_index=candidate_index,
+            fold_scores=fold_scores,
+            selection_total_net_return=selection_total_net_return,
+            selection_composite_rank=selection_composite_rank,
+        )
+
+    def _build_fold_bundle(self, bundle: TrajectoryBundle, fold: WalkForwardFold) -> TrajectoryBundle:
+        interval = timedelta(seconds=bundle.dataset_spec.sampling_interval_seconds)
+        purge_cutoff = fold.validation_window.start - (interval * fold.purge_width_steps)
+        train_records = self._slice_records(
+            bundle.development_records,
+            split_name="train",
+            start=fold.train_window.start,
+            end=fold.train_window.end,
+            exclusive_end=purge_cutoff if fold.purge_width_steps > 0 else None,
+        )
+        validation_records = self._slice_records(
+            bundle.development_records,
+            split_name="validation",
+            start=fold.validation_window.start,
+            end=fold.validation_window.end,
+        )
+        return bundle.model_copy(
+            deep=True,
+            update={
+                "splits": {
+                    "train": train_records,
+                    "validation": validation_records,
+                    "final_untouched_test": [],
+                }
+            },
+        )
+
+    def _slice_records(
+        self,
+        records: list[TrajectoryRecord],
+        *,
+        split_name: Literal["train", "validation"],
+        start: datetime,
+        end: datetime,
+        exclusive_end: datetime | None = None,
+    ) -> list[TrajectoryRecord]:
+        sliced: list[TrajectoryRecord] = []
+        for record in records:
+            selected_steps = [
+                step.model_copy(deep=True)
+                for step in record.steps
+                if start <= step.event_time <= end and (exclusive_end is None or step.event_time < exclusive_end)
+            ]
+            if not selected_steps:
+                continue
+            sliced.append(
+                TrajectoryRecord(
+                    trajectory_id=f"{split_name}-{record.trajectory_id}",
+                    split=split_name,
+                    target_symbol=record.target_symbol,
+                    start_time=selected_steps[0].event_time,
+                    end_time=selected_steps[-1].event_time,
+                    steps=selected_steps,
+                    terminal=True,
+                    terminal_reason=record.terminal_reason,
+                )
+            )
+        return sliced
 
     def _train_candidate(
         self,
@@ -393,6 +550,7 @@ class LinearPolicyTrainer:
         *,
         prepared: _PreparedTrainingData,
         candidate_run: _CandidateTrainingRun,
+        selection_run: _CandidateSelectionRun,
         training_run_id: str,
         candidate_rank: int,
         selected_candidate: bool,
@@ -414,6 +572,12 @@ class LinearPolicyTrainer:
             "candidate_rank": candidate_rank,
             "selected_candidate": selected_candidate,
             "candidate_spec": candidate_run.candidate_spec.as_dict(),
+            "selection_protocol": "walkforward_cv_then_canonical_refit",
+            "selection_fold_count": len(selection_run.fold_scores),
+            "selection_aggregate_metric": "step_weighted_mean_validation_total_net_return",
+            "selection_aggregate_total_net_return": selection_run.selection_total_net_return,
+            "selection_aggregate_composite_rank": selection_run.selection_composite_rank,
+            "candidate_fold_scores": [score.as_dict() for score in selection_run.fold_scores],
             "best_epoch": candidate_run.best_epoch,
             "best_validation_total_net_return": candidate_run.best_validation_total_net_return,
             "best_validation_composite_rank": candidate_run.best_validation_score.composite_rank,
@@ -655,12 +819,19 @@ def _search_budget_summary(candidate_specs: list[TrainingCandidateSpec]) -> Sear
     )
 
 
-def _candidate_ranking_key(candidate_run: _CandidateTrainingRun) -> tuple[float, float, int]:
+def _selection_ranking_key(candidate_run: _CandidateSelectionRun) -> tuple[float, float, int]:
     return (
-        -candidate_run.best_validation_total_net_return,
-        -float(candidate_run.best_validation_score.composite_rank),
+        -candidate_run.selection_total_net_return,
+        -candidate_run.selection_composite_rank,
         candidate_run.candidate_index,
     )
+
+
+def _weighted_mean(values: list[float], weights: list[int]) -> float:
+    total_weight = sum(weights)
+    if total_weight <= 0:
+        raise ValueError("weighted mean requires positive total weight")
+    return float(sum(value * weight for value, weight in zip(values, weights, strict=True)) / total_weight)
 
 
 def _best_label(step: TrajectoryStep) -> tuple[str, str | None]:

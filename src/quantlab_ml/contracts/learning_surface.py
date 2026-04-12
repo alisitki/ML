@@ -386,7 +386,7 @@ class TrajectoryStep(QuantBaseModel):
 
 class TrajectoryRecord(QuantBaseModel):
     trajectory_id: str
-    split: Literal["train", "validation", "final_untouched_test"]
+    split: Literal["train", "validation", "final_untouched_test", "development"]
     target_symbol: str
     start_time: datetime
     end_time: datetime
@@ -459,6 +459,7 @@ class TrajectoryBundle(QuantBaseModel):
     observation_schema: ObservationSchema
     split_artifact: SplitArtifact
     splits: dict[str, list[TrajectoryRecord]]
+    development_records: list[TrajectoryRecord] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_split_keys(self) -> "TrajectoryBundle":

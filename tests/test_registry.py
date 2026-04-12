@@ -4,6 +4,7 @@ from pathlib import Path
 
 from quantlab_ml.common import hash_payload
 from quantlab_ml.contracts import (
+    LEGACY_POLICY_ARTIFACT_SCHEMA_VERSION,
     PaperSimEvidenceRecord,
     PolicyArtifact,
     PolicyScore,
@@ -11,7 +12,7 @@ from quantlab_ml.contracts import (
     ReproducibilityMetadata,
     TrajectoryBundle,
 )
-from quantlab_ml.registry import LocalRegistryStore
+from quantlab_ml.registry import LocalRegistryStore, audit_registry_continuity
 from quantlab_ml.training import LinearPolicyTrainer
 
 
@@ -79,6 +80,50 @@ def test_registry_records_search_linkage_for_multi_candidate_run(
             selected_records.append(record.policy_id)
 
     assert selected_records == [search_result.selected_artifact.policy_id]
+
+
+def test_registry_continuity_audit_counts_numpy_and_legacy_compat_dependencies(
+    tmp_path: Path,
+    trajectory_bundle: TrajectoryBundle,
+    policy_artifact: PolicyArtifact,
+    training_bundle: tuple,
+) -> None:
+    _, _, training_config = training_bundle
+    store = LocalRegistryStore(tmp_path / "registry")
+    reward_hash = hash_payload(trajectory_bundle.reward_spec)
+    training_hash = hash_payload(training_config)
+    store.register_candidate(
+        policy_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+
+    legacy_artifact = _legacy_linear_artifact(policy_artifact)
+    legacy_artifact = legacy_artifact.model_copy(
+        update={
+            "policy_id": f"{legacy_artifact.policy_id}-legacy",
+            "artifact_id": f"{legacy_artifact.artifact_id}-legacy",
+            "training_run_id": f"{legacy_artifact.training_run_id}-legacy",
+        },
+        deep=True,
+    )
+    store.register_candidate(
+        legacy_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+
+    summary = audit_registry_continuity(store)
+
+    assert summary["record_count"] == 2
+    assert summary["active_record_count"] == 2
+    assert summary["active_training_backend_counts"] == {"numpy": 2}
+    assert summary["active_numpy_training_backend_count"] == 2
+    assert summary["active_legacy_compat_artifact_count"] == 1
+    assert summary["ready_to_close_numpy_continuity_window"] is False
+    assert summary["ready_to_retire_legacy_compat_window"] is False
 
 
 def test_unscored_candidate_does_not_become_champion(
@@ -387,6 +432,38 @@ def _record_paper_sim_evidence(
 ) -> PaperSimEvidenceRecord:
     report_path.write_text("# paper sim\n", encoding="utf-8")
     return store.record_paper_sim_evidence(policy_id, report_path)
+
+
+def _legacy_linear_artifact(policy_artifact: PolicyArtifact) -> PolicyArtifact:
+    legacy_tags = [
+        tag
+        for tag in policy_artifact.runtime_metadata.artifact_compatibility_tags
+        if not tag.startswith(
+            (
+                "runtime_contract:",
+                "policy_kind:",
+                "derived_contract:",
+                "derived_signature:",
+                "feature_dim:",
+                "compat_mode:",
+            )
+        )
+    ]
+    legacy_metadata = policy_artifact.runtime_metadata.model_copy(
+        update={
+            "strict_runtime_contract": None,
+            "artifact_compatibility_tags": legacy_tags,
+        },
+        deep=True,
+    )
+    return policy_artifact.model_copy(
+        update={
+            "schema_version": LEGACY_POLICY_ARTIFACT_SCHEMA_VERSION,
+            "artifact_version": LEGACY_POLICY_ARTIFACT_SCHEMA_VERSION,
+            "runtime_metadata": legacy_metadata,
+        },
+        deep=True,
+    )
 
 
 def _tag_map(record) -> dict[str, str]:

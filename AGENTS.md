@@ -161,7 +161,11 @@ Do not drift toward prediction-only scoring.
 ## Runtime / deployment rules
 
 - PyTorch is the default training stack.
+- Meaningful training defaults to GPU execution when available.
+- Remote rented GPU compute is the preferred execution target for real training when available.
+- Local CPU / laptop runs are for smoke, debugging, tiny baseline continuity, or short validation only.
 - ONNX and TensorRT are allowed only for runtime inference acceleration.
+- Runtime inference acceleration choices do not define the training execution target.
 - Do not move training logic into runtime.
 - Do not move hidden strategy logic into executor.
 - Training artifact and deployment artifact are separate.
@@ -173,6 +177,7 @@ When making changes:
 - preserve contract semantics,
 - call out leakage risk explicitly,
 - call out backtest-overfitting risk explicitly,
+- when proposing or planning real training runs on meaningful data volume, default to remote GPU execution rather than local laptop execution unless the task is explicitly smoke/debug-sized,
 - update tests for every behavior change,
 - update docs when semantics change,
 - do not declare success based only on fixture smoke tests,

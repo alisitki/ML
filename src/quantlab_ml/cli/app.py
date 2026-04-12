@@ -20,7 +20,7 @@ from quantlab_ml.contracts import (
 from quantlab_ml.data import LocalFixtureSource, LocalParquetSource, S3CompactedSource
 from quantlab_ml.evaluation import EvaluationEngine
 from quantlab_ml.policies import PolicyRuntimeBridge
-from quantlab_ml.registry import LocalRegistryStore
+from quantlab_ml.registry import LocalRegistryStore, audit_registry_continuity
 from quantlab_ml.scoring import PolicyScorer
 from quantlab_ml.training import LinearPolicyTrainer, TrainingConfig, TrainingSearchResult
 from quantlab_ml.trajectories import TrajectoryBuilder, TrajectoryStore
@@ -152,6 +152,20 @@ def record_paper_sim(
         comparison_report_id=comparison_report_id,
     )
     typer.echo(f"recorded paper/sim evidence {evidence.evidence_id}")
+
+
+@app.command("audit-continuity")
+def audit_continuity(
+    registry_root: Path = typer.Option(..., help="Registry root."),
+    output: Path | None = typer.Option(None, help="Optional JSON output path."),
+) -> None:
+    registry = LocalRegistryStore(registry_root)
+    summary = audit_registry_continuity(registry)
+    if output is not None:
+        dump_json_data(output, summary)
+        typer.echo(f"wrote continuity audit to {output}")
+        return
+    typer.echo(json.dumps(summary, indent=2))
 
 
 def main() -> None:

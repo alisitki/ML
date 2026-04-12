@@ -40,8 +40,12 @@ Every official evaluation run must know:
 - apply purge/embargo if overlap exists
 - persist fold boundaries
 - persist split artifact metadata
+- consume persisted walk-forward folds for candidate selection rather than leaving them metadata-only
+- keep final untouched test outside candidate selection and epoch selection
 
 ### Step 2 — Evaluate candidate policies
+- if candidate search is active, rank candidate specs on walk-forward fold evidence first
+- after a candidate spec is chosen, allow canonical train refit plus canonical validation-only epoch selection
 - evaluate candidate artifacts on the canonical evaluation surface
 - ensure reward logic matches declared reward version
 - ensure post-cost objective is computed

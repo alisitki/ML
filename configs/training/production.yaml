@@ -1,0 +1,74 @@
+trajectory:
+  # Canonical production observation preset.
+  # This is a first-class profile so the continuity/smoke default does not read like
+  # the future production surface.
+  scale_preset:
+    - label: "1m"
+      resolution_seconds: 60
+      num_buckets: 8
+    - label: "5m"
+      resolution_seconds: 300
+      num_buckets: 8
+    - label: "15m"
+      resolution_seconds: 900
+      num_buckets: 8
+    - label: "60m"
+      resolution_seconds: 3600
+      num_buckets: 12
+  max_episode_steps: 128
+  stale_after_seconds: 180
+  terminal_semantics: max_steps_or_data_end
+  timeout_semantics: force_terminal_on_split_end
+action_space:
+  actions:
+    - key: abstain
+      label: no_trade
+      category: abstain
+      direction: flat
+      requires_venue: false
+      requires_size_band: false
+      requires_leverage_band: false
+    - key: enter_long
+      label: enter_long
+      category: directional
+      direction: long
+      requires_venue: true
+      requires_size_band: true
+      requires_leverage_band: true
+    - key: enter_short
+      label: enter_short
+      category: directional
+      direction: short
+      requires_venue: true
+      requires_size_band: true
+      requires_leverage_band: true
+  venue_choices: [binance, bybit, okx]
+  size_bands:
+    - key: micro
+      lower: 0.01
+      upper: 0.10
+    - key: small
+      lower: 0.10
+      upper: 0.25
+  leverage_bands:
+    - key: low
+      lower: 1.0
+      upper: 2.0
+    - key: medium
+      lower: 2.0
+      upper: 4.0
+  invalid_action_mask_semantics:
+    true_means_available: true
+    false_reason_label: constraint_violation
+trainer:
+  # The active backend remains the continuity NumPy trainer for now.
+  # This profile only promotes the canonical production observation surface to a
+  # first-class config; it does not change the backend roadmap.
+  trainer_name: linear-policy-trainer
+  runtime_adapter: linear-policy-v1
+  epochs: 8
+  learning_rate: 0.1
+  l2_weight: 0.0001
+  seed: 7
+  preferred_size_band: micro
+  preferred_leverage_band: low

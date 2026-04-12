@@ -81,3 +81,18 @@ Code implementing v1 split policy must produce and store:
 - embargo width
 - final untouched test boundary
 - split version id
+
+## 10. Fold consumption expectation
+
+Persisted walk-forward folds are not metadata-only.
+
+Operational rule:
+- candidate selection must consume the persisted walk-forward folds inside the development region
+- purge must be applied before fold-train fitting
+- fold-train fitting must use train-only learned transforms
+- final exported artifacts may be refit on canonical train after candidate selection is complete
+- canonical validation may still be used for epoch selection after the candidate spec is chosen
+- final untouched test remains outside the development loop
+
+An auxiliary development-region trajectory surface may be persisted to support fold consumption.
+This does not create a new canonical split beyond `train`, `validation`, and `final_untouched_test`.

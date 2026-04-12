@@ -13,7 +13,13 @@ def test_trajectory_builder_preserves_axes_and_masks(trajectory_bundle: Trajecto
     assert len(trajectory_bundle.splits["train"]) >= 1
     assert len(trajectory_bundle.splits["validation"]) >= 1
     assert len(trajectory_bundle.splits["final_untouched_test"]) >= 1
+    assert len(trajectory_bundle.development_records) >= 1
     assert trajectory_bundle.split_artifact.split_version == "split_v1_walkforward"
+    development_steps = sum(len(record.steps) for record in trajectory_bundle.development_records)
+    canonical_development_steps = sum(
+        len(record.steps) for split_name in ("train", "validation") for record in trajectory_bundle.splits[split_name]
+    )
+    assert development_steps > canonical_development_steps
 
     first_step = trajectory_bundle.splits["train"][0].steps[0]
     # V2: action_feasibility surface

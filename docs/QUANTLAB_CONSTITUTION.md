@@ -153,7 +153,15 @@ Runtime uses inference artifacts only.
 Live learning is forbidden in the initial operating model.
 
 PyTorch is the default training stack.
+Meaningful training defaults to GPU execution when available.
+Remote rented GPU compute is the preferred execution target for real training when available.
+Local CPU / laptop runs are continuity-only:
+- smoke
+- debugging
+- tiny baseline continuity
+- short validation
 ONNX and TensorRT may be used for inference acceleration only.
+Runtime inference acceleration choices do not define the training execution target.
 
 ## 13. Learning-surface discipline
 

@@ -30,7 +30,9 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "configs/data/default.yaml" in readme
     assert "configs/data/fixture.yaml" in readme
     assert "configs/data/s3-current.yaml" in readme
+    assert "configs/training/production.yaml" in readme
     assert "inspect-s3-compact" in readme
+    assert "audit-continuity" in readme
     assert "docs/CANONICAL_MARKET_DATA_CONTRACT.md" in readme
     assert "docs/OBSERVATION_SCHEMA.md" in readme
     assert "docs/POLICY_ARTIFACT_SCHEMA.md" in readme

@@ -82,11 +82,14 @@ Exit criteria:
 
 Goal:
 - replace dummy/baseline logic with real policy-learning systems
+- converge the core training path onto PyTorch
+- make meaningful real training target remote GPU compute when available rather than local laptop continuity assumptions
 - preserve all governance and contract constraints
 - begin genuine policy discovery
 
 Exit criteria:
 - real training loop exists
+- meaningful-size training and search runs are explicitly treated as GPU-first when available
 - policies are produced under search-budget discipline
 - OOS evidence path is intact
 
@@ -96,6 +99,8 @@ Goal:
 - prepare runtime inference for low-latency or production-like execution
 - optionally add ONNX/TensorRT acceleration
 - preserve selector/executor boundary
+
+Runtime inference acceleration remains separate from Phase 5 training compute decisions.
 
 Exit criteria:
 - deployment artifacts exist

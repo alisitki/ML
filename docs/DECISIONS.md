@@ -71,7 +71,7 @@ Status values:
 ## D-010 — PyTorch for training, TensorRT only for runtime acceleration
 - status: accepted
 - date: 2026-04-11
-- decision: PyTorch is the training stack; ONNX/TensorRT may be used only for runtime inference acceleration.
+- decision: PyTorch is the training stack; ONNX/TensorRT may be used only for runtime inference acceleration and do not define the training execution target.
 - why: Training and deployment concerns must remain separate, and TensorRT is not the training system.
 
 ## D-011 — Temporary NumPy trainer does not supersede the PyTorch target
@@ -102,3 +102,35 @@ Status values:
   - No new work may be justified primarily by preserving compat.
   - Compat layers require explicit retirement tracking.
   - If no active artifact inventory depends on a compat layer, freeze or retire it instead of expanding it.
+
+## D-013 — Walk-forward folds are mandatory for candidate selection; exported artifacts are canonically refit afterward
+- status: accepted
+- date: 2026-04-12
+- decision: Candidate selection in the active training path must consume persisted walk-forward folds over the development region with purge applied before fold training. After selection, the chosen candidate spec is refit on the canonical train split and still uses canonical validation only for epoch selection. Final untouched test remains outside the loop.
+- why: Metadata-only folds left an explicit backtest-overfitting gap. Fold-aware candidate selection reduces that risk, but canonical train/validation/final untouched test semantics must remain intact. A dedicated development-region trajectory surface is required because boundary-crossing fold steps do not exist inside the canonical train/validation splits by design.
+- guardrails:
+  - Purge remains mandatory when horizon overlap exists.
+  - Normalization must fit on fold-train only during fold selection.
+  - Final untouched test may not be used for fold ranking, hyperparameter choice, or epoch choice.
+  - Walk-forward support does not justify random split or relaxed leakage discipline.
+- operational_notes:
+  - `training_summary` is the visibility surface for fold-consumption metadata.
+  - `quantlab-ml audit-continuity` is the operational tracking surface for the temporary NumPy and legacy-compat windows; it does not relax D-010 or D-012.
+
+## D-014 — Real training defaults to remote GPU execution; local runs are continuity-only
+- status: accepted
+- date: 2026-04-12
+- decision: Core model training uses PyTorch. When meaningful data volume, longer date ranges, production-scale observation surfaces, or real search budgets are involved, real training defaults to GPU execution when available and prefers remote rented GPU compute. Local CPU / laptop runs are continuity-only: smoke, debugging, tiny baselines, or short validation.
+- why:
+  - production-scale observation surfaces, longer date ranges, and candidate search will be too slow or too distorted if the repo implicitly optimizes around local CPU workflows
+  - local convenience must not define the strategic execution target
+  - PyTorch migration should converge toward real GPU-capable training, not a prolonged local continuity path
+- guardrails:
+  - do not treat local CPU throughput as the optimization target for core training design
+  - do not justify new strategic investment around NumPy/local continuity because of laptop convenience
+  - provider choice may vary (Vast.ai or equivalent), but the execution intent remains remote GPU-first for real training
+  - runtime inference acceleration choices do not define the training execution target
+- non_goals:
+  - this decision does not require immediate cloud orchestration automation
+  - this decision does not force every tiny smoke run onto rented GPU
+  - this decision does not change runtime deployment architecture

@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from quantlab_ml.common import hash_payload
-from quantlab_ml.contracts import POLICY_ARTIFACT_SCHEMA_VERSION
+from quantlab_ml.contracts import POLICY_ARTIFACT_SCHEMA_VERSION, DatasetSpec
+from quantlab_ml.data import LocalFixtureSource
 from quantlab_ml.training import CandidateSearchConfig, LinearPolicyTrainer
 from quantlab_ml.policies import PolicyRuntimeBridge
+from quantlab_ml.trajectories import TrajectoryBuilder
 
 
 def test_training_loop_records_search_budget_and_validation_selection(policy_artifact) -> None:
     summary = policy_artifact.training_summary
     search_budget = summary.get("search_budget_summary", {})
     strict_contract = policy_artifact.runtime_metadata.strict_runtime_contract
+    fold_scores = summary.get("candidate_fold_scores", [])
 
     assert policy_artifact.artifact_version == POLICY_ARTIFACT_SCHEMA_VERSION
     assert policy_artifact.policy_family == "linear-policy-trainer"
@@ -22,12 +26,19 @@ def test_training_loop_records_search_budget_and_validation_selection(policy_art
     assert summary.get("selection_metric") == "total_net_return"
     assert summary.get("final_untouched_test_used") is False
     assert summary.get("learned_normalization_fit_split") == "train"
+    assert summary.get("selection_protocol") == "walkforward_cv_then_canonical_refit"
+    assert summary.get("selection_fold_count") == len(fold_scores)
+    assert summary.get("selection_aggregate_metric") == "step_weighted_mean_validation_total_net_return"
+    assert summary.get("selection_aggregate_total_net_return") is not None
+    assert summary.get("selection_aggregate_composite_rank") is not None
     assert summary.get("best_epoch", 0) >= 1
     assert summary.get("candidate_index") == 0
     assert summary.get("candidate_rank") == 1
     assert summary.get("selected_candidate") is True
     assert search_budget.get("tried_models") == 1
     assert search_budget.get("total_candidate_count") == 1
+    assert fold_scores
+    assert all(score["validation_step_count"] > 0 for score in fold_scores)
     assert _search_tag_map(policy_artifact)["search_selected"] == "true"
     assert _search_tag_map(policy_artifact)["search_candidate_rank"] == "1"
     assert _search_tag_map(policy_artifact)["runtime_contract"] == strict_contract.runtime_contract_version
@@ -63,6 +74,9 @@ def test_train_search_explicit_candidate_search_produces_ranked_candidates(
         assert summary.get("candidate_index") == candidate.candidate_index
         assert summary.get("candidate_spec") == candidate.candidate_spec.as_dict()
         assert summary.get("best_validation_composite_rank") == candidate.best_validation_composite_rank
+        assert summary.get("selection_protocol") == "walkforward_cv_then_canonical_refit"
+        assert summary.get("selection_fold_count", 0) >= 1
+        assert summary.get("candidate_fold_scores")
         assert summary.get("search_budget_summary", {}).get("total_candidate_count") == 4
         assert tag_map["search_run_id"] == search_result.training_run_id
         assert tag_map["search_candidate_index"] == str(candidate.candidate_index)
@@ -146,6 +160,71 @@ def test_linear_policy_runtime_decision_preserves_explicit_decision_dimensions(
         assert decision.venue in policy_artifact.allowed_venues
         assert decision.size_band_key == policy_artifact.runtime_metadata.size_bounds.key
         assert decision.leverage_band_key == policy_artifact.runtime_metadata.leverage_bounds.key
+
+
+def test_walkforward_fold_bundle_uses_development_records_and_applies_purge(
+    tmp_path: Path,
+    training_bundle,
+    reward_spec,
+) -> None:
+    trajectory_spec, action_space, training_config = training_bundle
+    dataset_spec = DatasetSpec.model_validate(
+        {
+            "dataset_hash": "walkforward-training-test",
+            "slice_id": "walkforward-training-test",
+            "exchanges": ["binance"],
+            "symbols": ["BTCUSDT"],
+            "stream_universe": ["mark_price"],
+            "available_streams_by_exchange": {"binance": ["mark_price"]},
+            "train_range": {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T00:03:00Z"},
+            "validation_range": {"start": "2024-01-01T00:04:00Z", "end": "2024-01-01T00:07:00Z"},
+            "final_untouched_test_range": {
+                "start": "2024-01-01T00:08:00Z",
+                "end": "2024-01-01T00:09:00Z",
+            },
+            "walkforward": {
+                "train_window_steps": 3,
+                "validation_window_steps": 2,
+                "step_size_steps": 1,
+            },
+            "sampling_interval_seconds": 60,
+        }
+    )
+    events_path = tmp_path / "mark-price-events.ndjson"
+    events_path.write_text(
+        "\n".join(
+            (
+                f'{{"event_time":"2024-01-01T00:{minute:02d}:00Z","exchange":"binance","symbol":"BTCUSDT",'
+                f'"stream_type":"mark_price","price":{100.0 + minute}}}'
+            )
+            for minute in range(10)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    events = LocalFixtureSource(events_path).load_events(dataset_spec)
+    bundle = TrajectoryBuilder(dataset_spec, trajectory_spec, action_space, reward_spec).build(events)
+
+    trainer = LinearPolicyTrainer(training_config)
+    first_fold = bundle.split_artifact.folds[0]
+    second_fold = bundle.split_artifact.folds[1]
+    first_fold_bundle = trainer._build_fold_bundle(bundle, first_fold)
+    second_fold_bundle = trainer._build_fold_bundle(bundle, second_fold)
+
+    first_train_times = [step.event_time.isoformat() for record in first_fold_bundle.splits["train"] for step in record.steps]
+    first_validation_times = [
+        step.event_time.isoformat() for record in first_fold_bundle.splits["validation"] for step in record.steps
+    ]
+    second_train_times = [
+        step.event_time.isoformat() for record in second_fold_bundle.splits["train"] for step in record.steps
+    ]
+
+    assert "2024-01-01T00:02:00+00:00" not in first_train_times
+    assert "2024-01-01T00:03:00+00:00" in first_validation_times
+    assert "2024-01-01T00:04:00+00:00" in first_validation_times
+    assert "2024-01-01T00:05:00+00:00" not in second_train_times
+    assert "2024-01-01T00:04:00+00:00" in second_train_times
+    assert all(step.event_time.isoformat() != "2024-01-01T00:07:00+00:00" for record in second_fold_bundle.splits["validation"] for step in record.steps)
 
 
 def _search_tag_map(policy_artifact) -> dict[str, str]:

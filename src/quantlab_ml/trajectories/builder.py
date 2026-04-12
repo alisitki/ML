@@ -95,6 +95,12 @@ class TrajectoryBuilder:
             default=self.dataset_spec.train_range.start,
         )
         split_artifact = self._build_split_artifact()
+        development_records = self._build_split(
+            "development",
+            self.dataset_spec.development_range,
+            indexed,
+            history_start,
+        )
         splits = {
             "train": self._build_split("train", self.dataset_spec.train_range, indexed, history_start),
             "validation": self._build_split("validation", self.dataset_spec.validation_range, indexed, history_start),
@@ -113,14 +119,18 @@ class TrajectoryBuilder:
             observation_schema=self.observation_schema,
             split_artifact=split_artifact,
             splits=splits,
+            development_records=development_records,
         )
         logger.info(
-            "trajectory_build_completed slice_id=%s train_records=%d validation_records=%d "
-            "final_test_records=%d train_steps=%d validation_steps=%d final_test_steps=%d fold_count=%d",
+            "trajectory_build_completed slice_id=%s development_records=%d train_records=%d validation_records=%d "
+            "final_test_records=%d development_steps=%d train_steps=%d validation_steps=%d final_test_steps=%d "
+            "fold_count=%d",
             self.dataset_spec.slice_id,
+            len(development_records),
             len(splits["train"]),
             len(splits["validation"]),
             len(splits["final_untouched_test"]),
+            sum(len(record.steps) for record in development_records),
             sum(len(record.steps) for record in splits["train"]),
             sum(len(record.steps) for record in splits["validation"]),
             sum(len(record.steps) for record in splits["final_untouched_test"]),
@@ -183,7 +193,7 @@ class TrajectoryBuilder:
                     TrajectoryRecord(
                         trajectory_id=f"{split_name}-{symbol.lower()}-{chunk_index}",
                         split=cast(
-                            Literal["train", "validation", "final_untouched_test"],
+                            Literal["train", "validation", "final_untouched_test", "development"],
                             split_name,
                         ),
                         target_symbol=symbol,

@@ -30,6 +30,10 @@ Offline training is responsible for:
 - registering policy candidates
 
 Offline training is not allowed to become the live executor.
+Offline training is PyTorch-first.
+For meaningful data volume, production observation surfaces, or real search budgets, offline training defaults to GPU execution when available and prefers remote rented GPU compute over local laptop execution.
+Local CPU / laptop runs are acceptable only for smoke, debugging, tiny baseline continuity, or short validation.
+Provider choice may vary (for example Vast.ai or an equivalent rented GPU provider), but the execution intent remains provider-agnostic.
 
 ## 3. Runtime selector / inference responsibilities
 
@@ -109,6 +113,7 @@ Future acceleration options do not override the active next task.
 
 They are not the training system.
 They are not executor logic.
+They do not define the offline training execution target.
 
 ## 9. Traceability
 

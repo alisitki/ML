@@ -21,9 +21,18 @@ rule-strategy host. Its intended system boundary is:
 - `configs/data/fixture.yaml` is smoke-only and is the profile tests and CLI smoke runs
   should use explicitly.
 - `configs/training/default.yaml` is a smoke/fixture-oriented baseline training profile kept as the current continuity default for CLI/tests. It is not the production preset and it does not define long-term strategic direction.
+- `configs/training/production.yaml` is the explicit canonical production observation profile: `1m×8`, `5m×8`, `15m×8`, `60m×12`.
 - `configs/training/search-small.yaml` is an optional small candidate-search profile for smoke-scale verification. It is not the default core architecture.
 - `stream_universe` is the union of stream families; `available_streams_by_exchange`
   defines which exchange-stream coordinates are structurally unavailable.
+
+## Execution Modes
+
+- `local smoke/debug mode`: local CPU/laptop execution is acceptable for smoke runs, debugging, config sanity-checks, and short verification loops.
+- `continuity baseline mode`: small local runs are acceptable for temporary continuity baselines and workflow validation, but this mode is not the long-term optimization target for core training design.
+- `real training mode`: core model training is PyTorch-first and the expected compute target is remote GPU when available. Provider examples include Vast.ai or equivalent rented GPU providers, but the repo is not locked to any one provider. Secrets, provisioning, and orchestration are outside the scope of this document.
+
+Runtime inference acceleration choices such as ONNX/TensorRT remain separate from training compute decisions.
 
 ## Repository Layout
 
@@ -78,14 +87,18 @@ python -m pip install -e ".[dev,ml]"
 
 Smoke and local verification should use the fixture profile explicitly:
 
+The commands below are local smoke/continuity examples, not the default execution target for meaningful real training.
+
 ```bash
 quantlab-ml build-trajectories \
   --input tests/fixtures/market_events.ndjson \
   --data-config configs/data/fixture.yaml \
+  --training-config configs/training/default.yaml \
   --output outputs/trajectories.json
 
 quantlab-ml train \
   --trajectories outputs/trajectories.json \
+  --training-config configs/training/default.yaml \
   --output outputs/policy.json
 
 quantlab-ml evaluate \
@@ -120,11 +133,30 @@ than one candidate, `train` also writes:
 - `<output stem>_search.json` with run-level search metadata and ranked candidates
 - `<output stem>_candidates/` with the non-selected candidate artifacts
 
-These training configs are continuity-oriented local profiles, not proof of production-surface readiness.
-A separate production preset/config should be introduced explicitly rather than inferred from the current default file name.
+These default/search configs are continuity-oriented local profiles, not proof of production-surface readiness.
+`configs/training/default.yaml` remains the smoke/continuity default and is intentionally not the production preset.
+Use `configs/training/production.yaml` when you want the canonical production observation surface explicitly.
+
+For the explicit production observation surface:
+
+```bash
+quantlab-ml build-trajectories \
+  --input tests/fixtures/market_events.ndjson \
+  --data-config configs/data/fixture.yaml \
+  --training-config configs/training/production.yaml \
+  --output outputs/production-trajectories.json
+```
 
 `evaluate`, `score`, and `export-policy` remain backward-compatible and continue
 to consume the selected artifact path.
+
+To inspect temporary continuity windows in a registry:
+
+```bash
+quantlab-ml audit-continuity --registry-root outputs/registry
+```
+
+This command reports active training backend counts plus active legacy-compat dependency counts.
 
 ## S3 Compact Usage
 

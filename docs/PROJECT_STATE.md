@@ -17,29 +17,30 @@ This file must stay short and current.
 
 ## Current snapshot
 
-- current_phase: `Phase 5 core training loop exists, but production-surface readiness and remaining evaluation-discipline gaps are still open`
-- current_focus: `Interpretation guardrail hardening completed: precedence, temporary-path limits, and task path classification are now explicit, while temporary drifts remain visible instead of reading like direction`
+- current_phase: `Phase 5 core training loop now consumes walk-forward folds for candidate selection, the canonical production observation preset is explicit, and meaningful real training is now governed as PyTorch-first plus remote GPU-first when available, but PyTorch migration and legacy-compat retirement are still open`
+- current_focus: `Fold-aware candidate selection and the production observation profile remain first-class, while the PyTorch core-training migration is now explicitly paired with remote GPU execution for meaningful runs instead of local-laptop continuity assumptions`
 - current_blocker: `none`
-- declared_next_task: `Decide and track walk-forward fold consumption first, then add the production observation preset and explicit exit tracking for the NumPy trainer drift and legacy compat window`
+- declared_next_task: `Use the continuity audit to track NumPy and legacy-compat dependency counts while defining the PyTorch core-training migration, the provider-agnostic remote GPU real-training workflow, and the official real-training runbook`
 - not_now:
   - `live deployment plumbing`
+  - `cloud provisioning automation`
   - `reward_v2 path-aware redesign`
   - `advanced selector heuristics`
 
 ## Active work item
 
 ```yaml
-id: interpretation-guardrail-hardening
-title: Harden repo interpretation so temporary, optional, and allowed paths are harder to misread as core direction
+id: real-training-execution-target-clarification
+title: Make meaningful real training read as PyTorch-first and remote GPU-first while keeping local runs continuity-only
 status: done
 ```
 
 ## Current blocker details
 
-None. Verification gates for the governance hardening batch are clean:
+None. This batch is docs-only execution-target clarification, so code verification was not rerun. The latest full gate record remains:
 - `.venv/bin/ruff check .` → All checks passed!
-- `.venv/bin/mypy src` → Success: no issues found in 42 source files
-- `.venv/bin/pytest` → 96 passed
+- `.venv/bin/mypy src` → Success: no issues found in 43 source files
+- `.venv/bin/pytest` → 100 passed
 - `git diff --check` → clean
 
 ## Recently completed
@@ -81,12 +82,21 @@ None. Verification gates for the governance hardening batch are clean:
 - D-011 now behaves as an active guardrail instead of a passive note: NumPy is continuity-only and not a strategic growth path
 - derived surface is now documented as augmentation only; support for derived channels no longer implies a core/default requirement
 - legacy compat is now documented as a retirement-tracked continuity tool, not a development magnet
+- QL-010 completed: walk-forward fold consumption is now mandatory for candidate selection, purge is applied before fold training, and candidate specs are still canonically refit on train with validation-only epoch selection
+- development-region trajectories are now persisted explicitly so fold validation can consume boundary-crossing development steps without weakening canonical split boundaries
+- QL-011 completed: `configs/training/production.yaml` now carries the canonical `1m×8`, `5m×8`, `15m×8`, `60m×12` observation preset
+- `README.md` and config-state text now say explicitly that `configs/training/default.yaml` is continuity/smoke only and is not the production profile
+- QL-012/013 tracking completed: `quantlab-ml audit-continuity` now reports active training backend counts, active legacy compat dependence, and whether the temporary continuity windows are ready to close
+- D-014 accepted: meaningful real training is now explicitly PyTorch-first, GPU-first when available, and remote-GPU-first rather than local-laptop-first
+- constitution, runtime boundary, roadmap, and agent guidance now say that local CPU/laptop runs are smoke/debug/tiny-baseline/short-validation tools only
+- `docs/TASK_TEMPLATE.md` and `readme.md` now separate local smoke/debug mode, continuity baseline mode, and real training mode so laptop convenience is harder to mistake for the strategic path
 
 ## Immediate next actions
 
-1. Decide whether walk-forward fold consumption should become a dedicated training backlog item and execute it under explicit backlog tracking.
-2. Add the production observation preset/config instead of letting the smoke/fixture preset read like the default future surface.
-3. Track exit criteria for the temporary NumPy trainer drift and legacy compat window rather than allowing them to linger as implied defaults.
+1. Run `quantlab-ml audit-continuity --registry-root ...` against active registries so NumPy and legacy-compat dependency counts stay explicit instead of inferred.
+2. Plan the PyTorch core-training migration under D-011 and D-014 guardrails without widening the NumPy continuity path.
+3. Define the provider-agnostic remote GPU workflow and runbook for meaningful real training without widening into orchestration, secret, or scheduler work.
+4. Retire the temporary legacy compat window once the continuity audit reports zero active legacy dependencies.
 
 ## Update rule
 

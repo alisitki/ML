@@ -81,16 +81,16 @@ Status values:
 - scope: axes, masks, derived surface, scale preset, causality, runtime compatibility enforcement
 - confirmed_gaps:
   - Batch 1 verification confirmed that `TrajectoryBuilder` produced `derived_surface` channels while the active feature extractor ignored them; Batch 1 remediation wires those channels into the shared training/runtime feature vector with tests.
-  - The canonical production preset (`1m×8`, `5m×8`, `15m×8`, `60m×12`) still does not exist as an explicit training config; current shipped configs remain fixture/smoke oriented.
   - The temporary legacy compat window is still open for deterministic legacy `linear-policy-v1` artifacts; this is explicit and logged, but it remains a retirement item rather than a final-state design.
   - Derived-surface support exists as augmentation only; it does not elevate derived channels to the core/default observation path.
 - completion_notes:
   - Batch 2 added a structured strict runtime contract to new policy artifacts, including scale specs, raw surface shapes, derived contract/version metadata, derived channel templates/signature, and expected feature dimension.
   - Runtime now rejects scale-spec mismatches, raw-shape mismatches, derived contract drift, derived channel identity/order drift, feature-dimension mismatches, and deprecated `momentum-baseline-v1` artifacts before inference.
   - Legacy artifacts are no longer silently accepted; only deterministic legacy `linear-policy-v1` artifacts can enter through a temporary explicit compat window, and acceptance is logged as deprecated.
+  - The canonical production observation preset now exists as `configs/training/production.yaml`, while `configs/training/default.yaml` remains an explicitly non-production continuity/smoke profile.
+  - Development-region trajectories are now persisted explicitly so walk-forward fold consumption can use boundary-crossing development steps without weakening canonical split semantics.
 - remaining_follow_ups:
-  - add the canonical production observation preset/config (`1m×8`, `5m×8`, `15m×8`, `60m×12`)
-  - remove the temporary legacy compat window after legacy artifact stock is refreshed
+  - remove the temporary legacy compat window after the continuity audit reports zero active legacy dependencies
 - done_when:
   - code matches OBSERVATION_SCHEMA
   - schema-sensitive tests pass
@@ -173,9 +173,14 @@ Status values:
 
 ### QL-010
 - title: Decide and implement walk-forward fold consumption in the core training loop
-- status: todo
+- status: done
 - depends_on: QL-004, QL-008
 - scope: decide whether fold-aware development iteration is mandatory now; if yes, implement it explicitly rather than leaving folds as metadata-only
+- completion_notes:
+  - walk-forward fold consumption is now mandatory for candidate selection instead of remaining metadata-only
+  - fold selection uses persisted development-region trajectories so validation windows can cross the canonical train/validation boundary without dropping usable steps
+  - purge width is applied before fold training and normalization is fit on fold-train only, reducing overlap leakage risk explicitly
+  - selected candidate specs are refit on the canonical train split and still choose epochs on canonical validation only; final untouched test remains outside the loop
 - done_when:
   - the repo has an explicit decision on fold consumption
   - if required, trainer behavior uses the decided fold discipline
@@ -183,29 +188,38 @@ Status values:
 
 ### QL-011
 - title: Add the canonical production observation preset and clarify smoke-vs-production training profiles
-- status: todo
+- status: done
 - depends_on: QL-004
 - scope: add the explicit `1m×8`, `5m×8`, `15m×8`, `60m×12` production preset/config and stop relying on a smoke-oriented training profile to stand in for future readiness
 - notes:
   - `configs/training/default.yaml` remains continuity-oriented for now; any rename to `smoke.yaml` or `fixture-train.yaml` should happen only in an explicit CLI/test compatibility batch
+- completion_notes:
+  - `configs/training/production.yaml` now carries the canonical production observation preset as a first-class profile
+  - `README.md` and project state text now say explicitly that `configs/training/default.yaml` is continuity/smoke only and is not the production profile
 - done_when:
   - production observation preset is a first-class config
   - smoke/fixture profile and production profile are clearly separated
 
 ### QL-012
 - title: Track D-011 exit criteria and the PyTorch core-training migration milestone
-- status: todo
+- status: done
 - depends_on: D-011 guardrails
 - scope: make the PyTorch core-training migration and NumPy-path exit criteria visible, tracked, and auditable
+- completion_notes:
+  - registry continuity audit now reports active training backend counts and makes the NumPy continuity window machine-visible instead of doc-only
+  - project state and decisions now point at `quantlab-ml audit-continuity` for explicit D-011 exit tracking
 - done_when:
   - D-011 exit criteria are represented in state/backlog/task flow
   - NumPy continuity support no longer reads like an open-ended default
 
 ### QL-013
 - title: Retire or freeze legacy compat paths instead of expanding them
-- status: todo
+- status: done
 - depends_on: D-012 guardrails
 - scope: track actual artifact inventory dependency for legacy compat layers and retire/freeze any compat path that no longer preserves active continuity
+- completion_notes:
+  - registry continuity audit now reports active legacy compat dependence and deprecated momentum artifacts explicitly
+  - legacy compat retirement is now keyed to observed active inventory rather than open-ended cautionary text alone
 - done_when:
   - compat layers have explicit retirement/freeze tracking
   - no compat path survives as an implied growth area without an active dependency
@@ -219,6 +233,48 @@ Status values:
   - task intake consistently records path classification
   - allowed/temporary/optional paths are less likely to be mistaken for defaults
   - any future config rename is handled as an explicit compatibility change, not an incidental cleanup
+
+### QL-015
+- title: Clarify the local-vs-remote execution policy for training modes
+- status: done
+- depends_on: D-014
+- scope: make the repo say explicitly that meaningful real training is PyTorch-first and remote GPU-first when available, while local CPU/laptop runs remain smoke/debug/continuity only
+- completion_notes:
+  - constitution, decisions, runtime boundary, roadmap, project state, README, and AGENTS now separate real training from local continuity modes
+  - task intake now asks whether a task is real training, continuity baseline, or smoke/debug and whether it is accidentally optimizing around laptop constraints
+- done_when:
+  - local smoke/debug, continuity baseline, and real training modes are clearly distinguished
+  - provider-agnostic remote GPU intent is explicit for meaningful training
+
+### QL-016
+- title: Migrate the core training path from temporary NumPy continuity to PyTorch
+- status: todo
+- depends_on: D-011, D-014, QL-012
+- scope: replace the temporary NumPy continuity backend in the core training path while preserving fold consumption, train-only normalization, validation-only selection, and search-budget accounting
+- done_when:
+  - PyTorch is the only active core-training backend
+  - continuity audit no longer shows NumPy as an active core-training dependency
+  - parity gaps are recorded explicitly if any remain
+
+### QL-017
+- title: Define the provider-agnostic remote GPU workflow for real training
+- status: todo
+- depends_on: D-014, QL-016 planning
+- scope: define how meaningful training/search runs target remote rented GPU compute, including execution handoff, expected artifacts/logs, and the local-vs-remote boundary, without adding orchestration, secrets, or provider lock-in
+- done_when:
+  - repo has an official remote-GPU real-training workflow
+  - Vast.ai or equivalent providers appear only as examples, not hard dependencies
+  - local continuity runs are clearly excluded from the real-training default
+
+### QL-018
+- title: Publish the official real-training snapshot and runbook
+- status: todo
+- depends_on: QL-017
+- scope: define the production-scale observation surface, search budget posture, expected compute class, and reporting bundle for official real-training runs
+- done_when:
+  - real-training runbook exists
+  - production-profile runs no longer read like laptop-sized local work
+  - artifact/report expectations are explicit before promotion-facing training begins
 
 ## Parked items
 

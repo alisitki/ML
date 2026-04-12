@@ -283,6 +283,69 @@ def test_cli_train_search_writes_manifest_and_registers_all_candidates(
     assert selected_records[0].policy_id == manifest["selected_policy_id"]
 
 
+def test_cli_audit_continuity_reports_numpy_backend_counts(
+    repo_root: Path,
+    fixture_path: Path,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    trajectories = tmp_path / "outputs" / "trajectories.json"
+    policy = tmp_path / "outputs" / "policy.json"
+    registry_root = tmp_path / "registry"
+    audit_path = tmp_path / "outputs" / "continuity-audit.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "build-trajectories",
+            "--input",
+            str(fixture_path),
+            "--output",
+            str(trajectories),
+            "--data-config",
+            str(repo_root / "configs" / "data" / "fixture.yaml"),
+            "--training-config",
+            str(repo_root / "configs" / "training" / "default.yaml"),
+            "--reward-config",
+            str(repo_root / "configs" / "reward" / "default.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    result = runner.invoke(
+        app,
+        [
+            "train",
+            "--trajectories",
+            str(trajectories),
+            "--output",
+            str(policy),
+            "--training-config",
+            str(repo_root / "configs" / "training" / "default.yaml"),
+            "--registry-root",
+            str(registry_root),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    result = runner.invoke(
+        app,
+        [
+            "audit-continuity",
+            "--registry-root",
+            str(registry_root),
+            "--output",
+            str(audit_path),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert audit["record_count"] == 1
+    assert audit["active_numpy_training_backend_count"] == 1
+    assert audit["ready_to_close_numpy_continuity_window"] is False
+
+
 def _tag_map(tags: list[str]) -> dict[str, str]:
     tag_map: dict[str, str] = {}
     for tag in tags:

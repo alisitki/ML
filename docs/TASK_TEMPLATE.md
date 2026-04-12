@@ -2,15 +2,18 @@
 
 Use this template when starting a meaningful Codex task.
 
-## 1. Path classification
+## 1. Path classification and execution target
 
 State explicitly:
 - task class: `core direction`, `optional experiment`, `temporary compatibility maintenance`, or `forbidden-as-default area`
+- intended execution mode: `real training`, `continuity baseline`, or `smoke/debug`
 - does this task accidentally grow a temporary path
 - does this task make an optional path behave like core
 - which temporary compromise narrows, and which one widens
 - does this task turn an allowed area into a default
-- explicit non-goal
+- does this task accidentally assume local CPU / laptop is the long-term execution target
+- if the task touches training scale, search budget, data volume, or production observation profiles, should the intended execution target be remote GPU
+- explicit non-goal: do not optimize the core path around laptop constraints
 
 ## 2. Task restatement
 
