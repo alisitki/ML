@@ -85,21 +85,21 @@ def test_registry_records_search_linkage_for_multi_candidate_run(
 def test_registry_continuity_audit_counts_numpy_and_legacy_compat_dependencies(
     tmp_path: Path,
     trajectory_bundle: TrajectoryBundle,
-    policy_artifact: PolicyArtifact,
     training_bundle: tuple,
 ) -> None:
     _, _, training_config = training_bundle
+    numpy_artifact = LinearPolicyTrainer(training_config, backend_name="numpy").train(trajectory_bundle)
     store = LocalRegistryStore(tmp_path / "registry")
     reward_hash = hash_payload(trajectory_bundle.reward_spec)
     training_hash = hash_payload(training_config)
     store.register_candidate(
-        policy_artifact,
+        numpy_artifact,
         trajectory_bundle,
         reward_config_hash=reward_hash,
         training_config_hash=training_hash,
     )
 
-    legacy_artifact = _legacy_linear_artifact(policy_artifact)
+    legacy_artifact = _legacy_linear_artifact(numpy_artifact)
     legacy_artifact = legacy_artifact.model_copy(
         update={
             "policy_id": f"{legacy_artifact.policy_id}-legacy",

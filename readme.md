@@ -20,7 +20,7 @@ rule-strategy host. Its intended system boundary is:
 - `configs/data/default.yaml` is the target-universe contract.
 - `configs/data/fixture.yaml` is smoke-only and is the profile tests and CLI smoke runs
   should use explicitly.
-- `configs/training/default.yaml` is a smoke/fixture-oriented baseline training profile kept as the current continuity default for CLI/tests. It is not the production preset and it does not define long-term strategic direction.
+- `configs/training/default.yaml` is a smoke/fixture-oriented PyTorch training profile kept as the current continuity default for CLI/tests. It is not the production preset and it does not define long-term strategic direction.
 - `configs/training/production.yaml` is the explicit canonical production observation profile: `1m×8`, `5m×8`, `15m×8`, `60m×12`.
 - `configs/training/search-small.yaml` is an optional small candidate-search profile for smoke-scale verification. It is not the default core architecture.
 - `stream_universe` is the union of stream families; `available_streams_by_exchange`
@@ -73,21 +73,21 @@ This scaffold targets Python 3.12.
 python3.12 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,ml]"
 pytest
 ```
 
-To install the heavier ML stack later:
+Core training and the current verification suite both require the ML extra. A lighter install is only useful for docs or non-training inspection work:
 
 ```bash
-python -m pip install -e ".[dev,ml]"
+python -m pip install -e ".[dev]"
 ```
 
 ## CLI Flow
 
 Smoke and local verification should use the fixture profile explicitly:
 
-The commands below are local smoke/continuity examples, not the default execution target for meaningful real training.
+The commands below are local smoke/continuity examples, not the default execution target for meaningful real training. `train` now uses the PyTorch core backend and requires the `.[dev,ml]` environment.
 
 ```bash
 quantlab-ml build-trajectories \
@@ -156,7 +156,7 @@ To inspect temporary continuity windows in a registry:
 quantlab-ml audit-continuity --registry-root outputs/registry
 ```
 
-This command reports active training backend counts plus active legacy-compat dependency counts.
+This command reports active training backend counts plus active legacy-compat dependency counts. New core-path artifacts should report `training_backend=pytorch`; any remaining `numpy` count is continuity debt.
 
 ## S3 Compact Usage
 

@@ -77,20 +77,21 @@ Status values:
 ## D-011 — Temporary NumPy trainer does not supersede the PyTorch target
 - status: accepted
 - date: 2026-04-12
-- decision: The active Phase 5 trainer remains a NumPy-based linear policy trainer for the current remediation window, but this does not replace D-010; PyTorch remains the intended default training stack.
-- why: The repo already depends on the NumPy trainer for train-only normalization, validation-only selection, and search-budgeted candidate generation. Recording this as an explicit temporary drift prevents governance ambiguity while keeping the PyTorch migration out of the current narrow remediation batch.
+- decision: The active core Phase 5 trainer now uses a PyTorch-backed linear policy trainer while preserving the existing `linear-policy-v1` runtime adapter and `LinearPolicyParameters` payload surface. The NumPy trainer remains only as a narrow reference/continuity backend until external continuity audit confirms that freeze/deprecation is safe.
+- why: D-010 requires PyTorch as the training stack, but the repo also needed minimal-breakage migration. Keeping fold-aware candidate selection, train-only normalization, canonical refit, validation-only epoch selection, artifact export, and runtime loading unchanged lets the core training path converge onto PyTorch without widening the runtime or executor boundary. Retaining a narrow NumPy reference backend preserves parity evidence and a controlled continuity escape hatch while active registries are audited.
 - guardrails:
-  - NumPy trainer is temporary baseline continuity only.
-  - No new strategic investment should be made around the NumPy path.
-  - PyTorch remains the core training direction.
+  - PyTorch is the only active core-training backend.
+  - NumPy is reference-only continuity and may not attract new feature work.
+  - Runtime payload/export semantics remain `linear-policy-v1` plus `LinearPolicyParameters`.
 - exit_criteria:
-  - PyTorch trainer becomes the only active training backend for the core training path.
-  - candidate search parity is preserved.
+  - candidate search parity is preserved well enough to avoid material regression.
   - train-only normalization parity is preserved.
+  - external `quantlab-ml audit-continuity --registry-root ...` confirms zero active NumPy core-training dependency across active registries before NumPy freeze/deprecation is treated as closed.
   - migration completion is tracked explicitly in `docs/PROJECT_STATE.md` and `docs/BACKLOG.md`.
 - non_goals:
   - do not expand NumPy-specific architecture.
   - do not treat NumPy support as a long-term default.
+  - do not widen the runtime adapter or payload family just to complete the training migration.
 
 ## D-012 — Strict runtime contract is default; legacy compat is explicit and temporary
 - status: accepted
@@ -116,6 +117,7 @@ Status values:
 - operational_notes:
   - `training_summary` is the visibility surface for fold-consumption metadata.
   - `quantlab-ml audit-continuity` is the operational tracking surface for the temporary NumPy and legacy-compat windows; it does not relax D-010 or D-012.
+  - PyTorch switch-over is decided on repo-local parity and contract preservation; external continuity audit blocks final NumPy closeout, not the switch-over itself.
 
 ## D-014 — Real training defaults to remote GPU execution; local runs are continuity-only
 - status: accepted

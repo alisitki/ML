@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
-from typing import Literal
+from typing import Any, Literal
 import warnings
 
 import numpy as np
@@ -35,6 +35,8 @@ from quantlab_ml.scoring import PolicyScorer
 from quantlab_ml.training.config import TrainingConfig
 
 logger = logging.getLogger(__name__)
+
+TrainingBackendName = Literal["numpy", "pytorch"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,8 +98,9 @@ class _CandidateSelectionRun:
 
 
 class LinearPolicyTrainer:
-    def __init__(self, config: TrainingConfig):
+    def __init__(self, config: TrainingConfig, *, backend_name: TrainingBackendName = "pytorch"):
         self.config = config
+        self._backend = _resolve_training_backend(backend_name)
 
     def train(self, bundle: TrajectoryBundle, parent_policy_id: str | None = None) -> PolicyArtifact:
         return self.train_search(bundle, parent_policy_id=parent_policy_id).selected_artifact
@@ -113,11 +116,13 @@ class LinearPolicyTrainer:
         )
         search_budget_summary = _search_budget_summary(candidate_specs)
         logger.info(
-            "training_search_started training_run_id=%s candidate_count=%d split_version=%s reward_version=%s",
+            "training_search_started training_run_id=%s candidate_count=%d split_version=%s reward_version=%s "
+            "training_backend=%s",
             training_run_id,
             len(candidate_specs),
             bundle.split_artifact.split_version,
             bundle.reward_spec.reward_version,
+            self._backend.backend_name,
         )
         selection_runs = [
             self._select_candidate_via_walkforward(
@@ -236,6 +241,7 @@ class LinearPolicyTrainer:
             "slice_id": bundle.dataset_spec.slice_id,
             "split_version": bundle.split_artifact.split_version,
             "reward_version": bundle.reward_spec.reward_version,
+            "training_backend": self._backend.backend_name,
             "trainer_config": self.config.model_dump(mode="json", exclude_none=False),
             "candidate_specs": [candidate_spec.as_dict() for candidate_spec in candidate_specs],
             "parent_policy_id": parent_policy_id,
@@ -428,11 +434,12 @@ class LinearPolicyTrainer:
                 "candidate_search": None,
             }
         )
-        rng = np.random.default_rng(config.seed)
-        action_weight = rng.normal(0.0, 0.01, size=(len(prepared.action_keys), prepared.feature_dim))
-        action_bias = np.zeros(len(prepared.action_keys), dtype=np.float64)
-        venue_weight = rng.normal(0.0, 0.01, size=(len(prepared.venue_choices), prepared.feature_dim))
-        venue_bias = np.zeros(len(prepared.venue_choices), dtype=np.float64)
+        state = self._backend.initialize_state(
+            seed=config.seed,
+            action_count=len(prepared.action_keys),
+            venue_count=len(prepared.venue_choices),
+            feature_dim=prepared.feature_dim,
+        )
 
         loss_history: list[float] = []
         validation_history: list[float] = []
@@ -442,56 +449,17 @@ class LinearPolicyTrainer:
         best_validation_score = None
 
         for epoch in range(1, config.epochs + 1):
-            action_logits = prepared.normalized_train @ action_weight.T + action_bias
-            action_probabilities = _softmax_matrix(action_logits)
-            action_loss = _cross_entropy_loss(action_probabilities, prepared.action_labels)
-            action_gradient = action_probabilities
-            action_gradient[np.arange(len(prepared.action_labels)), prepared.action_labels] -= 1.0
-            action_gradient /= len(prepared.action_labels)
+            total_loss = self._backend.step(
+                state=state,
+                prepared=prepared,
+                config=config,
+            )
+            loss_history.append(total_loss)
 
-            action_weight_gradient = action_gradient.T @ prepared.normalized_train
-            action_bias_gradient = action_gradient.sum(axis=0)
-
-            venue_loss = 0.0
-            venue_weight_gradient = np.zeros_like(venue_weight)
-            venue_bias_gradient = np.zeros_like(venue_bias)
-            if prepared.venue_mask.any():
-                masked_inputs = prepared.normalized_train[prepared.venue_mask]
-                masked_labels = prepared.venue_labels[prepared.venue_mask]
-                venue_logits = masked_inputs @ venue_weight.T + venue_bias
-                venue_probabilities = _softmax_matrix(venue_logits)
-                venue_loss = _cross_entropy_loss(venue_probabilities, masked_labels)
-                venue_gradient = venue_probabilities
-                venue_gradient[np.arange(len(masked_labels)), masked_labels] -= 1.0
-                venue_gradient /= len(masked_labels)
-                venue_weight_gradient = venue_gradient.T @ masked_inputs
-                venue_bias_gradient = venue_gradient.sum(axis=0)
-
-            total_loss = action_loss + venue_loss
-            if config.l2_weight > 0.0:
-                total_loss += config.l2_weight * (
-                    float(np.sum(action_weight**2)) + float(np.sum(venue_weight**2))
-                )
-                action_weight_gradient += config.l2_weight * action_weight
-                venue_weight_gradient += config.l2_weight * venue_weight
-
-            action_weight -= config.learning_rate * action_weight_gradient
-            action_bias -= config.learning_rate * action_bias_gradient
-            venue_weight -= config.learning_rate * venue_weight_gradient
-            venue_bias -= config.learning_rate * venue_bias_gradient
-            loss_history.append(float(total_loss))
-
-            parameters = LinearPolicyParameters(
-                action_keys=prepared.action_keys,
-                venue_choices=prepared.venue_choices,
-                feature_mean=prepared.feature_mean.tolist(),
-                feature_std=prepared.feature_std.tolist(),
-                action_weight=action_weight.tolist(),
-                action_bias=action_bias.tolist(),
-                venue_weight=venue_weight.tolist(),
-                venue_bias=venue_bias.tolist(),
-                preferred_size_band=config.preferred_size_band,
-                preferred_leverage_band=config.preferred_leverage_band,
+            parameters = self._backend.parameters(
+                state=state,
+                prepared=prepared,
+                config=config,
             )
             validation_artifact = self._build_artifact(
                 bundle=bundle,
@@ -523,7 +491,8 @@ class LinearPolicyTrainer:
         assert best_validation_score is not None
         logger.info(
             "training_candidate_completed candidate_index=%d seed=%d learning_rate=%.6f l2_weight=%.6f "
-            "best_epoch=%d best_validation_total_net_return=%.6f best_validation_composite_rank=%.6f",
+            "best_epoch=%d best_validation_total_net_return=%.6f best_validation_composite_rank=%.6f "
+            "training_backend=%s",
             candidate_index,
             candidate_spec.seed,
             candidate_spec.learning_rate,
@@ -531,6 +500,7 @@ class LinearPolicyTrainer:
             best_epoch,
             best_validation_total_net_return,
             best_validation_score.composite_rank,
+            self._backend.backend_name,
         )
 
         return _CandidateTrainingRun(
@@ -559,7 +529,7 @@ class LinearPolicyTrainer:
         return {
             "trainer_name": candidate_run.config.trainer_name,
             "surface_version": "v2",
-            "training_backend": "numpy",
+            "training_backend": self._backend.backend_name,
             "training_run_id": training_run_id,
             "train_step_count": len(prepared.train_examples),
             "validation_step_count": len(prepared.validation_examples),
@@ -759,7 +729,7 @@ class MomentumBaselineTrainer(LinearPolicyTrainer):
             DeprecationWarning,
             stacklevel=2,
         )
-        super().__init__(config)
+        super().__init__(config, backend_name="numpy")
 
 
 @dataclass(slots=True)
@@ -788,10 +758,30 @@ class _PreparedTrainingData:
     action_labels: np.ndarray
     venue_mask: np.ndarray
     venue_labels: np.ndarray
+    torch_normalized_train: Any | None = None
+    torch_action_labels: Any | None = None
+    torch_venue_mask: Any | None = None
+    torch_venue_labels: Any | None = None
 
     @property
     def feature_dim(self) -> int:
         return int(self.normalized_train.shape[1])
+
+    def torch_training_inputs(self, torch_module: Any) -> tuple[Any, Any, Any, Any]:
+        if self.torch_normalized_train is None:
+            self.torch_normalized_train = torch_module.tensor(self.normalized_train, dtype=torch_module.float64)
+        if self.torch_action_labels is None:
+            self.torch_action_labels = torch_module.tensor(self.action_labels, dtype=torch_module.int64)
+        if self.torch_venue_mask is None:
+            self.torch_venue_mask = torch_module.tensor(self.venue_mask, dtype=torch_module.bool)
+        if self.torch_venue_labels is None:
+            self.torch_venue_labels = torch_module.tensor(self.venue_labels, dtype=torch_module.int64)
+        return (
+            self.torch_normalized_train,
+            self.torch_action_labels,
+            self.torch_venue_mask,
+            self.torch_venue_labels,
+        )
 
 
 @dataclass(slots=True)
@@ -805,6 +795,242 @@ class _CandidateTrainingRun:
     best_validation_score: PolicyScore
     loss_history: list[float]
     validation_history: list[float]
+
+
+class _LinearTrainingBackend:
+    backend_name: TrainingBackendName
+
+    def initialize_state(
+        self,
+        *,
+        seed: int,
+        action_count: int,
+        venue_count: int,
+        feature_dim: int,
+    ) -> object:
+        raise NotImplementedError
+
+    def step(
+        self,
+        *,
+        state: object,
+        prepared: _PreparedTrainingData,
+        config: TrainingConfig,
+    ) -> float:
+        raise NotImplementedError
+
+    def parameters(
+        self,
+        *,
+        state: object,
+        prepared: _PreparedTrainingData,
+        config: TrainingConfig,
+    ) -> LinearPolicyParameters:
+        raise NotImplementedError
+
+
+@dataclass(slots=True)
+class _NumpyTrainingState:
+    action_weight: np.ndarray
+    action_bias: np.ndarray
+    venue_weight: np.ndarray
+    venue_bias: np.ndarray
+
+
+class _NumpyLinearTrainingBackend(_LinearTrainingBackend):
+    backend_name: TrainingBackendName = "numpy"
+
+    def initialize_state(
+        self,
+        *,
+        seed: int,
+        action_count: int,
+        venue_count: int,
+        feature_dim: int,
+    ) -> _NumpyTrainingState:
+        action_weight, action_bias, venue_weight, venue_bias = _initial_parameter_arrays(
+            seed=seed,
+            action_count=action_count,
+            venue_count=venue_count,
+            feature_dim=feature_dim,
+        )
+        return _NumpyTrainingState(
+            action_weight=action_weight,
+            action_bias=action_bias,
+            venue_weight=venue_weight,
+            venue_bias=venue_bias,
+        )
+
+    def step(
+        self,
+        *,
+        state: object,
+        prepared: _PreparedTrainingData,
+        config: TrainingConfig,
+    ) -> float:
+        training_state = _expect_numpy_state(state)
+        action_logits = prepared.normalized_train @ training_state.action_weight.T + training_state.action_bias
+        action_probabilities = _softmax_matrix(action_logits)
+        action_loss = _cross_entropy_loss(action_probabilities, prepared.action_labels)
+        action_gradient = action_probabilities.copy()
+        action_gradient[np.arange(len(prepared.action_labels)), prepared.action_labels] -= 1.0
+        action_gradient /= len(prepared.action_labels)
+
+        action_weight_gradient = action_gradient.T @ prepared.normalized_train
+        action_bias_gradient = action_gradient.sum(axis=0)
+
+        venue_loss = 0.0
+        venue_weight_gradient = np.zeros_like(training_state.venue_weight)
+        venue_bias_gradient = np.zeros_like(training_state.venue_bias)
+        if prepared.venue_mask.any():
+            masked_inputs = prepared.normalized_train[prepared.venue_mask]
+            masked_labels = prepared.venue_labels[prepared.venue_mask]
+            venue_logits = masked_inputs @ training_state.venue_weight.T + training_state.venue_bias
+            venue_probabilities = _softmax_matrix(venue_logits)
+            venue_loss = _cross_entropy_loss(venue_probabilities, masked_labels)
+            venue_gradient = venue_probabilities.copy()
+            venue_gradient[np.arange(len(masked_labels)), masked_labels] -= 1.0
+            venue_gradient /= len(masked_labels)
+            venue_weight_gradient = venue_gradient.T @ masked_inputs
+            venue_bias_gradient = venue_gradient.sum(axis=0)
+
+        total_loss = action_loss + venue_loss
+        if config.l2_weight > 0.0:
+            total_loss += config.l2_weight * (
+                float(np.sum(training_state.action_weight**2)) + float(np.sum(training_state.venue_weight**2))
+            )
+            action_weight_gradient += config.l2_weight * training_state.action_weight
+            venue_weight_gradient += config.l2_weight * training_state.venue_weight
+
+        training_state.action_weight -= config.learning_rate * action_weight_gradient
+        training_state.action_bias -= config.learning_rate * action_bias_gradient
+        training_state.venue_weight -= config.learning_rate * venue_weight_gradient
+        training_state.venue_bias -= config.learning_rate * venue_bias_gradient
+        return float(total_loss)
+
+    def parameters(
+        self,
+        *,
+        state: object,
+        prepared: _PreparedTrainingData,
+        config: TrainingConfig,
+    ) -> LinearPolicyParameters:
+        training_state = _expect_numpy_state(state)
+        return _build_linear_policy_parameters(
+            prepared=prepared,
+            config=config,
+            action_weight=training_state.action_weight.tolist(),
+            action_bias=training_state.action_bias.tolist(),
+            venue_weight=training_state.venue_weight.tolist(),
+            venue_bias=training_state.venue_bias.tolist(),
+        )
+
+
+@dataclass(slots=True)
+class _TorchTrainingState:
+    action_weight: Any
+    action_bias: Any
+    venue_weight: Any
+    venue_bias: Any
+
+
+class _TorchLinearTrainingBackend(_LinearTrainingBackend):
+    backend_name: TrainingBackendName = "pytorch"
+
+    def __init__(self) -> None:
+        self._torch = _require_torch()
+
+    def initialize_state(
+        self,
+        *,
+        seed: int,
+        action_count: int,
+        venue_count: int,
+        feature_dim: int,
+    ) -> _TorchTrainingState:
+        action_weight, action_bias, venue_weight, venue_bias = _initial_parameter_arrays(
+            seed=seed,
+            action_count=action_count,
+            venue_count=venue_count,
+            feature_dim=feature_dim,
+        )
+        torch_module = self._torch
+        torch_module.manual_seed(seed)
+        if hasattr(torch_module, "use_deterministic_algorithms"):
+            torch_module.use_deterministic_algorithms(True)
+        return _TorchTrainingState(
+            action_weight=torch_module.tensor(action_weight, dtype=torch_module.float64),
+            action_bias=torch_module.tensor(action_bias, dtype=torch_module.float64),
+            venue_weight=torch_module.tensor(venue_weight, dtype=torch_module.float64),
+            venue_bias=torch_module.tensor(venue_bias, dtype=torch_module.float64),
+        )
+
+    def step(
+        self,
+        *,
+        state: object,
+        prepared: _PreparedTrainingData,
+        config: TrainingConfig,
+    ) -> float:
+        training_state = _expect_torch_state(state)
+        torch_module = self._torch
+        normalized_train, action_labels, venue_mask, venue_labels = prepared.torch_training_inputs(torch_module)
+
+        action_logits = normalized_train @ training_state.action_weight.transpose(0, 1) + training_state.action_bias
+        action_probabilities = torch_module.softmax(action_logits, dim=1)
+        action_loss = _torch_cross_entropy_loss(torch_module, action_probabilities, action_labels)
+        action_gradient = action_probabilities.clone()
+        action_gradient[torch_module.arange(action_labels.shape[0]), action_labels] -= 1.0
+        action_gradient /= action_labels.shape[0]
+
+        action_weight_gradient = action_gradient.transpose(0, 1) @ normalized_train
+        action_bias_gradient = action_gradient.sum(dim=0)
+
+        venue_loss = torch_module.tensor(0.0, dtype=torch_module.float64)
+        venue_weight_gradient = torch_module.zeros_like(training_state.venue_weight)
+        venue_bias_gradient = torch_module.zeros_like(training_state.venue_bias)
+        if bool(venue_mask.any()):
+            masked_inputs = normalized_train[venue_mask]
+            masked_labels = venue_labels[venue_mask]
+            venue_logits = masked_inputs @ training_state.venue_weight.transpose(0, 1) + training_state.venue_bias
+            venue_probabilities = torch_module.softmax(venue_logits, dim=1)
+            venue_loss = _torch_cross_entropy_loss(torch_module, venue_probabilities, masked_labels)
+            venue_gradient = venue_probabilities.clone()
+            venue_gradient[torch_module.arange(masked_labels.shape[0]), masked_labels] -= 1.0
+            venue_gradient /= masked_labels.shape[0]
+            venue_weight_gradient = venue_gradient.transpose(0, 1) @ masked_inputs
+            venue_bias_gradient = venue_gradient.sum(dim=0)
+
+        total_loss = action_loss + venue_loss
+        if config.l2_weight > 0.0:
+            total_loss = total_loss + config.l2_weight * (
+                torch_module.sum(training_state.action_weight**2) + torch_module.sum(training_state.venue_weight**2)
+            )
+            action_weight_gradient = action_weight_gradient + config.l2_weight * training_state.action_weight
+            venue_weight_gradient = venue_weight_gradient + config.l2_weight * training_state.venue_weight
+
+        training_state.action_weight = training_state.action_weight - (config.learning_rate * action_weight_gradient)
+        training_state.action_bias = training_state.action_bias - (config.learning_rate * action_bias_gradient)
+        training_state.venue_weight = training_state.venue_weight - (config.learning_rate * venue_weight_gradient)
+        training_state.venue_bias = training_state.venue_bias - (config.learning_rate * venue_bias_gradient)
+        return float(total_loss.item())
+
+    def parameters(
+        self,
+        *,
+        state: object,
+        prepared: _PreparedTrainingData,
+        config: TrainingConfig,
+    ) -> LinearPolicyParameters:
+        training_state = _expect_torch_state(state)
+        return _build_linear_policy_parameters(
+            prepared=prepared,
+            config=config,
+            action_weight=training_state.action_weight.detach().cpu().tolist(),
+            action_bias=training_state.action_bias.detach().cpu().tolist(),
+            venue_weight=training_state.venue_weight.detach().cpu().tolist(),
+            venue_bias=training_state.venue_bias.detach().cpu().tolist(),
+        )
 
 
 def _search_budget_summary(candidate_specs: list[TrainingCandidateSpec]) -> SearchBudgetSummary:
@@ -859,8 +1085,83 @@ def _cross_entropy_loss(probabilities: np.ndarray, labels: np.ndarray) -> float:
     return float(-np.mean(np.log(clipped)))
 
 
+def _torch_cross_entropy_loss(torch_module: Any, probabilities: Any, labels: Any) -> Any:
+    chosen = probabilities[torch_module.arange(labels.shape[0]), labels]
+    clipped = torch_module.clamp(chosen, min=1e-12, max=1.0)
+    return -torch_module.mean(torch_module.log(clipped))
+
+
 def _normalize(matrix: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
     return (matrix - mean) / std
+
+
+def _initial_parameter_arrays(
+    *,
+    seed: int,
+    action_count: int,
+    venue_count: int,
+    feature_dim: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    action_weight = rng.normal(0.0, 0.01, size=(action_count, feature_dim)).astype(np.float64)
+    action_bias = np.zeros(action_count, dtype=np.float64)
+    venue_weight = rng.normal(0.0, 0.01, size=(venue_count, feature_dim)).astype(np.float64)
+    venue_bias = np.zeros(venue_count, dtype=np.float64)
+    return action_weight, action_bias, venue_weight, venue_bias
+
+
+def _build_linear_policy_parameters(
+    *,
+    prepared: _PreparedTrainingData,
+    config: TrainingConfig,
+    action_weight: list[list[float]],
+    action_bias: list[float],
+    venue_weight: list[list[float]],
+    venue_bias: list[float],
+) -> LinearPolicyParameters:
+    return LinearPolicyParameters(
+        action_keys=prepared.action_keys,
+        venue_choices=prepared.venue_choices,
+        feature_mean=prepared.feature_mean.tolist(),
+        feature_std=prepared.feature_std.tolist(),
+        action_weight=action_weight,
+        action_bias=action_bias,
+        venue_weight=venue_weight,
+        venue_bias=venue_bias,
+        preferred_size_band=config.preferred_size_band,
+        preferred_leverage_band=config.preferred_leverage_band,
+    )
+
+
+def _resolve_training_backend(backend_name: TrainingBackendName) -> _LinearTrainingBackend:
+    if backend_name == "numpy":
+        return _NumpyLinearTrainingBackend()
+    if backend_name == "pytorch":
+        return _TorchLinearTrainingBackend()
+    raise ValueError(f"unsupported training backend: {backend_name}")
+
+
+def _expect_numpy_state(state: object) -> _NumpyTrainingState:
+    if not isinstance(state, _NumpyTrainingState):
+        raise TypeError("expected NumPy training state")
+    return state
+
+
+def _expect_torch_state(state: object) -> _TorchTrainingState:
+    if not isinstance(state, _TorchTrainingState):
+        raise TypeError("expected PyTorch training state")
+    return state
+
+
+def _require_torch() -> Any:
+    try:
+        import torch
+    except ModuleNotFoundError as exc:  # pragma: no cover - exercised only in missing-ml environments.
+        raise RuntimeError(
+            "PyTorch backend requires the optional ML stack; install quantlab-ml with '.[dev,ml]' "
+            "or add 'torch>=2.4,<3' to the active environment."
+        ) from exc
+    return torch
 
 
 def _band_by_key(bands: list[NumericBand], key: str) -> NumericBand:

@@ -283,7 +283,7 @@ def test_cli_train_search_writes_manifest_and_registers_all_candidates(
     assert selected_records[0].policy_id == manifest["selected_policy_id"]
 
 
-def test_cli_audit_continuity_reports_numpy_backend_counts(
+def test_cli_audit_continuity_reports_core_backend_status(
     repo_root: Path,
     fixture_path: Path,
     tmp_path: Path,
@@ -342,8 +342,9 @@ def test_cli_audit_continuity_reports_numpy_backend_counts(
 
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
     assert audit["record_count"] == 1
-    assert audit["active_numpy_training_backend_count"] == 1
-    assert audit["ready_to_close_numpy_continuity_window"] is False
+    assert audit["active_training_backend_counts"] == {"pytorch": 1}
+    assert audit["active_numpy_training_backend_count"] == 0
+    assert audit["ready_to_close_numpy_continuity_window"] is True
 
 
 def _tag_map(tags: list[str]) -> dict[str, str]:

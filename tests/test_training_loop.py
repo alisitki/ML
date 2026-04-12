@@ -26,6 +26,7 @@ def test_training_loop_records_search_budget_and_validation_selection(policy_art
     assert summary.get("selection_metric") == "total_net_return"
     assert summary.get("final_untouched_test_used") is False
     assert summary.get("learned_normalization_fit_split") == "train"
+    assert summary.get("training_backend") == "pytorch"
     assert summary.get("selection_protocol") == "walkforward_cv_then_canonical_refit"
     assert summary.get("selection_fold_count") == len(fold_scores)
     assert summary.get("selection_aggregate_metric") == "step_weighted_mean_validation_total_net_return"
@@ -74,6 +75,7 @@ def test_train_search_explicit_candidate_search_produces_ranked_candidates(
         assert summary.get("candidate_index") == candidate.candidate_index
         assert summary.get("candidate_spec") == candidate.candidate_spec.as_dict()
         assert summary.get("best_validation_composite_rank") == candidate.best_validation_composite_rank
+        assert summary.get("training_backend") == "pytorch"
         assert summary.get("selection_protocol") == "walkforward_cv_then_canonical_refit"
         assert summary.get("selection_fold_count", 0) >= 1
         assert summary.get("candidate_fold_scores")

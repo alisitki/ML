@@ -54,8 +54,8 @@ action_space:
     true_means_available: true
     false_reason_label: constraint_violation
 trainer:
-  # Active continuity path only. Do not read this file as proof that NumPy-backed
-  # linear-policy training is the long-term core direction.
+  # PyTorch-backed core trainer, but still a smoke/continuity-scale profile.
+  # This file is not the production preset and does not define the real-training target.
   trainer_name: linear-policy-trainer
   runtime_adapter: linear-policy-v1
   epochs: 8

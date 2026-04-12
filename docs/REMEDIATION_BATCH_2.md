@@ -65,7 +65,7 @@
 - The temporary legacy compat window is still open; that is safer than silent fallback, but it is not the final steady state.
 - The canonical production observation preset/config (`1m×8`, `5m×8`, `15m×8`, `60m×12`) is still not wired as an explicit training config.
 - Walk-forward folds are still metadata-only in the trainer path, so backtest-overfitting risk remains above the constitutional ideal until fold consumption is resolved.
-- The active trainer remains NumPy-based; D-011 still applies.
+- At the end of Batch 2, the active trainer remained NumPy-based; D-011 still applied.
 
 ## 8. Recommended next small batch
 

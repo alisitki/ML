@@ -17,10 +17,10 @@ This file must stay short and current.
 
 ## Current snapshot
 
-- current_phase: `Phase 5 core training loop now consumes walk-forward folds for candidate selection, the canonical production observation preset is explicit, and meaningful real training is now governed as PyTorch-first plus remote GPU-first when available, but PyTorch migration and legacy-compat retirement are still open`
-- current_focus: `Fold-aware candidate selection and the production observation profile remain first-class, while the PyTorch core-training migration is now explicitly paired with remote GPU execution for meaningful runs instead of local-laptop continuity assumptions`
+- current_phase: `Phase 5 core training path now consumes walk-forward folds, ships an explicit canonical production observation preset, and runs on a PyTorch-backed trainer under the existing runtime contract; external continuity audit and legacy-compat retirement are still open`
+- current_focus: `The PyTorch core trainer is now active without widening the runtime payload surface, and the remaining work is external continuity audit plus the provider-agnostic remote GPU workflow/runbook for meaningful real training`
 - current_blocker: `none`
-- declared_next_task: `Use the continuity audit to track NumPy and legacy-compat dependency counts while defining the PyTorch core-training migration, the provider-agnostic remote GPU real-training workflow, and the official real-training runbook`
+- declared_next_task: `Run the continuity audit against active registries to confirm NumPy/legacy dependency counts, then define the provider-agnostic remote GPU real-training workflow and official runbook without widening runtime or continuity scope`
 - not_now:
   - `live deployment plumbing`
   - `cloud provisioning automation`
@@ -30,17 +30,17 @@ This file must stay short and current.
 ## Active work item
 
 ```yaml
-id: real-training-execution-target-clarification
-title: Make meaningful real training read as PyTorch-first and remote GPU-first while keeping local runs continuity-only
-status: done
+id: pytorch-core-training-switch-over
+title: Activate the PyTorch core trainer while keeping NumPy reference-only until external continuity audit closes the window
+status: in_progress
 ```
 
 ## Current blocker details
 
-None. This batch is docs-only execution-target clarification, so code verification was not rerun. The latest full gate record remains:
+None. The latest full gate record for the PyTorch core-training migration batch is:
 - `.venv/bin/ruff check .` → All checks passed!
 - `.venv/bin/mypy src` → Success: no issues found in 43 source files
-- `.venv/bin/pytest` → 100 passed
+- `.venv/bin/pytest` → 103 passed
 - `git diff --check` → clean
 
 ## Recently completed
@@ -90,13 +90,17 @@ None. This batch is docs-only execution-target clarification, so code verificati
 - D-014 accepted: meaningful real training is now explicitly PyTorch-first, GPU-first when available, and remote-GPU-first rather than local-laptop-first
 - constitution, runtime boundary, roadmap, and agent guidance now say that local CPU/laptop runs are smoke/debug/tiny-baseline/short-validation tools only
 - `docs/TASK_TEMPLATE.md` and `readme.md` now separate local smoke/debug mode, continuity baseline mode, and real training mode so laptop convenience is harder to mistake for the strategic path
+- QL-016 implementation is now active: `LinearPolicyTrainer` defaults to the PyTorch core backend while preserving `linear-policy-v1` payload/export semantics and the strict runtime contract surface
+- NumPy is now a narrow reference/parity backend only; the deprecated `MomentumBaselineTrainer` shim routes explicitly through that continuity path instead of defining the core direction
+- PyTorch-vs-NumPy parity coverage now exercises default, `search-small`, and `production` training profiles plus runtime decision parity without relaxing fold, purge, or final untouched test discipline
 
 ## Immediate next actions
 
-1. Run `quantlab-ml audit-continuity --registry-root ...` against active registries so NumPy and legacy-compat dependency counts stay explicit instead of inferred.
-2. Plan the PyTorch core-training migration under D-011 and D-014 guardrails without widening the NumPy continuity path.
-3. Define the provider-agnostic remote GPU workflow and runbook for meaningful real training without widening into orchestration, secret, or scheduler work.
-4. Retire the temporary legacy compat window once the continuity audit reports zero active legacy dependencies.
+1. Run `quantlab-ml audit-continuity --registry-root ...` against active registries so NumPy freeze/deprecation and legacy-compat retirement are blocked by real inventory evidence rather than local inference.
+2. Define the provider-agnostic remote GPU workflow for meaningful training/search runs without widening into orchestration, secret, or scheduler work.
+3. Publish the official real-training runbook so production-profile training stops reading like laptop-scale continuity work.
+4. Freeze or retire the NumPy reference path once the external continuity audit confirms zero active dependency.
+5. Retire the temporary legacy compat window once the continuity audit reports zero active legacy dependencies.
 
 ## Update rule
 

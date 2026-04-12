@@ -248,18 +248,25 @@ Status values:
 
 ### QL-016
 - title: Migrate the core training path from temporary NumPy continuity to PyTorch
-- status: todo
+- status: in_progress
 - depends_on: D-011, D-014, QL-012
 - scope: replace the temporary NumPy continuity backend in the core training path while preserving fold consumption, train-only normalization, validation-only selection, and search-budget accounting
+- completion_notes:
+  - `LinearPolicyTrainer` now defaults to the PyTorch core backend while preserving the existing `linear-policy-v1` runtime adapter and `LinearPolicyParameters` payload surface
+  - NumPy remains only as a narrow reference/parity backend and the deprecated `MomentumBaselineTrainer` shim now routes explicitly through that continuity path
+  - parity coverage now exercises default, `search-small`, and `production` training profiles against the NumPy reference path without weakening split, purge, or final untouched test discipline
+- open_items:
+  - run `quantlab-ml audit-continuity --registry-root ...` against active registries before treating the NumPy freeze/deprecation path as closed
+  - freeze or retire the NumPy reference path once the external audit confirms zero active dependency
 - done_when:
   - PyTorch is the only active core-training backend
-  - continuity audit no longer shows NumPy as an active core-training dependency
+  - external continuity audit no longer shows NumPy as an active core-training dependency
   - parity gaps are recorded explicitly if any remain
 
 ### QL-017
 - title: Define the provider-agnostic remote GPU workflow for real training
 - status: todo
-- depends_on: D-014, QL-016 planning
+- depends_on: D-014, QL-016 core switch-over
 - scope: define how meaningful training/search runs target remote rented GPU compute, including execution handoff, expected artifacts/logs, and the local-vs-remote boundary, without adding orchestration, secrets, or provider lock-in
 - done_when:
   - repo has an official remote-GPU real-training workflow

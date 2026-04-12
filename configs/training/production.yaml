@@ -61,9 +61,8 @@ action_space:
     true_means_available: true
     false_reason_label: constraint_violation
 trainer:
-  # The active backend remains the continuity NumPy trainer for now.
-  # This profile only promotes the canonical production observation surface to a
-  # first-class config; it does not change the backend roadmap.
+  # PyTorch-backed core trainer on the canonical production observation surface.
+  # Local use of this file does not change the remote-GPU-first expectation for meaningful runs.
   trainer_name: linear-policy-trainer
   runtime_adapter: linear-policy-v1
   epochs: 8
