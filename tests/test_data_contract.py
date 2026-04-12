@@ -16,6 +16,9 @@ def test_default_and_fixture_profiles_are_distinct(repo_root: Path) -> None:
     s3_current_spec = DatasetSpec.model_validate(
         load_yaml(repo_root / "configs" / "data" / "s3-current.yaml")["dataset"]
     )
+    controlled_remote_spec = DatasetSpec.model_validate(
+        load_yaml(repo_root / "configs" / "data" / "controlled-remote-day.yaml")["dataset"]
+    )
 
     assert len(default_spec.symbols) == 10
     assert fixture_spec.symbols == ["BTCUSDT", "ETHUSDT"]
@@ -25,6 +28,13 @@ def test_default_and_fixture_profiles_are_distinct(repo_root: Path) -> None:
     assert s3_current_spec.train_range.start.year == 2026
     assert s3_current_spec.validation_range.start.year == 2026
     assert s3_current_spec.final_untouched_test_range.end.year == 2026
+    assert controlled_remote_spec.symbols == default_spec.symbols
+    assert controlled_remote_spec.train_range.start.year == 2026
+    assert controlled_remote_spec.train_range.start.day == 25
+    assert controlled_remote_spec.train_range.end < controlled_remote_spec.validation_range.start
+    assert controlled_remote_spec.validation_range.end < controlled_remote_spec.final_untouched_test_range.start
+    assert controlled_remote_spec.walkforward.train_window_steps == 720
+    assert controlled_remote_spec.walkforward.validation_window_steps == 120
 
 
 def test_adapter_rejects_binance_open_interest(tmp_path: Path, repo_root: Path) -> None:

@@ -255,6 +255,7 @@ Status values:
   - `LinearPolicyTrainer` now defaults to the PyTorch core backend while preserving the existing `linear-policy-v1` runtime adapter and `LinearPolicyParameters` payload surface
   - NumPy remains only as a narrow reference/parity backend and the deprecated `MomentumBaselineTrainer` shim now routes explicitly through that continuity path
   - parity coverage now exercises default, `search-small`, and `production` training profiles against the NumPy reference path without weakening split, purge, or final untouched test discipline
+  - PyTorch training metadata now records the effective training device, CUDA availability, and device name so a remote GPU run can prove that it actually executed on CUDA rather than merely importing PyTorch
 - open_items:
   - run `quantlab-ml audit-continuity --registry-root ...` against active registries before treating the NumPy freeze/deprecation path as closed
   - freeze or retire the NumPy reference path once the external audit confirms zero active dependency
@@ -265,9 +266,13 @@ Status values:
 
 ### QL-017
 - title: Define the provider-agnostic remote GPU workflow for real training
-- status: todo
+- status: done
 - depends_on: D-014, QL-016 core switch-over
 - scope: define how meaningful training/search runs target remote rented GPU compute, including execution handoff, expected artifacts/logs, and the local-vs-remote boundary, without adding orchestration, secrets, or provider lock-in
+- completion_notes:
+  - the trainer now exposes effective device resolution in logs and `training_summary`, making the first controlled GPU run auditable instead of inferring GPU use from environment alone
+  - `docs/REMOTE_GPU_RUNBOOK.md` now defines the official provider-agnostic remote GPU workflow using Vast only as the concrete example path
+  - the first controlled run is explicitly separated from the external `audit-continuity` operational follow-up, so the repo does not treat continuity inventory audit as a blocker for first GPU execution
 - done_when:
   - repo has an official remote-GPU real-training workflow
   - Vast.ai or equivalent providers appear only as examples, not hard dependencies
@@ -275,9 +280,13 @@ Status values:
 
 ### QL-018
 - title: Publish the official real-training snapshot and runbook
-- status: todo
+- status: done
 - depends_on: QL-017
 - scope: define the production-scale observation surface, search budget posture, expected compute class, and reporting bundle for official real-training runs
+- completion_notes:
+  - `configs/data/controlled-remote-day.yaml` now provides the official bounded full-day example snapshot for the first controlled remote run
+  - `docs/REMOTE_GPU_RUNBOOK.md` now defines bootstrap, preflight, command flow, output bundle, acceptance criteria, and failure triage for the first controlled run
+  - README now points directly to both the controlled snapshot config and the official remote GPU runbook so the repo no longer relies on implicit workflow knowledge
 - done_when:
   - real-training runbook exists
   - production-profile runs no longer read like laptop-sized local work

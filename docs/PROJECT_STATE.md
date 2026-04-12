@@ -17,10 +17,10 @@ This file must stay short and current.
 
 ## Current snapshot
 
-- current_phase: `Phase 5 core training path now consumes walk-forward folds, ships an explicit canonical production observation preset, and runs on a PyTorch-backed trainer under the existing runtime contract; external continuity audit and legacy-compat retirement are still open`
-- current_focus: `The PyTorch core trainer is now active without widening the runtime payload surface, and the remaining work is external continuity audit plus the provider-agnostic remote GPU workflow/runbook for meaningful real training`
+- current_phase: `Phase 5 core training path now consumes walk-forward folds, ships an explicit canonical production observation preset, records effective PyTorch device selection in training metadata, and now includes an official controlled remote GPU runbook; external continuity audit and legacy-compat retirement are still open`
+- current_focus: `The repo now has device-aware PyTorch training metadata plus an official controlled remote GPU workflow/runbook; the next task is executing the first controlled Vast run while external continuity audit remains a parallel operational follow-up`
 - current_blocker: `none`
-- declared_next_task: `Run the continuity audit against active registries to confirm NumPy/legacy dependency counts, then define the provider-agnostic remote GPU real-training workflow and official runbook without widening runtime or continuity scope`
+- declared_next_task: `Execute the first controlled remote GPU run using docs/REMOTE_GPU_RUNBOOK.md and configs/data/controlled-remote-day.yaml, review the output bundle for device/artifact evidence, and only then widen to a slightly larger second run`
 - not_now:
   - `live deployment plumbing`
   - `cloud provisioning automation`
@@ -30,18 +30,17 @@ This file must stay short and current.
 ## Active work item
 
 ```yaml
-id: pytorch-core-training-switch-over
-title: Activate the PyTorch core trainer while keeping NumPy reference-only until external continuity audit closes the window
+id: first-controlled-remote-gpu-run
+title: Execute the first controlled remote GPU run now that device-aware training metadata, controlled snapshot config, and the official runbook exist
 status: in_progress
 ```
 
 ## Current blocker details
 
-None. The latest full gate record for the PyTorch core-training migration batch is:
-- `.venv/bin/ruff check .` → All checks passed!
+None. The latest targeted gate record for the remote GPU readiness batch is:
+- `.venv/bin/ruff check src tests` → All checks passed!
 - `.venv/bin/mypy src` → Success: no issues found in 43 source files
-- `.venv/bin/pytest` → 103 passed
-- `git diff --check` → clean
+- `.venv/bin/pytest -q tests/test_training_loop.py tests/test_training_parity.py tests/test_logging_scaffold.py tests/test_data_contract.py tests/test_docs_consistency.py` → 21 passed
 
 ## Recently completed
 
@@ -93,14 +92,17 @@ None. The latest full gate record for the PyTorch core-training migration batch 
 - QL-016 implementation is now active: `LinearPolicyTrainer` defaults to the PyTorch core backend while preserving `linear-policy-v1` payload/export semantics and the strict runtime contract surface
 - NumPy is now a narrow reference/parity backend only; the deprecated `MomentumBaselineTrainer` shim routes explicitly through that continuity path instead of defining the core direction
 - PyTorch-vs-NumPy parity coverage now exercises default, `search-small`, and `production` training profiles plus runtime decision parity without relaxing fold, purge, or final untouched test discipline
+- QL-017 completed: the trainer now records the effective training device, CUDA availability, and device name in structured logs and `training_summary`, and the repo now has an official provider-agnostic remote GPU workflow centered on a controlled first run instead of laptop-scale continuity examples
+- QL-018 completed: `configs/data/controlled-remote-day.yaml` now provides the official bounded full-day remote snapshot example, and `docs/REMOTE_GPU_RUNBOOK.md` defines bootstrap, preflight, command flow, expected outputs, acceptance criteria, and first-failure triage for the first controlled Vast run
+- README now points explicitly to the controlled remote-day config and the official remote GPU runbook so the first real run no longer depends on inferred workflow knowledge
 
 ## Immediate next actions
 
-1. Run `quantlab-ml audit-continuity --registry-root ...` against active registries so NumPy freeze/deprecation and legacy-compat retirement are blocked by real inventory evidence rather than local inference.
-2. Define the provider-agnostic remote GPU workflow for meaningful training/search runs without widening into orchestration, secret, or scheduler work.
-3. Publish the official real-training runbook so production-profile training stops reading like laptop-scale continuity work.
-4. Freeze or retire the NumPy reference path once the external continuity audit confirms zero active dependency.
-5. Retire the temporary legacy compat window once the continuity audit reports zero active legacy dependencies.
+1. Execute the first controlled remote GPU run using `docs/REMOTE_GPU_RUNBOOK.md` on a single-GPU Vast instance and confirm the output bundle records `training_device=cuda`.
+2. Review the resulting artifact/log bundle for controlled-run readiness evidence before widening scope.
+3. If the first run is clean, execute a slightly larger second controlled remote run without jumping to full-scale search.
+4. Run `quantlab-ml audit-continuity --registry-root ...` against active runtime registries as a parallel operational follow-up.
+5. Freeze or retire the NumPy reference path once the external audit confirms zero active dependency, then retire temporary legacy compat when its active dependency count reaches zero.
 
 ## Update rule
 

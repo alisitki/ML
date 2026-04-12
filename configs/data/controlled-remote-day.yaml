@@ -1,0 +1,55 @@
+dataset:
+  # Example first controlled remote-training snapshot.
+  # This file intentionally pins one currently readable full successful day so the
+  # first Vast run has a concrete, repeatable starting point.
+  # If that day becomes operationally unsuitable, replace all three time ranges
+  # together with another single full successful day from compact state.
+  dataset_hash: s3-controlled-remote-v1
+  slice_id: controlled-remote-example-20260125
+  exchanges: [binance, bybit, okx]
+  symbols:
+    [
+      BTCUSDT,
+      ETHUSDT,
+      BNBUSDT,
+      SOLUSDT,
+      XRPUSDT,
+      LINKUSDT,
+      ADAUSDT,
+      AVAXUSDT,
+      LTCUSDT,
+      MATICUSDT,
+    ]
+  stream_universe: [bbo, trade, mark_price, funding, open_interest]
+  available_streams_by_exchange:
+    binance: [bbo, trade, mark_price, funding]
+    bybit: [bbo, trade, mark_price, funding, open_interest]
+    okx: [bbo, trade, mark_price, funding, open_interest]
+  availability_by_contract:
+    binance:
+      open_interest: false
+  field_catalogs:
+    - stream: trade
+      fields: [price, qty, side_or_signed_flow_proxy, event_delta, count_or_burst]
+    - stream: bbo
+      fields: [bid_price, ask_price, bid_size, ask_size, spread, mid, imbalance_inputs]
+    - stream: mark_price
+      fields: [mark_price, event_delta, index_price_if_available]
+    - stream: funding
+      fields: [funding_rate, next_funding_time, funding_update_age]
+    - stream: open_interest
+      fields: [open_interest, oi_delta, oi_update_age]
+  train_range:
+    start: 2026-01-25T00:00:00Z
+    end: 2026-01-25T15:59:00Z
+  validation_range:
+    start: 2026-01-25T16:00:00Z
+    end: 2026-01-25T19:59:00Z
+  final_untouched_test_range:
+    start: 2026-01-25T20:00:00Z
+    end: 2026-01-25T23:59:00Z
+  walkforward:
+    train_window_steps: 720
+    validation_window_steps: 120
+    step_size_steps: 120
+  sampling_interval_seconds: 60

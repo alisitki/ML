@@ -139,6 +139,12 @@ def _assert_summary_parity(
     assert pytorch_summary["learned_normalization_fit_split"] == "train"
     assert numpy_summary["learned_normalization_fit_split"] == "train"
     assert pytorch_summary["search_budget_summary"] == numpy_summary["search_budget_summary"]
+    assert pytorch_summary["training_device"] in {"cpu", "cuda"}
+    assert numpy_summary["training_device"] == "cpu"
+    assert pytorch_summary["cuda_available"] == (pytorch_summary["training_device"] == "cuda")
+    assert numpy_summary["cuda_available"] is False
+    assert pytorch_summary["device_name"]
+    assert numpy_summary["device_name"] == "cpu"
 
     if compare_candidate_rank:
         assert pytorch_summary["candidate_rank"] == numpy_summary["candidate_rank"]

@@ -20,6 +20,7 @@ rule-strategy host. Its intended system boundary is:
 - `configs/data/default.yaml` is the target-universe contract.
 - `configs/data/fixture.yaml` is smoke-only and is the profile tests and CLI smoke runs
   should use explicitly.
+- `configs/data/controlled-remote-day.yaml` is the official first controlled remote-training snapshot example for a single full successful day. It is intentionally larger than smoke, but still bounded for a first readiness run.
 - `configs/training/default.yaml` is a smoke/fixture-oriented PyTorch training profile kept as the current continuity default for CLI/tests. It is not the production preset and it does not define long-term strategic direction.
 - `configs/training/production.yaml` is the explicit canonical production observation profile: `1m×8`, `5m×8`, `15m×8`, `60m×12`.
 - `configs/training/search-small.yaml` is an optional small candidate-search profile for smoke-scale verification. It is not the default core architecture.
@@ -63,6 +64,7 @@ Use these as source of truth:
 - `docs/CANONICAL_MARKET_DATA_CONTRACT.md` and `docs/OBSERVATION_SCHEMA.md` for market-data and observation contracts.
 - `docs/ACTION_SPACE.md`, `docs/REWARD_SPEC_V1.md`, and `docs/SPLIT_POLICY_V1.md` for action, reward, and split semantics.
 - `docs/POLICY_ARTIFACT_SCHEMA.md`, `docs/REGISTRY_SCHEMA.md`, and `docs/EXECUTION_INTENT_SCHEMA.md` for artifact, registry, and executor handoff.
+- `docs/REMOTE_GPU_RUNBOOK.md` for the official first controlled remote-GPU training workflow.
 - `AGENTS.md`, `docs/PROJECT_STATE.md`, `docs/ROADMAP.md`, and `docs/BACKLOG.md` for repo operating flow.
 
 ## Quickstart
@@ -198,6 +200,11 @@ quantlab-ml build-trajectories \
 
 This example keeps the continuity/smoke baseline training profile for convenience.
 It is not evidence that `configs/training/default.yaml` is the production training default.
+
+For the first controlled remote-GPU readiness run, use the bounded full-day example
+snapshot at `configs/data/controlled-remote-day.yaml` together with
+`configs/training/production.yaml`. The official command flow, acceptance criteria,
+artifact layout, and failure triage are documented in `docs/REMOTE_GPU_RUNBOOK.md`.
 
 The current compact storage layout discovered from the bucket is:
 

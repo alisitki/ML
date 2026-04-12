@@ -8,6 +8,7 @@ from quantlab_ml.contracts import POLICY_ARTIFACT_SCHEMA_VERSION, DatasetSpec
 from quantlab_ml.data import LocalFixtureSource
 from quantlab_ml.training import CandidateSearchConfig, LinearPolicyTrainer
 from quantlab_ml.policies import PolicyRuntimeBridge
+from quantlab_ml.training.trainer import _resolve_torch_device
 from quantlab_ml.trajectories import TrajectoryBuilder
 
 
@@ -27,6 +28,9 @@ def test_training_loop_records_search_budget_and_validation_selection(policy_art
     assert summary.get("final_untouched_test_used") is False
     assert summary.get("learned_normalization_fit_split") == "train"
     assert summary.get("training_backend") == "pytorch"
+    assert summary.get("training_device") in {"cpu", "cuda"}
+    assert summary.get("cuda_available") == (summary.get("training_device") == "cuda")
+    assert summary.get("device_name")
     assert summary.get("selection_protocol") == "walkforward_cv_then_canonical_refit"
     assert summary.get("selection_fold_count") == len(fold_scores)
     assert summary.get("selection_aggregate_metric") == "step_weighted_mean_validation_total_net_return"
@@ -76,6 +80,9 @@ def test_train_search_explicit_candidate_search_produces_ranked_candidates(
         assert summary.get("candidate_spec") == candidate.candidate_spec.as_dict()
         assert summary.get("best_validation_composite_rank") == candidate.best_validation_composite_rank
         assert summary.get("training_backend") == "pytorch"
+        assert summary.get("training_device") in {"cpu", "cuda"}
+        assert summary.get("cuda_available") == (summary.get("training_device") == "cuda")
+        assert summary.get("device_name")
         assert summary.get("selection_protocol") == "walkforward_cv_then_canonical_refit"
         assert summary.get("selection_fold_count", 0) >= 1
         assert summary.get("candidate_fold_scores")
@@ -227,6 +234,53 @@ def test_walkforward_fold_bundle_uses_development_records_and_applies_purge(
     assert "2024-01-01T00:05:00+00:00" not in second_train_times
     assert "2024-01-01T00:04:00+00:00" in second_train_times
     assert all(step.event_time.isoformat() != "2024-01-01T00:07:00+00:00" for record in second_fold_bundle.splits["validation"] for step in record.steps)
+
+
+def test_resolve_torch_device_prefers_cuda_when_available() -> None:
+    class FakeCudaModule:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        @staticmethod
+        def get_device_name(index: int) -> str:
+            assert index == 0
+            return "Fake GPU"
+
+    class FakeTorchModule:
+        cuda = FakeCudaModule()
+
+        @staticmethod
+        def device(label: str) -> str:
+            return label
+
+    resolution = _resolve_torch_device(FakeTorchModule())
+
+    assert resolution.training_device == "cuda"
+    assert resolution.cuda_available is True
+    assert resolution.device_name == "Fake GPU"
+    assert resolution.compute_device == "cuda"
+
+
+def test_resolve_torch_device_falls_back_to_cpu_when_cuda_missing() -> None:
+    class FakeCudaModule:
+        @staticmethod
+        def is_available() -> bool:
+            return False
+
+    class FakeTorchModule:
+        cuda = FakeCudaModule()
+
+        @staticmethod
+        def device(label: str) -> str:
+            return label
+
+    resolution = _resolve_torch_device(FakeTorchModule())
+
+    assert resolution.training_device == "cpu"
+    assert resolution.cuda_available is False
+    assert resolution.device_name == "cpu"
+    assert resolution.compute_device == "cpu"
 
 
 def _search_tag_map(policy_artifact) -> dict[str, str]:

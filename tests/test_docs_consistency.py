@@ -30,6 +30,7 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "configs/data/default.yaml" in readme
     assert "configs/data/fixture.yaml" in readme
     assert "configs/data/s3-current.yaml" in readme
+    assert "configs/data/controlled-remote-day.yaml" in readme
     assert "configs/training/production.yaml" in readme
     assert "inspect-s3-compact" in readme
     assert "audit-continuity" in readme
@@ -37,6 +38,7 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "docs/OBSERVATION_SCHEMA.md" in readme
     assert "docs/POLICY_ARTIFACT_SCHEMA.md" in readme
     assert "docs/EXECUTION_INTENT_SCHEMA.md" in readme
+    assert "docs/REMOTE_GPU_RUNBOOK.md" in readme
 
     assert "fields` as the primary field carrier" in market_data_contract
     assert "compacted/_state.json" in market_data_contract

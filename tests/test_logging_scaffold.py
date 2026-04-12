@@ -43,6 +43,7 @@ def test_trainer_emits_summary_logs(caplog, trajectory_bundle, training_bundle) 
     assert any("training_data_prepared" in message for message in messages)
     assert any("training_candidate_completed" in message for message in messages)
     assert any("training_search_completed" in message for message in messages)
+    assert any("training_search_started" in message and "training_device=" in message for message in messages)
 
 
 def test_registry_emits_summary_logs(

@@ -40,6 +40,14 @@ TrainingBackendName = Literal["numpy", "pytorch"]
 
 
 @dataclass(frozen=True, slots=True)
+class _DeviceResolution:
+    training_device: str
+    cuda_available: bool
+    device_name: str
+    compute_device: Any | None
+
+
+@dataclass(frozen=True, slots=True)
 class TrainingCandidateSpec:
     seed: int
     learning_rate: float
@@ -117,12 +125,15 @@ class LinearPolicyTrainer:
         search_budget_summary = _search_budget_summary(candidate_specs)
         logger.info(
             "training_search_started training_run_id=%s candidate_count=%d split_version=%s reward_version=%s "
-            "training_backend=%s",
+            "training_backend=%s training_device=%s cuda_available=%s device_name=%s",
             training_run_id,
             len(candidate_specs),
             bundle.split_artifact.split_version,
             bundle.reward_spec.reward_version,
             self._backend.backend_name,
+            self._backend.device_resolution.training_device,
+            self._backend.device_resolution.cuda_available,
+            self._backend.device_resolution.device_name,
         )
         selection_runs = [
             self._select_candidate_via_walkforward(
@@ -530,6 +541,9 @@ class LinearPolicyTrainer:
             "trainer_name": candidate_run.config.trainer_name,
             "surface_version": "v2",
             "training_backend": self._backend.backend_name,
+            "training_device": self._backend.device_resolution.training_device,
+            "cuda_available": self._backend.device_resolution.cuda_available,
+            "device_name": self._backend.device_resolution.device_name,
             "training_run_id": training_run_id,
             "train_step_count": len(prepared.train_examples),
             "validation_step_count": len(prepared.validation_examples),
@@ -762,20 +776,48 @@ class _PreparedTrainingData:
     torch_action_labels: Any | None = None
     torch_venue_mask: Any | None = None
     torch_venue_labels: Any | None = None
+    torch_device_label: str | None = None
 
     @property
     def feature_dim(self) -> int:
         return int(self.normalized_train.shape[1])
 
-    def torch_training_inputs(self, torch_module: Any) -> tuple[Any, Any, Any, Any]:
+    def torch_training_inputs(
+        self,
+        torch_module: Any,
+        device: Any,
+        device_label: str,
+    ) -> tuple[Any, Any, Any, Any]:
+        if self.torch_device_label != device_label:
+            self.torch_normalized_train = None
+            self.torch_action_labels = None
+            self.torch_venue_mask = None
+            self.torch_venue_labels = None
+            self.torch_device_label = device_label
         if self.torch_normalized_train is None:
-            self.torch_normalized_train = torch_module.tensor(self.normalized_train, dtype=torch_module.float64)
+            self.torch_normalized_train = torch_module.tensor(
+                self.normalized_train,
+                dtype=torch_module.float64,
+                device=device,
+            )
         if self.torch_action_labels is None:
-            self.torch_action_labels = torch_module.tensor(self.action_labels, dtype=torch_module.int64)
+            self.torch_action_labels = torch_module.tensor(
+                self.action_labels,
+                dtype=torch_module.int64,
+                device=device,
+            )
         if self.torch_venue_mask is None:
-            self.torch_venue_mask = torch_module.tensor(self.venue_mask, dtype=torch_module.bool)
+            self.torch_venue_mask = torch_module.tensor(
+                self.venue_mask,
+                dtype=torch_module.bool,
+                device=device,
+            )
         if self.torch_venue_labels is None:
-            self.torch_venue_labels = torch_module.tensor(self.venue_labels, dtype=torch_module.int64)
+            self.torch_venue_labels = torch_module.tensor(
+                self.venue_labels,
+                dtype=torch_module.int64,
+                device=device,
+            )
         return (
             self.torch_normalized_train,
             self.torch_action_labels,
@@ -799,6 +841,7 @@ class _CandidateTrainingRun:
 
 class _LinearTrainingBackend:
     backend_name: TrainingBackendName
+    device_resolution: _DeviceResolution
 
     def initialize_state(
         self,
@@ -839,6 +882,12 @@ class _NumpyTrainingState:
 
 class _NumpyLinearTrainingBackend(_LinearTrainingBackend):
     backend_name: TrainingBackendName = "numpy"
+    device_resolution = _DeviceResolution(
+        training_device="cpu",
+        cuda_available=False,
+        device_name="cpu",
+        compute_device=None,
+    )
 
     def initialize_state(
         self,
@@ -939,6 +988,7 @@ class _TorchLinearTrainingBackend(_LinearTrainingBackend):
 
     def __init__(self) -> None:
         self._torch = _require_torch()
+        self.device_resolution = _resolve_torch_device(self._torch)
 
     def initialize_state(
         self,
@@ -956,13 +1006,16 @@ class _TorchLinearTrainingBackend(_LinearTrainingBackend):
         )
         torch_module = self._torch
         torch_module.manual_seed(seed)
+        if self.device_resolution.cuda_available and hasattr(torch_module.cuda, "manual_seed_all"):
+            torch_module.cuda.manual_seed_all(seed)
         if hasattr(torch_module, "use_deterministic_algorithms"):
             torch_module.use_deterministic_algorithms(True)
+        compute_device = self.device_resolution.compute_device
         return _TorchTrainingState(
-            action_weight=torch_module.tensor(action_weight, dtype=torch_module.float64),
-            action_bias=torch_module.tensor(action_bias, dtype=torch_module.float64),
-            venue_weight=torch_module.tensor(venue_weight, dtype=torch_module.float64),
-            venue_bias=torch_module.tensor(venue_bias, dtype=torch_module.float64),
+            action_weight=torch_module.tensor(action_weight, dtype=torch_module.float64, device=compute_device),
+            action_bias=torch_module.tensor(action_bias, dtype=torch_module.float64, device=compute_device),
+            venue_weight=torch_module.tensor(venue_weight, dtype=torch_module.float64, device=compute_device),
+            venue_bias=torch_module.tensor(venue_bias, dtype=torch_module.float64, device=compute_device),
         )
 
     def step(
@@ -974,29 +1027,43 @@ class _TorchLinearTrainingBackend(_LinearTrainingBackend):
     ) -> float:
         training_state = _expect_torch_state(state)
         torch_module = self._torch
-        normalized_train, action_labels, venue_mask, venue_labels = prepared.torch_training_inputs(torch_module)
+        normalized_train, action_labels, venue_mask, venue_labels = prepared.torch_training_inputs(
+            torch_module,
+            self.device_resolution.compute_device,
+            self.device_resolution.training_device,
+        )
 
         action_logits = normalized_train @ training_state.action_weight.transpose(0, 1) + training_state.action_bias
         action_probabilities = torch_module.softmax(action_logits, dim=1)
         action_loss = _torch_cross_entropy_loss(torch_module, action_probabilities, action_labels)
         action_gradient = action_probabilities.clone()
-        action_gradient[torch_module.arange(action_labels.shape[0]), action_labels] -= 1.0
+        action_gradient[
+            torch_module.arange(action_labels.shape[0], device=action_labels.device),
+            action_labels,
+        ] -= 1.0
         action_gradient /= action_labels.shape[0]
 
         action_weight_gradient = action_gradient.transpose(0, 1) @ normalized_train
         action_bias_gradient = action_gradient.sum(dim=0)
 
-        venue_loss = torch_module.tensor(0.0, dtype=torch_module.float64)
+        venue_loss = torch_module.tensor(
+            0.0,
+            dtype=torch_module.float64,
+            device=training_state.action_weight.device,
+        )
         venue_weight_gradient = torch_module.zeros_like(training_state.venue_weight)
         venue_bias_gradient = torch_module.zeros_like(training_state.venue_bias)
-        if bool(venue_mask.any()):
+        if bool(venue_mask.any().item()):
             masked_inputs = normalized_train[venue_mask]
             masked_labels = venue_labels[venue_mask]
             venue_logits = masked_inputs @ training_state.venue_weight.transpose(0, 1) + training_state.venue_bias
             venue_probabilities = torch_module.softmax(venue_logits, dim=1)
             venue_loss = _torch_cross_entropy_loss(torch_module, venue_probabilities, masked_labels)
             venue_gradient = venue_probabilities.clone()
-            venue_gradient[torch_module.arange(masked_labels.shape[0]), masked_labels] -= 1.0
+            venue_gradient[
+                torch_module.arange(masked_labels.shape[0], device=masked_labels.device),
+                masked_labels,
+            ] -= 1.0
             venue_gradient /= masked_labels.shape[0]
             venue_weight_gradient = venue_gradient.transpose(0, 1) @ masked_inputs
             venue_bias_gradient = venue_gradient.sum(dim=0)
@@ -1086,7 +1153,7 @@ def _cross_entropy_loss(probabilities: np.ndarray, labels: np.ndarray) -> float:
 
 
 def _torch_cross_entropy_loss(torch_module: Any, probabilities: Any, labels: Any) -> Any:
-    chosen = probabilities[torch_module.arange(labels.shape[0]), labels]
+    chosen = probabilities[torch_module.arange(labels.shape[0], device=labels.device), labels]
     clipped = torch_module.clamp(chosen, min=1e-12, max=1.0)
     return -torch_module.mean(torch_module.log(clipped))
 
@@ -1162,6 +1229,29 @@ def _require_torch() -> Any:
             "or add 'torch>=2.4,<3' to the active environment."
         ) from exc
     return torch
+
+
+def _resolve_torch_device(torch_module: Any) -> _DeviceResolution:
+    cuda_available = bool(hasattr(torch_module, "cuda") and torch_module.cuda.is_available())
+    if cuda_available:
+        compute_device = torch_module.device("cuda")
+        try:
+            device_name = str(torch_module.cuda.get_device_name(0))
+        except Exception:  # pragma: no cover - defensive fallback
+            device_name = "cuda"
+        return _DeviceResolution(
+            training_device="cuda",
+            cuda_available=True,
+            device_name=device_name,
+            compute_device=compute_device,
+        )
+
+    return _DeviceResolution(
+        training_device="cpu",
+        cuda_available=False,
+        device_name="cpu",
+        compute_device=torch_module.device("cpu"),
+    )
 
 
 def _band_by_key(bands: list[NumericBand], key: str) -> NumericBand:
