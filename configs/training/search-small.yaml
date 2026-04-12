@@ -1,4 +1,7 @@
 trajectory:
+  # Optional small-search smoke profile only.
+  # This file exists to verify candidate-search mechanics on a cheap fixture surface.
+  # It must not be interpreted as the core/default architecture or production preset.
   scale_preset:
     - label: "1m"
       resolution_seconds: 60
@@ -49,6 +52,7 @@ action_space:
     true_means_available: true
     false_reason_label: constraint_violation
 trainer:
+  # Optional experiment profile; allowed does not mean default.
   trainer_name: linear-policy-trainer
   runtime_adapter: linear-policy-v1
   epochs: 4

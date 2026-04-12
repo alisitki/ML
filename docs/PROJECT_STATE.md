@@ -17,10 +17,10 @@ This file must stay short and current.
 
 ## Current snapshot
 
-- current_phase: `Phase 5 real policy-learning implementation complete`
-- current_focus: `Batch 2 remediation complete: new artifacts now carry a strict runtime contract, runtime rejects observation/feature mismatches early, and only a temporary explicit legacy compat window remains for deterministic legacy linear artifacts`
+- current_phase: `Phase 5 core training loop exists, but production-surface readiness and remaining evaluation-discipline gaps are still open`
+- current_focus: `Interpretation guardrail hardening completed: precedence, temporary-path limits, and task path classification are now explicit, while temporary drifts remain visible instead of reading like direction`
 - current_blocker: `none`
-- declared_next_task: `Reassess walk-forward fold consumption before QL-100, then close the remaining QL-004 gaps around the production observation preset and eventual legacy compat-window removal`
+- declared_next_task: `Decide and track walk-forward fold consumption first, then add the production observation preset and explicit exit tracking for the NumPy trainer drift and legacy compat window`
 - not_now:
   - `live deployment plumbing`
   - `reward_v2 path-aware redesign`
@@ -29,14 +29,14 @@ This file must stay short and current.
 ## Active work item
 
 ```yaml
-id: remediation-batch-2
-title: Tighten runtime/artifact compatibility so observation, derived-surface, and feature-layout mismatches fail early instead of looking runnable
+id: interpretation-guardrail-hardening
+title: Harden repo interpretation so temporary, optional, and allowed paths are harder to misread as core direction
 status: done
 ```
 
 ## Current blocker details
 
-None. Verification gates for the remediation batch are clean:
+None. Verification gates for the governance hardening batch are clean:
 - `.venv/bin/ruff check .` → All checks passed!
 - `.venv/bin/mypy src` → Success: no issues found in 42 source files
 - `.venv/bin/pytest` → 96 passed
@@ -76,11 +76,17 @@ None. Verification gates for the remediation batch are clean:
 - a temporary legacy compat window now exists only for deterministic legacy `linear-policy-v1` artifacts; legacy acceptance is explicit, logged, and deprecated rather than silent
 - deprecated `momentum-baseline-v1` artifacts are now quarantined from the normal runtime path and rejected with an explicit retrain/re-export message
 - Batch 2 verification and patch notes are recorded in `docs/REMEDIATION_BATCH_2.md`
+- interpretation precedence is now explicit in `AGENTS.md`; allowed, optional, and temporary paths are no longer left to implicit reading
+- `docs/TASK_TEMPLATE.md` now requires path classification before implementation so temporary or optional paths are harder to grow accidentally
+- D-011 now behaves as an active guardrail instead of a passive note: NumPy is continuity-only and not a strategic growth path
+- derived surface is now documented as augmentation only; support for derived channels no longer implies a core/default requirement
+- legacy compat is now documented as a retirement-tracked continuity tool, not a development magnet
 
 ## Immediate next actions
 
-1. Decide whether walk-forward fold consumption should become a dedicated training backlog item before QL-100.
-2. Close the remaining QL-004 gaps: add a production observation preset/config and define the removal plan for the temporary legacy compat window.
+1. Decide whether walk-forward fold consumption should become a dedicated training backlog item and execute it under explicit backlog tracking.
+2. Add the production observation preset/config instead of letting the smoke/fixture preset read like the default future surface.
+3. Track exit criteria for the temporary NumPy trainer drift and legacy compat window rather than allowing them to linger as implied defaults.
 
 ## Update rule
 

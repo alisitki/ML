@@ -20,6 +20,8 @@ rule-strategy host. Its intended system boundary is:
 - `configs/data/default.yaml` is the target-universe contract.
 - `configs/data/fixture.yaml` is smoke-only and is the profile tests and CLI smoke runs
   should use explicitly.
+- `configs/training/default.yaml` is a smoke/fixture-oriented baseline training profile kept as the current continuity default for CLI/tests. It is not the production preset and it does not define long-term strategic direction.
+- `configs/training/search-small.yaml` is an optional small candidate-search profile for smoke-scale verification. It is not the default core architecture.
 - `stream_universe` is the union of stream families; `available_streams_by_exchange`
   defines which exchange-stream coordinates are structurally unavailable.
 
@@ -118,6 +120,9 @@ than one candidate, `train` also writes:
 - `<output stem>_search.json` with run-level search metadata and ranked candidates
 - `<output stem>_candidates/` with the non-selected candidate artifacts
 
+These training configs are continuity-oriented local profiles, not proof of production-surface readiness.
+A separate production preset/config should be introduced explicitly rather than inferred from the current default file name.
+
 `evaluate`, `score`, and `export-policy` remain backward-compatible and continue
 to consume the selected artifact path.
 
@@ -158,6 +163,9 @@ quantlab-ml build-trajectories \
   --reward-config configs/reward/default.yaml \
   --output outputs/s3-trajectories.json
 ```
+
+This example keeps the continuity/smoke baseline training profile for convenience.
+It is not evidence that `configs/training/default.yaml` is the production training default.
 
 The current compact storage layout discovered from the bucket is:
 

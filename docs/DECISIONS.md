@@ -79,9 +79,26 @@ Status values:
 - date: 2026-04-12
 - decision: The active Phase 5 trainer remains a NumPy-based linear policy trainer for the current remediation window, but this does not replace D-010; PyTorch remains the intended default training stack.
 - why: The repo already depends on the NumPy trainer for train-only normalization, validation-only selection, and search-budgeted candidate generation. Recording this as an explicit temporary drift prevents governance ambiguity while keeping the PyTorch migration out of the current narrow remediation batch.
+- guardrails:
+  - NumPy trainer is temporary baseline continuity only.
+  - No new strategic investment should be made around the NumPy path.
+  - PyTorch remains the core training direction.
+- exit_criteria:
+  - PyTorch trainer becomes the only active training backend for the core training path.
+  - candidate search parity is preserved.
+  - train-only normalization parity is preserved.
+  - migration completion is tracked explicitly in `docs/PROJECT_STATE.md` and `docs/BACKLOG.md`.
+- non_goals:
+  - do not expand NumPy-specific architecture.
+  - do not treat NumPy support as a long-term default.
 
 ## D-012 — Strict runtime contract is default; legacy compat is explicit and temporary
 - status: accepted
 - date: 2026-04-12
 - decision: New policy artifacts must carry a strict runtime contract and runtime must reject observation, derived-surface, feature-layout, or adapter mismatches early. Legacy acceptance is allowed only through an explicit temporary compat window for deterministic legacy `linear-policy-v1` artifacts; deprecated `momentum-baseline-v1` artifacts are quarantined from the normal runtime path.
 - why: Batch 1 wired derived features into the shared feature path, which made silent training/runtime mismatch risk materially higher. Strict-by-default enforcement closes the "wrong artifact + wrong observation still looks runnable" failure mode without breaking all historical artifacts at once. A narrow, logged compat window preserves controlled continuity while keeping silent fallback forbidden and leaving a clear removal target for a later batch.
+- guardrails:
+  - Legacy compat window is temporary and narrow.
+  - No new work may be justified primarily by preserving compat.
+  - Compat layers require explicit retirement tracking.
+  - If no active artifact inventory depends on a compat layer, freeze or retire it instead of expanding it.

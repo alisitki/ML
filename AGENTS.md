@@ -52,6 +52,23 @@ Canonical documents:
 
 If this file conflicts with those documents, those documents win.
 
+## Interpretation precedence
+
+When repo text leaves room for interpretation, use this precedence order:
+
+1. Constitution
+2. Canonical contracts
+3. Decisions
+4. Project state / backlog
+5. Temporary compatibility / implementation convenience
+
+Interpretation guardrails:
+- Allowed does not mean default.
+- Temporary does not mean strategic direction.
+- Optional experiment paths must not be expanded as if they were the core architecture.
+- Compatibility paths are tolerated only to preserve continuity, not to attract new development.
+- When a temporary path conflicts with the core direction, the core direction wins.
+
 ## Project-state reading order
 
 Before proposing or changing code, read in this order:
@@ -63,6 +80,12 @@ Before proposing or changing code, read in this order:
 5. relevant canonical contract docs
 
 If `docs/PROJECT_STATE.md` declares an active next task, do not invent a different priority unless you explicitly justify the deviation.
+
+Before implementing any meaningful task, explicitly classify the path as one of:
+- core direction
+- optional experiment
+- temporary compatibility maintenance
+- forbidden-as-default area
 
 After any meaningful task:
 - update `docs/PROJECT_STATE.md`
@@ -190,6 +213,8 @@ mypy src
 - Do not assume a single backtest means economic validity.
 - Do not assume a passing smoke test means reward or split correctness.
 - Do not assume compatibility adapters define the core architecture.
+- Do not assume an allowed path is a default path.
+- Do not assume a temporary continuity path defines long-term direction.
 
 ## Required output for meaningful changes
 

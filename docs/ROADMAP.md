@@ -111,3 +111,6 @@ Do not skip ahead unless:
 - the dependency is explicitly waived,
 - the deviation is written into `docs/PROJECT_STATE.md`,
 - and the reason is justified.
+
+Later phases and allowed future options do not override the current active next task in `docs/PROJECT_STATE.md`.
+A phase label does not mean all carried-over governance gaps are closed; unresolved gaps stay active until state/backlog retire them explicitly.

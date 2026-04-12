@@ -99,11 +99,16 @@ The observation surface may include:
 - `derived_surface`
 
 Rules:
+- raw surface is the core/default path
 - raw surface is primary
 - derived surface must not replace raw channels
+- derived surface is augmentation only
 - derived channels must be versioned
 - derived channels must be documented
 - derived channels must declare whether they are target-centric or broader
+- derived channels remain optional experiment paths unless explicitly promoted by evidence and an explicit decision/state update
+- derived feature support in one model or runtime does not make handcrafted derived channels a future requirement
+- default assumption is raw-first; derived only when ablation/evidence justifies it
 
 ## 9. V1 derived-surface scope
 
@@ -120,6 +125,9 @@ Allowed v1 derived families include:
 - target-symbol relative move versus each other configured symbol
 
 Venue-pair spread in v1 is full pairwise across available venues for the target symbol.
+
+Allowed derived families do not imply default dependence.
+Support for these channels does not elevate them to the core/default observation path by itself.
 
 ## 10. Mask semantics
 

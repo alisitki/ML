@@ -2,18 +2,28 @@
 
 Use this template when starting a meaningful Codex task.
 
-## 1. Task restatement
+## 1. Path classification
+
+State explicitly:
+- task class: `core direction`, `optional experiment`, `temporary compatibility maintenance`, or `forbidden-as-default area`
+- does this task accidentally grow a temporary path
+- does this task make an optional path behave like core
+- which temporary compromise narrows, and which one widens
+- does this task turn an allowed area into a default
+- explicit non-goal
+
+## 2. Task restatement
 
 Restate the task in one paragraph.
 
-## 2. Relevant rules
+## 3. Relevant rules
 
 List the relevant:
 - constitutional rules
 - canonical contract docs
 - operational docs
 
-## 3. Main risks
+## 4. Main risks
 
 Call out the main risks explicitly:
 - leakage
@@ -23,7 +33,7 @@ Call out the main risks explicitly:
 - registry drift
 - selector/executor boundary drift
 
-## 4. Affected areas
+## 5. Affected areas
 
 State whether the task affects:
 - learning surface
@@ -35,18 +45,18 @@ State whether the task affects:
 - executor boundary
 - docs only
 
-## 5. Minimal plan
+## 6. Minimal plan
 
 Give the smallest plan that solves the task.
 
-## 6. Files likely touched
+## 7. Files likely touched
 
 List the likely files.
 
-## 7. Definition of done
+## 8. Definition of done
 
 State `done_when` explicitly.
 
-## 8. Unverified assumptions
+## 9. Unverified assumptions
 
 List assumptions that still need proof.

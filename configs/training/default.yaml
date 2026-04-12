@@ -1,4 +1,6 @@
 trajectory:
+  # Continuity baseline only: this profile is kept as the current CLI/test default
+  # for smoke/fixture stability. Its name does not imply long-term strategic default.
   # V2: lookback_steps kaldırıldı; scale_preset listesi kullanılıyor.
   # Fixture/smoke: 1m×4 tek scale (hız ve stabilite için).
   # Production: 1m×8, 5m×8, 15m×8, 60m×12 ayrı config'de tanımlanacak.
@@ -52,6 +54,8 @@ action_space:
     true_means_available: true
     false_reason_label: constraint_violation
 trainer:
+  # Active continuity path only. Do not read this file as proof that NumPy-backed
+  # linear-policy training is the long-term core direction.
   trainer_name: linear-policy-trainer
   runtime_adapter: linear-policy-v1
   epochs: 8

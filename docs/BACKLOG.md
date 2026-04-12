@@ -83,6 +83,7 @@ Status values:
   - Batch 1 verification confirmed that `TrajectoryBuilder` produced `derived_surface` channels while the active feature extractor ignored them; Batch 1 remediation wires those channels into the shared training/runtime feature vector with tests.
   - The canonical production preset (`1m×8`, `5m×8`, `15m×8`, `60m×12`) still does not exist as an explicit training config; current shipped configs remain fixture/smoke oriented.
   - The temporary legacy compat window is still open for deterministic legacy `linear-policy-v1` artifacts; this is explicit and logged, but it remains a retirement item rather than a final-state design.
+  - Derived-surface support exists as augmentation only; it does not elevate derived channels to the core/default observation path.
 - completion_notes:
   - Batch 2 added a structured strict runtime contract to new policy artifacts, including scale specs, raw surface shapes, derived contract/version metadata, derived channel templates/signature, and expected feature dimension.
   - Runtime now rejects scale-spec mismatches, raw-shape mismatches, derived contract drift, derived channel identity/order drift, feature-dimension mismatches, and deprecated `momentum-baseline-v1` artifacts before inference.
@@ -169,6 +170,55 @@ Status values:
   - validation selection remains the only development-time selection surface
   - produced candidates remain registrable and promotion-gate compatible
   - full verification gate is green
+
+### QL-010
+- title: Decide and implement walk-forward fold consumption in the core training loop
+- status: todo
+- depends_on: QL-004, QL-008
+- scope: decide whether fold-aware development iteration is mandatory now; if yes, implement it explicitly rather than leaving folds as metadata-only
+- done_when:
+  - the repo has an explicit decision on fold consumption
+  - if required, trainer behavior uses the decided fold discipline
+  - the remaining backtest-overfitting risk is documented or reduced explicitly
+
+### QL-011
+- title: Add the canonical production observation preset and clarify smoke-vs-production training profiles
+- status: todo
+- depends_on: QL-004
+- scope: add the explicit `1m×8`, `5m×8`, `15m×8`, `60m×12` production preset/config and stop relying on a smoke-oriented training profile to stand in for future readiness
+- notes:
+  - `configs/training/default.yaml` remains continuity-oriented for now; any rename to `smoke.yaml` or `fixture-train.yaml` should happen only in an explicit CLI/test compatibility batch
+- done_when:
+  - production observation preset is a first-class config
+  - smoke/fixture profile and production profile are clearly separated
+
+### QL-012
+- title: Track D-011 exit criteria and the PyTorch core-training migration milestone
+- status: todo
+- depends_on: D-011 guardrails
+- scope: make the PyTorch core-training migration and NumPy-path exit criteria visible, tracked, and auditable
+- done_when:
+  - D-011 exit criteria are represented in state/backlog/task flow
+  - NumPy continuity support no longer reads like an open-ended default
+
+### QL-013
+- title: Retire or freeze legacy compat paths instead of expanding them
+- status: todo
+- depends_on: D-012 guardrails
+- scope: track actual artifact inventory dependency for legacy compat layers and retire/freeze any compat path that no longer preserves active continuity
+- done_when:
+  - compat layers have explicit retirement/freeze tracking
+  - no compat path survives as an implied growth area without an active dependency
+
+### QL-014
+- title: Adopt interpretation guardrails across task intake and naming clarity
+- status: todo
+- depends_on: AGENTS interpretation precedence, TASK_TEMPLATE path classification
+- scope: ensure new tasks actually use path classification and evaluate whether misleading continuity-oriented names should be cleaned up in a dedicated batch
+- done_when:
+  - task intake consistently records path classification
+  - allowed/temporary/optional paths are less likely to be mistaken for defaults
+  - any future config rename is handled as an explicit compatibility change, not an incidental cleanup
 
 ## Parked items
 

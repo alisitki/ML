@@ -9,6 +9,8 @@ This document defines the hard boundary between:
 
 This boundary is mandatory.
 
+Allowed implementation families inside this boundary do not define the current default or active development priority by themselves.
+
 ## 1. Fixed runtime architecture
 
 QuantLab runtime path is:
@@ -94,11 +96,16 @@ Both are acceptable if:
 - they use inference artifacts only
 - they preserve selector/executor separation
 
+Acceptable implementation families define an allowed boundary, not the current default or active priority.
+`docs/PROJECT_STATE.md` and `docs/DECISIONS.md` still determine what should be built now.
+
 ## 8. TensorRT / ONNX rule
 
 PyTorch is the training stack.
 
 ONNX and TensorRT are allowed only for runtime inference acceleration.
+Allowed does not mean default or current priority.
+Future acceleration options do not override the active next task.
 
 They are not the training system.
 They are not executor logic.
