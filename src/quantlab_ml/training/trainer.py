@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 import gc
 import logging
+import os
 from pathlib import Path
 from typing import Any, Literal
 import warnings
@@ -1539,6 +1540,9 @@ class _TorchLinearTrainingBackend(_LinearTrainingBackend):
         if self.device_resolution.cuda_available and hasattr(torch_module.cuda, "manual_seed_all"):
             torch_module.cuda.manual_seed_all(seed)
         if hasattr(torch_module, "use_deterministic_algorithms"):
+            # cuBLAS on CUDA >= 10.2 requires this env var for deterministic
+            # GEMM operations.  Set before the first cuBLAS call.
+            os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
             torch_module.use_deterministic_algorithms(True)
         compute_device = self.device_resolution.compute_device
         return _TorchTrainingState(
