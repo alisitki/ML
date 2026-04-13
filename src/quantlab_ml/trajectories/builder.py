@@ -66,8 +66,12 @@ class _CompactEvent:
         self.fields: dict[str, float] = fields
 
 
-# Internal index type: (symbol, exchange, stream) → time-sorted compact events
-_Index = dict[tuple[str, str, str], list[_CompactEvent]]
+# Each index bucket stores a sorted numpy timestamp array paired with the
+# compact event list.  The numpy array enables O(log N) binary search vs the
+# O(N) reverse linear scan that would be required with a plain Python list.
+# Tuple layout: (times: np.ndarray[float64, shape=(N,)], events: list[_CompactEvent])
+_IndexBucket = tuple[np.ndarray, list[_CompactEvent]]  # times=float64, events=compact
+_Index = dict[tuple[str, str, str], _IndexBucket]
 
 logger = logging.getLogger(__name__)
 
@@ -886,6 +890,11 @@ class TrajectoryBuilder:
     ) -> _CompactEvent | None:
         """Return the most-recent compact event at or before a UNIX timestamp.
 
+        Uses binary search (np.searchsorted) on the pre-built sorted timestamp
+        array for O(log N) lookup instead of O(N) reverse linear scan.
+        For a trade bucket with 1.44 M events this drops from ~720 K comparisons
+        on average to ~21.
+
         Args:
             event_time_ts: Upper-bound as UNIX seconds (float).  Callers
                            pre-compute this with ``dt.timestamp()`` to avoid
@@ -894,11 +903,16 @@ class TrajectoryBuilder:
         Returns:
             The most-recent _CompactEvent with event_time_ts <= query, or None.
         """
-        key = (symbol, exchange, stream)
-        for event in reversed(indexed.get(key, [])):
-            if event.event_time_ts <= event_time_ts:
-                return event
-        return None
+        bucket = indexed.get((symbol, exchange, stream))
+        if bucket is None:
+            return None
+        times_arr, events = bucket
+        if len(times_arr) == 0:
+            return None
+        pos = int(np.searchsorted(times_arr, event_time_ts, side="right")) - 1
+        if pos < 0:
+            return None
+        return events[pos]
 
     def _timestamps(self, split_range: TimeRange) -> list[datetime]:
         timestamps: list[datetime] = []
@@ -915,16 +929,28 @@ class TrajectoryBuilder:
     ) -> tuple[_Index, int, datetime | None]:
         """Index events as compact (event_time_ts, fields) objects.
 
-        Converts each NormalizedMarketEvent to a _CompactEvent immediately,
-        discarding the heavy Pydantic object.  Per-event RAM drops from
-        ~1 060 bytes to ~514 bytes (~51 % reduction).  For the
-        controlled-remote-day snapshot (~43 M events) this reduces the index
-        from ~45 GB to ~22 GB.
+        Each raw NormalizedMarketEvent is converted to a _CompactEvent
+        immediately — discarding the heavy Pydantic object — then accumulated
+        in per-bucket temporary lists.  After all events are consumed the lists
+        are sorted and the timestamp column is frozen into a numpy float64 array
+        so that _latest_event() can use np.searchsorted for O(log N) lookup.
 
-        symbol / exchange / stream_type are already encoded in the dict key
-        and are NOT stored inside each _CompactEvent.
+        Memory profile:
+          Building phase:  ~32 bytes per timestamp (Python float) + 8 bytes per
+                           event pointer in the tmp lists (~4 GB at 106 M events).
+          After freeze:     numpy column  ~8 bytes per event (~0.85 GB);
+                           Python floats GC'd (saves ~3.4 GB).
+          CompactEvent:    ~432 bytes per event including fields dict.
+          Index total:     ~47 GB for 106 M events (vs ~46 GB before bisect;
+                           the numpy column adds only 0.85 GB).
+
+        split / leakage / causality:
+          The timestamp comparison semantics are identical to the prior code:
+          ``event_time_ts <= query_ts``.  No forward-looking information added.
         """
-        indexed: _Index = defaultdict(list)
+        # --- pass 1: accumulate per-bucket parallel lists ---
+        tmp_times: dict[tuple[str, str, str], list[float]] = defaultdict(list)
+        tmp_events: dict[tuple[str, str, str], list[_CompactEvent]] = defaultdict(list)
         count = 0
         min_time_ts: float | None = None
         for event in events:
@@ -933,12 +959,28 @@ class TrajectoryBuilder:
                 event_time_ts=et_ts,
                 fields=dict(event.fields),
             )
-            indexed[(event.symbol, event.exchange, event.stream_type)].append(compact)
+            key = (event.symbol, event.exchange, event.stream_type)
+            tmp_times[key].append(et_ts)
+            tmp_events[key].append(compact)
             count += 1
             if min_time_ts is None or et_ts < min_time_ts:
                 min_time_ts = et_ts
-        for keyed_events in indexed.values():
-            keyed_events.sort(key=lambda item: item.event_time_ts)
+
+        # --- pass 2: sort each bucket + freeze timestamp column into numpy ---
+        indexed: _Index = {}
+        for key in tmp_times:
+            times_list = tmp_times[key]
+            evs_list = tmp_events[key]
+            # sort ascending by timestamp (in-place via argsort on numpy)
+            times_arr = np.array(times_list, dtype=np.float64)
+            sort_idx = np.argsort(times_arr, kind="stable")
+            frozen_times = times_arr[sort_idx]
+            sorted_events = [evs_list[i] for i in sort_idx]
+            indexed[key] = (frozen_times, sorted_events)
+
+        del tmp_times, tmp_events
+        gc.collect()
+
         min_time = (
             datetime.fromtimestamp(min_time_ts, tz=timezone.utc)
             if min_time_ts is not None
