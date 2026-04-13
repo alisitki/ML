@@ -41,8 +41,20 @@ rule-strategy host. Its intended system boundary is:
 - `configs/data/default.yaml` is the target-universe contract.
 - `configs/data/fixture.yaml` is smoke-only and is the profile tests and CLI smoke runs
   should use explicitly.
+- `configs/data/controlled-remote-day.yaml` is the official first controlled remote-training snapshot example for a single full successful day. It is intentionally larger than smoke, but still bounded for a first readiness run.
+- `configs/training/default.yaml` is a smoke/fixture-oriented PyTorch training profile kept as the current continuity default for CLI/tests. It is not the production preset and it does not define long-term strategic direction.
+- `configs/training/production.yaml` is the explicit canonical production observation profile: `1m×8`, `5m×8`, `15m×8`, `60m×12`.
+- `configs/training/search-small.yaml` is an optional small candidate-search profile for smoke-scale verification. It is not the default core architecture.
 - `stream_universe` is the union of stream families; `available_streams_by_exchange`
   defines which exchange-stream coordinates are structurally unavailable.
+
+## Execution Modes
+
+- `local smoke/debug mode`: local CPU/laptop execution is acceptable for smoke runs, debugging, config sanity-checks, and short verification loops.
+- `continuity baseline mode`: small local runs are acceptable for temporary continuity baselines and workflow validation, but this mode is not the long-term optimization target for core training design.
+- `real training mode`: core model training is PyTorch-first and the expected compute target is remote GPU when available. Provider examples include Vast.ai or equivalent rented GPU providers, but the repo is not locked to any one provider. Secrets, provisioning, and orchestration are outside the scope of this document.
+
+Runtime inference acceleration choices such as ONNX/TensorRT remain separate from training compute decisions.
 
 ## Repository Layout
 
@@ -73,6 +85,7 @@ Use these as source of truth:
 - `docs/CANONICAL_MARKET_DATA_CONTRACT.md` and `docs/OBSERVATION_SCHEMA.md` for market-data and observation contracts.
 - `docs/ACTION_SPACE.md`, `docs/REWARD_SPEC_V1.md`, and `docs/SPLIT_POLICY_V1.md` for action, reward, and split semantics.
 - `docs/POLICY_ARTIFACT_SCHEMA.md`, `docs/REGISTRY_SCHEMA.md`, and `docs/EXECUTION_INTENT_SCHEMA.md` for artifact, registry, and executor handoff.
+- `docs/REMOTE_GPU_RUNBOOK.md` for the official first controlled remote-GPU training workflow.
 - `AGENTS.md`, `docs/PROJECT_STATE.md`, `docs/ROADMAP.md`, and `docs/BACKLOG.md` for repo operating flow.
 
 ## Quickstart
@@ -83,28 +96,32 @@ This scaffold targets Python 3.12.
 python3.12 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,ml]"
 pytest
 ```
 
-To install the heavier ML stack later:
+Core training and the current verification suite both require the ML extra. A lighter install is only useful for docs or non-training inspection work:
 
 ```bash
-python -m pip install -e ".[dev,ml]"
+python -m pip install -e ".[dev]"
 ```
 
 ## CLI Flow
 
 Smoke and local verification should use the fixture profile explicitly:
 
+The commands below are local smoke/continuity examples, not the default execution target for meaningful real training. `train` now uses the PyTorch core backend and requires the `.[dev,ml]` environment.
+
 ```bash
 quantlab-ml build-trajectories \
   --input tests/fixtures/market_events.ndjson \
   --data-config configs/data/fixture.yaml \
+  --training-config configs/training/default.yaml \
   --output outputs/trajectories.json
 
 quantlab-ml train \
   --trajectories outputs/trajectories.json \
+  --training-config configs/training/default.yaml \
   --output outputs/policy.json
 
 quantlab-ml evaluate \
@@ -122,6 +139,47 @@ quantlab-ml export-policy \
   --score outputs/score.json \
   --output outputs/executor-policy.json
 ```
+
+For opt-in candidate search, use `configs/training/search-small.yaml` or another
+training config that sets `trainer.candidate_search`:
+
+```bash
+quantlab-ml train \
+  --trajectories outputs/trajectories.json \
+  --training-config configs/training/search-small.yaml \
+  --output outputs/search-policy.json
+```
+
+The selected artifact still lands at `--output`. When the search produces more
+than one candidate, `train` also writes:
+
+- `<output stem>_search.json` with run-level search metadata and ranked candidates
+- `<output stem>_candidates/` with the non-selected candidate artifacts
+
+These default/search configs are continuity-oriented local profiles, not proof of production-surface readiness.
+`configs/training/default.yaml` remains the smoke/continuity default and is intentionally not the production preset.
+Use `configs/training/production.yaml` when you want the canonical production observation surface explicitly.
+
+For the explicit production observation surface:
+
+```bash
+quantlab-ml build-trajectories \
+  --input tests/fixtures/market_events.ndjson \
+  --data-config configs/data/fixture.yaml \
+  --training-config configs/training/production.yaml \
+  --output outputs/production-trajectories.json
+```
+
+`evaluate`, `score`, and `export-policy` remain backward-compatible and continue
+to consume the selected artifact path.
+
+To inspect temporary continuity windows in a registry:
+
+```bash
+quantlab-ml audit-continuity --registry-root outputs/registry
+```
+
+This command reports active training backend counts plus active legacy-compat dependency counts. New core-path artifacts should report `training_backend=pytorch`; any remaining `numpy` count is continuity debt.
 
 ## S3 Compact Usage
 
@@ -160,6 +218,14 @@ quantlab-ml build-trajectories \
   --reward-config configs/reward/default.yaml \
   --output outputs/s3-trajectories.json
 ```
+
+This example keeps the continuity/smoke baseline training profile for convenience.
+It is not evidence that `configs/training/default.yaml` is the production training default.
+
+For the first controlled remote-GPU readiness run, use the bounded full-day example
+snapshot at `configs/data/controlled-remote-day.yaml` together with
+`configs/training/production.yaml`. The official command flow, acceptance criteria,
+artifact layout, and failure triage are documented in `docs/REMOTE_GPU_RUNBOOK.md`.
 
 The current compact storage layout discovered from the bucket is:
 

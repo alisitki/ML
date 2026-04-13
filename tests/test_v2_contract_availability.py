@@ -60,11 +60,11 @@ def test_binance_open_interest_is_unavailable_by_contract(
         if tensor.padding[idx]:
             # padding coords have all flags False (padding takes priority in builder)
             continue
-        assert tensor.unavailable_by_contract[idx] is True, (
+        assert bool(tensor.unavailable_by_contract[idx]) is True, (
             f"idx={idx} should be unavailable_by_contract (non-padding)"
         )
-        assert tensor.stale[idx] is False
-        assert tensor.missing[idx] is False
+        assert bool(tensor.stale[idx]) is False
+        assert bool(tensor.missing[idx]) is False
         non_padding_unavail_found = True
 
     assert non_padding_unavail_found, (

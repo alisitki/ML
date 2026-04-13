@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
+from pathlib import Path
 from typing import Any, Literal
 import warnings
 
@@ -24,6 +25,7 @@ from quantlab_ml.contracts import (
     RuntimeMetadata,
     SearchBudgetSummary,
     TrajectoryBundle,
+    TrajectoryManifest,
     TrajectoryRecord,
     TrajectoryStep,
     WalkForwardFold,
@@ -111,9 +113,17 @@ class LinearPolicyTrainer:
         self._backend = _resolve_training_backend(backend_name)
 
     def train(self, bundle: TrajectoryBundle, parent_policy_id: str | None = None) -> PolicyArtifact:
+        """⚠️  FIXTURE / TEST COMPAT PATH — do not call from production code.
+
+        Loads entire bundle.  Use train_search_from_directory() for production.
+        """
         return self.train_search(bundle, parent_policy_id=parent_policy_id).selected_artifact
 
     def train_search(self, bundle: TrajectoryBundle, parent_policy_id: str | None = None) -> TrainingSearchResult:
+        """⚠️  FIXTURE / TEST COMPAT PATH — do not call from production code.
+
+        Loads entire bundle.  Use train_search_from_directory() for production.
+        """
         candidate_specs = self._candidate_specs()
         code_commit_hash = current_code_commit_hash()
         training_run_id = self._training_run_id(
@@ -736,6 +746,540 @@ class LinearPolicyTrainer:
             training_summary=training_summary,
         )
 
+    # ------------------------------------------------------------------
+    # PRODUCTION streaming train path
+    # ------------------------------------------------------------------
+
+    def train_search_from_directory(
+        self,
+        manifest: TrajectoryManifest,
+        directory: Path,
+        parent_policy_id: str | None = None,
+    ) -> TrainingSearchResult:
+        """PRODUCTION PATH — train from a streaming JSONL trajectory directory.
+
+        Streams development.jsonl per fold for walk-forward CV, then streams
+        train.jsonl / validation.jsonl for final model fit.  Never assembles
+        a full TrajectoryBundle in memory.
+        """
+        from quantlab_ml.trajectories.streaming_store import TrajectoryDirectoryStore
+
+        candidate_specs = self._candidate_specs()
+        code_commit_hash = current_code_commit_hash()
+        training_run_id = self._training_run_id_from_manifest(
+            manifest,
+            parent_policy_id=parent_policy_id,
+            code_commit_hash=code_commit_hash,
+            candidate_specs=candidate_specs,
+        )
+        search_budget_summary = _search_budget_summary(candidate_specs)
+        logger.info(
+            "training_search_started training_run_id=%s candidate_count=%d split_version=%s reward_version=%s "
+            "training_backend=%s training_device=%s cuda_available=%s device_name=%s",
+            training_run_id,
+            len(candidate_specs),
+            manifest.split_artifact.split_version,
+            manifest.reward_spec.reward_version,
+            self._backend.backend_name,
+            self._backend.device_resolution.training_device,
+            self._backend.device_resolution.cuda_available,
+            self._backend.device_resolution.device_name,
+        )
+
+        # Walk-forward fold cv: stream development.jsonl per fold
+        selection_runs = [
+            self._select_candidate_via_walkforward_streaming(
+                manifest=manifest,
+                directory=directory,
+                candidate_spec=candidate_spec,
+                candidate_index=candidate_index,
+                parent_policy_id=parent_policy_id,
+                training_run_id=training_run_id,
+                code_commit_hash=code_commit_hash,
+            )
+            for candidate_index, candidate_spec in enumerate(candidate_specs)
+        ]
+        ranked_selections = sorted(selection_runs, key=_selection_ranking_key)
+
+        # Final refit on full train + validation splits
+        prepared = self._prepare_training_data_streaming(
+            manifest, directory, TrajectoryDirectoryStore
+        )
+
+        candidate_results: list[TrainingCandidateResult] = []
+        for candidate_rank, selection_run in enumerate(ranked_selections, start=1):
+            selected_candidate = candidate_rank == 1
+            candidate_run = self._train_candidate_from_manifest(
+                manifest=manifest,
+                prepared=prepared,
+                candidate_spec=selection_run.candidate_spec,
+                candidate_index=selection_run.candidate_index,
+                parent_policy_id=parent_policy_id,
+                training_run_id=training_run_id,
+                code_commit_hash=code_commit_hash,
+            )
+            candidate_summary = self._candidate_training_summary(
+                prepared=prepared,
+                candidate_run=candidate_run,
+                selection_run=selection_run,
+                training_run_id=training_run_id,
+                candidate_rank=candidate_rank,
+                selected_candidate=selected_candidate,
+                search_budget_summary=search_budget_summary,
+            )
+            artifact = self._build_artifact_from_manifest(
+                manifest=manifest,
+                config=candidate_run.config,
+                training_run_id=training_run_id,
+                code_commit_hash=code_commit_hash,
+                parameters=candidate_run.best_parameters,
+                parent_policy_id=parent_policy_id,
+                validation_total_net_return=candidate_run.best_validation_total_net_return,
+                validation_score=candidate_run.best_validation_score,
+                training_summary=candidate_summary,
+                search_metadata=_ArtifactSearchMetadata(
+                    candidate_index=selection_run.candidate_index,
+                    candidate_rank=candidate_rank,
+                    selected_candidate=selected_candidate,
+                ),
+                prepared=prepared,
+            )
+            candidate_results.append(
+                TrainingCandidateResult(
+                    artifact=artifact,
+                    candidate_index=selection_run.candidate_index,
+                    candidate_rank=candidate_rank,
+                    selected_candidate=selected_candidate,
+                    candidate_spec=selection_run.candidate_spec,
+                    best_validation_total_net_return=candidate_run.best_validation_total_net_return,
+                    best_validation_composite_rank=candidate_run.best_validation_score.composite_rank,
+                )
+            )
+
+        result = TrainingSearchResult(
+            training_run_id=training_run_id,
+            selected_artifact=candidate_results[0].artifact,
+            candidate_results=candidate_results,
+            search_budget_summary=search_budget_summary,
+        )
+        logger.info(
+            "training_search_completed training_run_id=%s selected_policy_id=%s candidate_count=%d "
+            "selected_validation_total_net_return=%.6f selected_validation_composite_rank=%.6f",
+            training_run_id,
+            result.selected_artifact.policy_id,
+            len(candidate_results),
+            candidate_results[0].best_validation_total_net_return,
+            candidate_results[0].best_validation_composite_rank,
+        )
+        return result
+
+    def _training_run_id_from_manifest(
+        self,
+        manifest: TrajectoryManifest,
+        *,
+        parent_policy_id: str | None,
+        code_commit_hash: str,
+        candidate_specs: list[TrainingCandidateSpec],
+    ) -> str:
+        run_payload = {
+            "dataset_hash": manifest.dataset_spec.dataset_hash,
+            "slice_id": manifest.dataset_spec.slice_id,
+            "split_version": manifest.split_artifact.split_version,
+            "reward_version": manifest.reward_spec.reward_version,
+            "training_backend": self._backend.backend_name,
+            "trainer_config": self.config.model_dump(mode="json", exclude_none=False),
+            "candidate_specs": [c.as_dict() for c in candidate_specs],
+            "parent_policy_id": parent_policy_id,
+            "code_commit_hash": code_commit_hash,
+        }
+        return f"trainrun-{hash_payload(run_payload)[:12]}"
+
+    def _build_examples_streaming(
+        self,
+        directory: Path,
+        split_name: str,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        exclusive_end: datetime | None = None,
+        store_cls: Any,
+    ) -> list[_TrainingExample]:
+        """Stream JSONL records, apply optional time window, return _TrainingExample list.
+
+        Feature extraction is done immediately per step; TrajectoryStep objects
+        are not accumulated.  The returned list holds only (features, action_key,
+        venue) tuples — ~750 floats × 4 bytes = ~3 KB per example.
+        """
+        examples: list[_TrainingExample] = []
+        for record in store_cls.iter_records(directory, split_name):
+            for step in record.steps:
+                t = step.event_time
+                if start is not None and t < start:
+                    continue
+                if end is not None and t > end:
+                    continue
+                if exclusive_end is not None and t >= exclusive_end:
+                    continue
+                features = observation_feature_vector(step.observation)
+                action_key, venue = _best_label(step)
+                examples.append(_TrainingExample(features=features, action_key=action_key, venue=venue))
+        return examples
+
+    def _prepare_training_data_streaming(
+        self,
+        manifest: TrajectoryManifest,
+        directory: Path,
+        store_cls: type,
+    ) -> _PreparedTrainingData:
+        """Stream train.jsonl and validation.jsonl to build _PreparedTrainingData."""
+        train_examples = self._build_examples_streaming(
+            directory, "train", store_cls=store_cls
+        )
+        validation_examples = self._build_examples_streaming(
+            directory, "validation", store_cls=store_cls
+        )
+        return self._finalize_prepared_data(
+            train_examples, validation_examples,
+            manifest.action_space.action_keys,
+            manifest.dataset_spec.exchanges,
+        )
+
+    def _finalize_prepared_data(
+        self,
+        train_examples: list[_TrainingExample],
+        validation_examples: list[_TrainingExample],
+        action_keys: list[str],
+        venue_choices: list[str],
+    ) -> _PreparedTrainingData:
+        """Convert lists of _TrainingExample to normalized numpy matrices."""
+        if not train_examples:
+            raise ValueError("train split is empty")
+        if not validation_examples:
+            raise ValueError("validation split is empty")
+        train_matrix = np.asarray([e.features for e in train_examples], dtype=np.float64)
+        feature_mean = train_matrix.mean(axis=0)
+        feature_std = train_matrix.std(axis=0)
+        feature_std = np.where(feature_std < 1e-6, 1.0, feature_std)
+        normalized_train = _normalize(train_matrix, feature_mean, feature_std)
+        action_labels = np.asarray(
+            [action_keys.index(e.action_key) for e in train_examples], dtype=np.int64
+        )
+        venue_mask = np.asarray([e.venue is not None for e in train_examples], dtype=np.bool_)
+        venue_labels = np.asarray(
+            [venue_choices.index(e.venue) if e.venue is not None else 0 for e in train_examples],
+            dtype=np.int64,
+        )
+        logger.info(
+            "training_data_prepared train_examples=%d validation_examples=%d "
+            "feature_dim=%d action_count=%d venue_count=%d",
+            len(train_examples), len(validation_examples),
+            int(normalized_train.shape[1]), len(action_keys), len(venue_choices),
+        )
+        return _PreparedTrainingData(
+            train_examples=train_examples,
+            validation_examples=validation_examples,
+            action_keys=action_keys,
+            venue_choices=venue_choices,
+            normalized_train=normalized_train,
+            feature_mean=feature_mean,
+            feature_std=feature_std,
+            action_labels=action_labels,
+            venue_mask=venue_mask,
+            venue_labels=venue_labels,
+        )
+
+    def _select_candidate_via_walkforward_streaming(
+        self,
+        *,
+        manifest: TrajectoryManifest,
+        directory: Path,
+        candidate_spec: TrainingCandidateSpec,
+        candidate_index: int,
+        parent_policy_id: str | None,
+        training_run_id: str,
+        code_commit_hash: str,
+    ) -> _CandidateSelectionRun:
+        from quantlab_ml.trajectories.streaming_store import TrajectoryDirectoryStore
+
+        fold_scores: list[FoldValidationScore] = []
+        interval = timedelta(seconds=manifest.dataset_spec.sampling_interval_seconds)
+
+        for fold in manifest.split_artifact.folds:
+            purge_cutoff = fold.validation_window.start - (
+                interval * fold.purge_width_steps
+            )
+            train_examples = self._build_examples_streaming(
+                directory,
+                "development",
+                start=fold.train_window.start,
+                end=fold.train_window.end,
+                exclusive_end=purge_cutoff if fold.purge_width_steps > 0 else None,
+                store_cls=TrajectoryDirectoryStore,
+            )
+            val_examples = self._build_examples_streaming(
+                directory,
+                "development",
+                start=fold.validation_window.start,
+                end=fold.validation_window.end,
+                store_cls=TrajectoryDirectoryStore,
+            )
+            fold_prepared = self._finalize_prepared_data(
+                train_examples, val_examples,
+                manifest.action_space.action_keys,
+                manifest.dataset_spec.exchanges,
+            )
+            fold_run = self._train_candidate_from_manifest(
+                manifest=manifest,
+                prepared=fold_prepared,
+                candidate_spec=candidate_spec,
+                candidate_index=candidate_index,
+                parent_policy_id=parent_policy_id,
+                training_run_id=f"{training_run_id}:{fold.fold_id}",
+                code_commit_hash=code_commit_hash,
+            )
+            fold_scores.append(
+                FoldValidationScore(
+                    fold_id=fold.fold_id,
+                    validation_total_net_return=fold_run.best_validation_total_net_return,
+                    validation_composite_rank=fold_run.best_validation_score.composite_rank,
+                    validation_step_count=len(fold_prepared.validation_examples),
+                )
+            )
+
+        selection_total_net_return = _weighted_mean(
+            [s.validation_total_net_return for s in fold_scores],
+            [s.validation_step_count for s in fold_scores],
+        )
+        selection_composite_rank = _weighted_mean(
+            [s.validation_composite_rank for s in fold_scores],
+            [s.validation_step_count for s in fold_scores],
+        )
+        logger.info(
+            "training_candidate_walkforward_completed candidate_index=%d seed=%d "
+            "learning_rate=%.6f l2_weight=%.6f fold_count=%d "
+            "selection_total_net_return=%.6f selection_composite_rank=%.6f",
+            candidate_index, candidate_spec.seed, candidate_spec.learning_rate,
+            candidate_spec.l2_weight, len(fold_scores),
+            selection_total_net_return, selection_composite_rank,
+        )
+        return _CandidateSelectionRun(
+            candidate_spec=candidate_spec,
+            candidate_index=candidate_index,
+            fold_scores=fold_scores,
+            selection_total_net_return=selection_total_net_return,
+            selection_composite_rank=selection_composite_rank,
+        )
+
+    def _train_candidate_from_manifest(
+        self,
+        *,
+        manifest: TrajectoryManifest,
+        prepared: _PreparedTrainingData,
+        candidate_spec: TrainingCandidateSpec,
+        candidate_index: int,
+        parent_policy_id: str | None,
+        training_run_id: str,
+        code_commit_hash: str,
+    ) -> _CandidateTrainingRun:
+        """Train all epochs using streaming-compatible proxy validation.
+
+        Unlike the in-memory path (_train_candidate), this method does NOT do
+        per-epoch early stopping via the full EvaluationEngine.  It trains
+        config.epochs epochs and scores the final model with a cross-entropy
+        proxy on validation features (_compute_proxy_validation_score).
+
+        The proxy metric has the same optimisation direction as actual performance
+        and is sufficient for fold candidate ranking.  The final selected policy
+        is evaluated accurately by the 'evaluate' CLI command (EvaluationEngine on
+        final_untouched_test.jsonl).
+        """
+        config = self.config.model_copy(
+            update={
+                "seed": candidate_spec.seed,
+                "learning_rate": candidate_spec.learning_rate,
+                "l2_weight": candidate_spec.l2_weight,
+                "candidate_search": None,
+            }
+        )
+        state = self._backend.initialize_state(
+            seed=config.seed,
+            action_count=len(prepared.action_keys),
+            venue_count=len(prepared.venue_choices),
+            feature_dim=prepared.feature_dim,
+        )
+        loss_history: list[float] = []
+
+        for epoch in range(1, config.epochs + 1):
+            total_loss = self._backend.step(state=state, prepared=prepared, config=config)
+            loss_history.append(total_loss)
+
+        parameters = self._backend.parameters(state=state, prepared=prepared, config=config)
+        proxy_return, proxy_score = _compute_proxy_validation_score(prepared, parameters)
+
+        logger.info(
+            "training_candidate_completed candidate_index=%d seed=%d "
+            "epochs=%d proxy_validation_return=%.6f training_backend=%s",
+            candidate_index, candidate_spec.seed, config.epochs,
+            proxy_return, self._backend.backend_name,
+        )
+        return _CandidateTrainingRun(
+            config=config,
+            candidate_spec=candidate_spec,
+            candidate_index=candidate_index,
+            best_epoch=config.epochs,
+            best_parameters=parameters,
+            best_validation_total_net_return=proxy_return,
+            best_validation_score=proxy_score,
+            loss_history=loss_history,
+            validation_history=[],
+        )
+
+    def _build_artifact_from_manifest(
+        self,
+        *,
+        manifest: TrajectoryManifest,
+        config: TrainingConfig,
+        training_run_id: str,
+        code_commit_hash: str,
+        parameters: LinearPolicyParameters,
+        parent_policy_id: str | None,
+        validation_total_net_return: float,
+        validation_score: PolicyScore | None,
+        training_summary: dict[str, object],
+        search_metadata: _ArtifactSearchMetadata | None,
+        prepared: _PreparedTrainingData,
+    ) -> PolicyArtifact:
+        payload_blob = parameters.model_dump_json()
+        payload = OpaquePolicyPayload(
+            runtime_adapter=config.runtime_adapter,
+            payload_format="json",
+            payload_format_version="json-v1",
+            blob=payload_blob,
+            digest=hash_payload(parameters),
+        )
+        lineages = LineagePointer(
+            parent_policy_id=parent_policy_id,
+            generation=0 if parent_policy_id is None else 1,
+            notes=["v2 surface - streaming linear policy trainer"],
+        )
+        training_config_hash = hash_payload(config)
+        training_snapshot_id = (
+            f"{manifest.dataset_spec.dataset_hash}:{manifest.dataset_spec.slice_id}"
+        )
+        artifact_identity = hash_payload(
+            {
+                "payload_digest": payload.digest,
+                "training_config_hash": training_config_hash,
+                "training_snapshot_id": training_snapshot_id,
+                "training_run_id": training_run_id,
+            }
+        )
+        policy_id = f"policy-{artifact_identity[:12]}"
+        artifact_id = f"artifact-{artifact_identity[:12]}"
+        evaluation_surface_id = (
+            f"{manifest.dataset_spec.slice_id}"
+            f":{manifest.split_artifact.split_version}"
+            f":{manifest.reward_spec.reward_version}"
+        )
+        target_asset = (
+            manifest.dataset_spec.symbols[0]
+            if len(manifest.dataset_spec.symbols) == 1
+            else DYNAMIC_TARGET_ASSET
+        )
+        required_context: dict[str, object] = {}
+        if target_asset == DYNAMIC_TARGET_ASSET:
+            required_context = {"target_symbol_source": "observation.target_symbol"}
+
+        validation_step_count = max(len(prepared.validation_examples), 1)
+        expected_return_score = validation_total_net_return / validation_step_count
+        risk_score = best_effort_metric(validation_score, "risk_score")
+        turnover_score = best_effort_metric(validation_score, "turnover_score")
+        confidence_or_quality_score = min(
+            0.99, max(best_effort_metric(validation_score, "composite_rank"), 0.0)
+        )
+        size_band = _band_by_key(manifest.action_space.size_bands, config.preferred_size_band)
+        leverage_band = _band_by_key(manifest.action_space.leverage_bands, config.preferred_leverage_band)
+        strict_runtime_contract = build_strict_runtime_contract(
+            manifest.observation_schema, policy_kind=config.runtime_adapter
+        )
+        artifact_tags = [
+            f"runtime_adapter:{config.runtime_adapter}",
+            f"reward:{manifest.reward_spec.reward_version}",
+            f"split:{manifest.split_artifact.split_version}",
+            f"observation:{OBSERVATION_SCHEMA_VERSION}",
+            f"action_space:{ACTION_SPACE_VERSION}",
+            f"runtime_contract:{strict_runtime_contract.runtime_contract_version}",
+            f"policy_kind:{strict_runtime_contract.policy_kind}",
+            f"derived_contract:{strict_runtime_contract.derived_contract_version}",
+            f"derived_signature:{strict_runtime_contract.derived_channel_template_signature}",
+            f"feature_dim:{strict_runtime_contract.expected_feature_dim}",
+            "compat_mode:strict",
+        ]
+        if search_metadata is not None:
+            artifact_tags.extend(
+                [
+                    f"search_run_id:{training_run_id}",
+                    f"search_candidate_index:{search_metadata.candidate_index}",
+                    f"search_candidate_rank:{search_metadata.candidate_rank}",
+                    f"search_selected:{str(search_metadata.selected_candidate).lower()}",
+                ]
+            )
+        return PolicyArtifact(
+            artifact_id=artifact_id,
+            artifact_version=POLICY_ARTIFACT_SCHEMA_VERSION,
+            policy_id=policy_id,
+            policy_family=config.trainer_name,
+            training_snapshot_id=training_snapshot_id,
+            training_config_hash=training_config_hash,
+            code_commit_hash=code_commit_hash,
+            reward_version=manifest.reward_spec.reward_version,
+            evaluation_surface_id=evaluation_surface_id,
+            target_asset=target_asset,
+            allowed_venues=manifest.dataset_spec.exchanges,
+            allowed_action_family=manifest.action_space.action_keys,
+            required_context=required_context,
+            created_at=utcnow(),
+            observation_schema=manifest.observation_schema,
+            action_space=manifest.action_space,
+            policy_payload=payload,
+            runtime_metadata=RuntimeMetadata(
+                target_asset=target_asset,
+                allowed_venues=manifest.dataset_spec.exchanges,
+                action_space_version=ACTION_SPACE_VERSION,
+                required_streams=manifest.dataset_spec.stream_universe,
+                required_field_families={
+                    stream: manifest.observation_schema.field_axis.get(stream, [])
+                    for stream in manifest.dataset_spec.stream_universe
+                },
+                required_scale_preset=[
+                    scale.label for scale in manifest.trajectory_spec.scale_preset
+                ],
+                observation_schema_version=OBSERVATION_SCHEMA_VERSION,
+                reward_version=manifest.reward_spec.reward_version,
+                policy_state_requirements=[
+                    "previous_position_side",
+                    "previous_venue",
+                    "hold_age_steps",
+                    "turnover_accumulator",
+                ],
+                expected_return_score=expected_return_score,
+                risk_score=risk_score,
+                turnover_score=turnover_score,
+                confidence_or_quality_score=confidence_or_quality_score,
+                min_capital_requirement=500.0,
+                size_bounds=size_band,
+                leverage_bounds=leverage_band,
+                artifact_compatibility_tags=artifact_tags,
+                runtime_adapter=config.runtime_adapter,
+                strict_runtime_contract=strict_runtime_contract,
+                required_context=required_context,
+                lineage_pointer=lineages,
+            ),
+            training_run_id=training_run_id,
+            parent_artifact_id=parent_policy_id,
+            training_summary=training_summary,
+        )
+
 class MomentumBaselineTrainer(LinearPolicyTrainer):
     def __init__(self, config: TrainingConfig):
         warnings.warn(
@@ -1175,6 +1719,58 @@ def _initial_parameter_arrays(
     venue_weight = rng.normal(0.0, 0.01, size=(venue_count, feature_dim)).astype(np.float64)
     venue_bias = np.zeros(venue_count, dtype=np.float64)
     return action_weight, action_bias, venue_weight, venue_bias
+
+
+def _compute_proxy_validation_score(
+    prepared: _PreparedTrainingData,
+    parameters: LinearPolicyParameters,
+) -> tuple[float, "PolicyScore"]:
+    """Compute a cross-entropy proxy validation score (streaming training path).
+
+    Applies the linear policy to validation features, computes cross-entropy
+    against oracle action labels, and returns:
+        proxy_return  = -cross_entropy   (higher is better, same direction as reward)
+        proxy_score   = PolicyScore stub  (composite_rank from sigmoid-CE)
+
+    Deliberate trade-off: no fee/slippage/funding accounting.  Used for fold
+    candidate RANKING only.  The final selected policy is evaluated accurately
+    by the 'evaluate' CLI command (full EvaluationEngine, final_untouched_test).
+    """
+    if not prepared.validation_examples:
+        proxy_return = 0.0
+        proxy_rank = 0.5
+    else:
+        W = np.array(parameters.action_weight, dtype=np.float64)   # (A, F)
+        b = np.array(parameters.action_bias, dtype=np.float64)      # (A,)
+        val_matrix = np.asarray(
+            [e.features for e in prepared.validation_examples], dtype=np.float64
+        )
+        norm_val = _normalize(val_matrix, prepared.feature_mean, prepared.feature_std)
+        logits = norm_val @ W.T + b                                 # (N, A)
+        probs = _softmax_matrix(logits)
+        val_labels = np.array(
+            [prepared.action_keys.index(e.action_key) for e in prepared.validation_examples],
+            dtype=np.int64,
+        )
+        ce = _cross_entropy_loss(probs, val_labels)
+        proxy_return = -ce
+        # Map CE to [0, 1]: lower CE → higher rank; CE=log(A) → 0.5 (random baseline)
+        random_ce = float(np.log(max(len(prepared.action_keys), 2)))
+        proxy_rank = float(np.clip(1.0 - ce / max(random_ce * 2.0, 1e-6), 0.0, 0.99))
+
+    stub_id = f"proxy-{abs(hash(proxy_return)):012x}"
+    score = PolicyScore(
+        policy_id=stub_id,
+        evaluation_id=stub_id,
+        created_at=utcnow(),
+        expected_return_score=proxy_return,
+        risk_score=0.5,
+        turnover_score=0.5,
+        stability_score=proxy_rank,
+        applicability_score=0.5,
+        composite_rank=proxy_rank,
+    )
+    return proxy_return, score
 
 
 def _build_linear_policy_parameters(

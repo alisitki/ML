@@ -52,7 +52,7 @@ def test_adapter_rejects_binance_open_interest(tmp_path: Path, repo_root: Path) 
         encoding="utf-8",
     )
 
-    events = LocalFixtureSource(path).load_events(spec)
+    events = list(LocalFixtureSource(path).load_events(spec))
 
     assert ("binance", "open_interest") not in {(event.exchange, event.stream_type) for event in events}
     assert ("bybit", "open_interest") in {(event.exchange, event.stream_type) for event in events}

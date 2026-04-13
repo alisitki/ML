@@ -135,18 +135,22 @@ quantlab-ml build-trajectories \
   --data-config configs/data/controlled-remote-day.yaml \
   --training-config configs/training/production.yaml \
   --reward-config configs/reward/default.yaml \
-  --output "$RUN_ROOT/trajectories.json" \
+  --output "$RUN_ROOT/trajectories" \
   2>&1 | tee "$RUN_ROOT/build.log"
 
+# NOTE: --output is a directory (streaming JSONL format).
+# The directory will contain manifest.json + per-split JSONL files.
+# The train and evaluate commands auto-detect the directory format.
+
 quantlab-ml train \
-  --trajectories "$RUN_ROOT/trajectories.json" \
+  --trajectories "$RUN_ROOT/trajectories" \
   --training-config configs/training/production.yaml \
   --registry-root "$RUN_ROOT/registry" \
   --output "$RUN_ROOT/policy.json" \
   2>&1 | tee "$RUN_ROOT/train.log"
 
 quantlab-ml evaluate \
-  --trajectories "$RUN_ROOT/trajectories.json" \
+  --trajectories "$RUN_ROOT/trajectories" \
   --policy "$RUN_ROOT/policy.json" \
   --evaluation-config configs/evaluation/default.yaml \
   --output "$RUN_ROOT/evaluation.json" \
@@ -170,7 +174,12 @@ quantlab-ml export-policy \
 
 The first controlled run should leave behind:
 - `inspect_s3.json`
-- `trajectories.json`
+- `trajectories/` (JSONL streaming directory)
+  - `manifest.json`
+  - `train.jsonl`
+  - `validation.jsonl`
+  - `development.jsonl`
+  - `final_untouched_test.jsonl`
 - `policy.json`
 - `evaluation.json`
 - `score.json`

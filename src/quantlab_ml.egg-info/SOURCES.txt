@@ -3,6 +3,7 @@ readme.md
 src/quantlab_ml/__init__.py
 src/quantlab_ml/__main__.py
 src/quantlab_ml/common.py
+src/quantlab_ml/runtime_contract.py
 src/quantlab_ml.egg-info/PKG-INFO
 src/quantlab_ml.egg-info/SOURCES.txt
 src/quantlab_ml.egg-info/dependency_links.txt
@@ -33,6 +34,7 @@ src/quantlab_ml/models/linear_policy.py
 src/quantlab_ml/policies/__init__.py
 src/quantlab_ml/policies/runtime.py
 src/quantlab_ml/registry/__init__.py
+src/quantlab_ml/registry/audit.py
 src/quantlab_ml/registry/store.py
 src/quantlab_ml/rewards/__init__.py
 src/quantlab_ml/rewards/engine.py
@@ -52,12 +54,16 @@ tests/test_contracts.py
 tests/test_data_contract.py
 tests/test_docs_consistency.py
 tests/test_evaluation.py
+tests/test_feature_vector.py
+tests/test_logging_scaffold.py
 tests/test_policy_runtime_contracts.py
 tests/test_registry.py
 tests/test_reward_semantics.py
 tests/test_s3_compact.py
 tests/test_split_policy.py
+tests/test_training_compat.py
 tests/test_training_loop.py
+tests/test_training_parity.py
 tests/test_trajectories.py
 tests/test_v2_causality.py
 tests/test_v2_compat_adapter.py

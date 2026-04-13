@@ -87,7 +87,7 @@ def test_stale_funding_missing_false_stale_true(
         if tensor.padding[idx] or tensor.unavailable_by_contract[idx]:
             continue
         if tensor.stale[idx]:
-            assert tensor.missing[idx] is False, "stale coord must not be missing"
+            assert bool(tensor.missing[idx]) is False, "stale coord must not be missing"
             stale_found = True
             break
 

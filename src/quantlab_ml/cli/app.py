@@ -15,6 +15,7 @@ from quantlab_ml.contracts import (
     PolicyScore,
     RewardEventSpec,
     TrajectoryBundle,
+    TrajectoryManifest,
     TrajectorySpec,
 )
 from quantlab_ml.data import LocalFixtureSource, LocalParquetSource, S3CompactedSource
@@ -23,7 +24,7 @@ from quantlab_ml.policies import PolicyRuntimeBridge
 from quantlab_ml.registry import LocalRegistryStore, audit_registry_continuity
 from quantlab_ml.scoring import PolicyScorer
 from quantlab_ml.training import LinearPolicyTrainer, TrainingConfig, TrainingSearchResult
-from quantlab_ml.trajectories import TrajectoryBuilder, TrajectoryStore
+from quantlab_ml.trajectories import TrajectoryBuilder, TrajectoryDirectoryStore, TrajectoryStore
 
 app = typer.Typer(help="QuantLab ML scaffold CLI.")
 
@@ -36,7 +37,7 @@ def app_callback() -> None:
 @app.command("build-trajectories")
 def build_trajectories(
     input: Path | None = typer.Option(None, help="Raw fixture or parquet input."),
-    output: Path = typer.Option(..., help="Trajectory bundle output path."),
+    output: Path = typer.Option(..., help="Trajectory directory output path (streaming format)."),
     data_config: Path = typer.Option(Path("configs/data/default.yaml"), exists=True),
     training_config: Path = typer.Option(Path("configs/training/default.yaml"), exists=True),
     reward_config: Path = typer.Option(Path("configs/reward/default.yaml"), exists=True),
@@ -48,9 +49,9 @@ def build_trajectories(
     reward_spec = _load_reward_spec(reward_config)
     events = _resolve_source(input, source, s3_env_file).load_events(dataset_spec)
     builder = TrajectoryBuilder(dataset_spec, trajectory_spec, action_space, reward_spec)
-    bundle = builder.build(events)
-    TrajectoryStore.write(output, bundle)
-    typer.echo(f"wrote trajectories to {output}")
+    # PRODUCTION PATH: streaming build to JSONL directory (no giant bundle in memory)
+    builder.build_to_directory(events, output)
+    typer.echo(f"wrote trajectory directory to {output}")
 
 
 @app.command("inspect-s3-compact")
@@ -77,16 +78,32 @@ def train(
     registry_root: Path | None = typer.Option(None, help="Optional registry root."),
     parent_policy_id: str | None = typer.Option(None, help="Optional parent policy id."),
 ) -> None:
-    bundle = TrajectoryStore.read(trajectories)
     _, _, training_config_model = _load_training_bundle(training_config)
     trainer = LinearPolicyTrainer(training_config_model)
-    search_result = trainer.train_search(bundle, parent_policy_id=parent_policy_id)
-    dump_model(output, search_result.selected_artifact)
-    if len(search_result.candidate_results) > 1:
-        _write_search_artifacts(output, search_result)
-    if registry_root is not None:
-        registry = LocalRegistryStore(registry_root)
-        _register_training_candidates(registry, bundle, search_result)
+
+    if TrajectoryDirectoryStore.is_trajectory_directory(trajectories):
+        # PRODUCTION PATH: streaming train from JSONL directory
+        manifest = TrajectoryDirectoryStore.read_manifest(trajectories)
+        search_result = trainer.train_search_from_directory(
+            manifest, trajectories, parent_policy_id=parent_policy_id
+        )
+        dump_model(output, search_result.selected_artifact)
+        if len(search_result.candidate_results) > 1:
+            _write_search_artifacts(output, search_result)
+        if registry_root is not None:
+            registry = LocalRegistryStore(registry_root)
+            _register_training_candidates_from_manifest(registry, manifest, search_result)
+    else:
+        # FIXTURE / TEST COMPAT PATH: in-memory bundle (legacy JSON file)
+        bundle = TrajectoryStore.read(trajectories)
+        search_result = trainer.train_search(bundle, parent_policy_id=parent_policy_id)
+        dump_model(output, search_result.selected_artifact)
+        if len(search_result.candidate_results) > 1:
+            _write_search_artifacts(output, search_result)
+        if registry_root is not None:
+            registry = LocalRegistryStore(registry_root)
+            _register_training_candidates(registry, bundle, search_result)
+
     typer.echo(f"wrote policy artifact to {output}")
 
 
@@ -97,11 +114,31 @@ def evaluate(
     output: Path = typer.Option(..., help="Evaluation report output path."),
     evaluation_config: Path = typer.Option(Path("configs/evaluation/default.yaml"), exists=True),
 ) -> None:
-    bundle = TrajectoryStore.read(trajectories)
     artifact = load_model(policy, PolicyArtifact)
     boundary = _load_evaluation_boundary(evaluation_config)
     engine = EvaluationEngine(boundary)
-    report = engine.evaluate(bundle, artifact)
+
+    if TrajectoryDirectoryStore.is_trajectory_directory(trajectories):
+        # PRODUCTION PATH: load manifest + stream test records into memory
+        # Test split is small (~20 records total) — safe to load fully.
+        manifest = TrajectoryDirectoryStore.read_manifest(trajectories)
+        test_records = list(TrajectoryDirectoryStore.iter_records(trajectories, "final_untouched_test"))
+        stub_bundle = TrajectoryBundle(
+            dataset_spec=manifest.dataset_spec,
+            trajectory_spec=manifest.trajectory_spec,
+            action_space=manifest.action_space,
+            reward_spec=manifest.reward_spec,
+            observation_schema=manifest.observation_schema,
+            split_artifact=manifest.split_artifact,
+            splits={"train": [], "validation": [], "final_untouched_test": test_records},
+            development_records=[],
+        )
+        report = engine.evaluate(stub_bundle, artifact, split="final_untouched_test")
+    else:
+        # FIXTURE / TEST COMPAT PATH
+        bundle = TrajectoryStore.read(trajectories)
+        report = engine.evaluate(bundle, artifact, split="final_untouched_test")
+
     dump_model(output, report)
     typer.echo(f"wrote evaluation report to {output}")
 
@@ -254,6 +291,7 @@ def _register_training_candidates(
     bundle: TrajectoryBundle,
     search_result: TrainingSearchResult,
 ) -> None:
+    """FIXTURE / TEST COMPAT PATH — register from in-memory bundle."""
     reward_config_hash = hash_payload(bundle.reward_spec)
     candidates = (
         search_result.candidate_results
@@ -264,6 +302,40 @@ def _register_training_candidates(
         registry.register_candidate(
             candidate.artifact,
             bundle,
+            reward_config_hash=reward_config_hash,
+            training_config_hash=candidate.artifact.training_config_hash,
+        )
+
+
+def _register_training_candidates_from_manifest(
+    registry: LocalRegistryStore,
+    manifest: "TrajectoryManifest",
+    search_result: TrainingSearchResult,
+) -> None:
+    """PRODUCTION PATH — register from streaming manifest (no bundle needed)."""
+    from quantlab_ml.contracts import TrajectoryBundle
+
+    reward_config_hash = hash_payload(manifest.reward_spec)
+    # Build a minimal stub bundle for registry compat (no step data needed)
+    stub_bundle = TrajectoryBundle(
+        dataset_spec=manifest.dataset_spec,
+        trajectory_spec=manifest.trajectory_spec,
+        action_space=manifest.action_space,
+        reward_spec=manifest.reward_spec,
+        observation_schema=manifest.observation_schema,
+        split_artifact=manifest.split_artifact,
+        splits={"train": [], "validation": [], "final_untouched_test": []},
+        development_records=[],
+    )
+    candidates = (
+        search_result.candidate_results
+        if len(search_result.candidate_results) > 1
+        else [search_result.candidate_results[0]]
+    )
+    for candidate in candidates:
+        registry.register_candidate(
+            candidate.artifact,
+            stub_bundle,
             reward_config_hash=reward_config_hash,
             training_config_hash=candidate.artifact.training_config_hash,
         )

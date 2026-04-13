@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import gc
 import logging
 import math
 from collections import defaultdict
+from collections.abc import Iterable, Iterator
 from datetime import datetime, timedelta
 from itertools import combinations
-from typing import Iterable, Literal, cast
+from pathlib import Path
+from typing import Literal, cast
+
+import numpy as np
 
 from quantlab_ml.contracts import (
     ActionFeasibilitySurface,
@@ -27,6 +32,7 @@ from quantlab_ml.contracts import (
     SplitArtifact,
     SplitWindow,
     TrajectoryBundle,
+    TrajectoryManifest,
     TrajectoryRecord,
     TrajectorySpec,
     TrajectoryStep,
@@ -80,20 +86,23 @@ class TrajectoryBuilder:
     # Public API
     # ------------------------------------------------------------------
 
-    def build(self, events: list[NormalizedMarketEvent]) -> TrajectoryBundle:
+    def build(self, events: Iterable[NormalizedMarketEvent]) -> TrajectoryBundle:
+        """⚠️  FIXTURE / TEST COMPAT PATH — do not call from production code.
+
+        Builds the entire TrajectoryBundle in memory.  This OOMs for
+        production-profile snapshots (tens of thousands of steps).  Use
+        build_to_directory() for production builds.
+        """
+        indexed, event_count, history_start_from_events = self._index_events(events)
+        history_start = history_start_from_events or self.dataset_spec.train_range.start
         logger.info(
             "trajectory_build_started slice_id=%s event_count=%d symbol_count=%d exchange_count=%d",
             self.dataset_spec.slice_id,
-            len(events),
+            event_count,
             len(self.dataset_spec.symbols),
             len(self.dataset_spec.exchanges),
         )
-        indexed = self._index_events(events)
         self._validate_split_ranges()
-        history_start = min(
-            (event.event_time for event in events),
-            default=self.dataset_spec.train_range.start,
-        )
         split_artifact = self._build_split_artifact()
         development_records = self._build_split(
             "development",
@@ -137,6 +146,82 @@ class TrajectoryBuilder:
             len(split_artifact.folds),
         )
         return bundle
+
+    def build_to_directory(
+        self,
+        events: Iterable[NormalizedMarketEvent],
+        output_dir: Path,
+    ) -> TrajectoryManifest:
+        """PRODUCTION PATH — build trajectories streaming to a JSONL directory.
+
+        Writes one TrajectoryRecord at a time to disk, never holding more than
+        one record in memory (plus the event index).  Returns the manifest
+        written to output_dir/manifest.json.
+
+        Memory profile:
+            - Event index (~40 GB for controlled-remote-day) held throughout.
+            - At most max_episode_steps TrajectoryStep objects in RAM at a time.
+            - No full TrajectoryBundle assembly.
+        """
+        # Avoid circular import (streaming_store imports contracts, not builder)
+        from quantlab_ml.trajectories.streaming_store import TrajectoryDirectoryStore
+
+        indexed, event_count, history_start_from_events = self._index_events(events)
+        history_start = history_start_from_events or self.dataset_spec.train_range.start
+        logger.info(
+            "trajectory_build_started slice_id=%s event_count=%d symbol_count=%d exchange_count=%d",
+            self.dataset_spec.slice_id,
+            event_count,
+            len(self.dataset_spec.symbols),
+            len(self.dataset_spec.exchanges),
+        )
+        self._validate_split_ranges()
+        split_artifact = self._build_split_artifact()
+
+        split_names = ["development", "train", "validation", "final_untouched_test"]
+        split_ranges = [
+            self.dataset_spec.development_range,
+            self.dataset_spec.train_range,
+            self.dataset_spec.validation_range,
+            self.dataset_spec.final_untouched_test_range,
+        ]
+
+        manifest = TrajectoryManifest(
+            dataset_spec=self.dataset_spec,
+            trajectory_spec=self.trajectory_spec,
+            action_space=self.action_space,
+            reward_spec=self.reward_spec,
+            observation_schema=self.observation_schema,
+            split_artifact=split_artifact,
+            split_names=split_names,
+        )
+        TrajectoryDirectoryStore.write_manifest(output_dir, manifest)
+
+        total_records = 0
+        total_steps = 0
+        for split_name, split_range in zip(split_names, split_ranges):
+            logger.info("building_split split=%s", split_name)
+            records_iter = self._build_split_iter(split_name, split_range, indexed, history_start)
+            rec_count, step_count = TrajectoryDirectoryStore.write_split(
+                output_dir, split_name, records_iter
+            )
+            total_records += rec_count
+            total_steps += step_count
+            gc.collect()
+            logger.info(
+                "split_complete split=%s records=%d steps=%d", split_name, rec_count, step_count
+            )
+
+        logger.info(
+            "trajectory_build_completed slice_id=%s total_records=%d total_steps=%d "
+            "fold_count=%d output_dir=%s",
+            self.dataset_spec.slice_id,
+            total_records,
+            total_steps,
+            len(split_artifact.folds),
+            output_dir,
+        )
+        return manifest
 
     # ------------------------------------------------------------------
     # Split & Step Assembly
@@ -205,6 +290,95 @@ class TrajectoryBuilder:
                     )
                 )
         return trajectories
+
+    def _build_split_iter(
+        self,
+        split_name: str,
+        split_range: TimeRange,
+        indexed: _Index,
+        history_start: datetime,
+    ) -> Iterator[TrajectoryRecord]:
+        """Generator: yield TrajectoryRecord objects one at a time (streaming build).
+
+        Records are yielded every max_episode_steps steps within each symbol,
+        allowing the caller to write-and-discard each record before the next
+        one is constructed.  Peak memory = 1 active chunk (max_episode_steps
+        TrajectoryStep objects) per iteration.
+        """
+        timestamps = self._timestamps(split_range)
+        if len(timestamps) <= self.reward_spec.horizon_steps:
+            return
+
+        max_chunk = self.trajectory_spec.max_episode_steps
+        usable_count = len(timestamps) - self.reward_spec.horizon_steps
+
+        for symbol in self.dataset_spec.symbols:
+            chunk: list[TrajectoryStep] = []
+            chunk_index = 0
+            prev_step: TrajectoryStep | None = None
+
+            for step_index in range(usable_count):
+                event_time = timestamps[step_index]
+
+                observation = self._build_observation(indexed, symbol, event_time, history_start)
+                action_feasibility = self._build_action_feasibility(indexed, symbol, event_time)
+                reward_context = self._build_reward_context(indexed, symbol, event_time)
+                reward_timeline = self._build_reward_timeline(indexed, symbol, timestamps, step_index)
+                policy_state = self._build_policy_state(prev_step)
+                reward_snapshot = self.reward_engine.build_snapshot(
+                    event_time=event_time,
+                    reward_context=reward_context,
+                    reward_timeline=reward_timeline,
+                    action_feasibility=action_feasibility,
+                )
+
+                step = TrajectoryStep(
+                    event_time=event_time,
+                    decision_timestamp=event_time,
+                    observation=observation,
+                    target_symbol=symbol,
+                    action_feasibility=action_feasibility,
+                    reward_snapshot=reward_snapshot,
+                    reward_context=reward_context,
+                    reward_timeline=reward_timeline,
+                    policy_state=policy_state,
+                )
+                chunk.append(step)
+                prev_step = step
+
+                if len(chunk) == max_chunk:
+                    yield TrajectoryRecord(
+                        trajectory_id=f"{split_name}-{symbol.lower()}-{chunk_index}",
+                        split=cast(
+                            Literal["train", "validation", "final_untouched_test", "development"],
+                            split_name,
+                        ),
+                        target_symbol=symbol,
+                        start_time=chunk[0].event_time,
+                        end_time=chunk[-1].event_time,
+                        steps=chunk,
+                        terminal=True,
+                        terminal_reason=self.trajectory_spec.terminal_semantics,
+                    )
+                    chunk = []
+                    chunk_index += 1
+                    # prev_step stays set to carry policy_state forward
+
+            # yield remainder
+            if chunk:
+                yield TrajectoryRecord(
+                    trajectory_id=f"{split_name}-{symbol.lower()}-{chunk_index}",
+                    split=cast(
+                        Literal["train", "validation", "final_untouched_test", "development"],
+                        split_name,
+                    ),
+                    target_symbol=symbol,
+                    start_time=chunk[0].event_time,
+                    end_time=chunk[-1].event_time,
+                    steps=chunk,
+                    terminal=True,
+                    terminal_reason=self.trajectory_spec.terminal_semantics,
+                )
 
     def _build_split_artifact(self) -> SplitArtifact:
         purge_width_steps = self.reward_spec.horizon_steps
@@ -343,12 +517,12 @@ class TrajectoryBuilder:
         total_fields = sum(len(field_axis.get(s, [])) for s in streams)
         flat_size = n_t * n_sym * n_exc * n_str * total_fields
 
-        values: list[float] = [0.0] * flat_size
-        age: list[float] = [0.0] * flat_size
-        padding: list[bool] = [False] * flat_size
-        unavailable_by_contract: list[bool] = [False] * flat_size
-        missing: list[bool] = [False] * flat_size
-        stale: list[bool] = [False] * flat_size
+        values                = np.zeros(flat_size, dtype=np.float32)
+        age                   = np.zeros(flat_size, dtype=np.float32)
+        padding               = np.zeros(flat_size, dtype=np.bool_)
+        unavailable_by_contract = np.zeros(flat_size, dtype=np.bool_)
+        missing               = np.zeros(flat_size, dtype=np.bool_)
+        stale                 = np.zeros(flat_size, dtype=np.bool_)
 
         interval = timedelta(seconds=scale_spec.resolution_seconds)
 
@@ -698,14 +872,19 @@ class TrajectoryBuilder:
         return timestamps
 
     def _index_events(
-        self, events: list[NormalizedMarketEvent]
-    ) -> _Index:
+        self, events: Iterable[NormalizedMarketEvent]
+    ) -> tuple[_Index, int, datetime | None]:
         indexed: _Index = defaultdict(list)
+        count = 0
+        min_time: datetime | None = None
         for event in events:
             indexed[(event.symbol, event.exchange, event.stream_type)].append(event)
+            count += 1
+            if min_time is None or event.event_time < min_time:
+                min_time = event.event_time
         for keyed_events in indexed.values():
             keyed_events.sort(key=lambda item: item.event_time)
-        return indexed
+        return indexed, count, min_time
 
 
 def _chunked(items: list[TrajectoryStep], chunk_size: int) -> Iterable[list[TrajectoryStep]]:

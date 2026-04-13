@@ -72,6 +72,8 @@ from quantlab_ml.contracts.rewards import (
     VenueExecutionRef,
 )
 
+from quantlab_ml.contracts.manifest import TRAJECTORY_STREAMING_FORMAT_VERSION, TrajectoryManifest
+
 # NOTE: contracts.compat intentionally excluded from public API.
 # Import it directly from quantlab_ml.contracts.compat when needed.
 
@@ -146,4 +148,7 @@ __all__ = [
     "RewardSnapshot",
     "RewardTimeline",
     "VenueExecutionRef",
+    # manifest (streaming path)
+    "TRAJECTORY_STREAMING_FORMAT_VERSION",
+    "TrajectoryManifest",
 ]

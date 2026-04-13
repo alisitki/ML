@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import BytesIO
@@ -17,7 +18,7 @@ class LocalFixtureSource(MarketDataSource):
     def __init__(self, path: Path):
         self.path = path
 
-    def load_events(self, dataset_spec: DatasetSpec) -> list[NormalizedMarketEvent]:
+    def load_events(self, dataset_spec: DatasetSpec) -> Iterator[NormalizedMarketEvent]:
         events: list[NormalizedMarketEvent] = []
         for line in self.path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
@@ -27,14 +28,14 @@ class LocalFixtureSource(MarketDataSource):
             if event.exchange in dataset_spec.exchanges and event.symbol in dataset_spec.symbols:
                 if dataset_spec.stream_available(event.exchange, event.stream_type):
                     events.append(event)
-        return sorted(events, key=lambda item: item.event_time)
+        yield from sorted(events, key=lambda item: item.event_time)
 
 
 class LocalParquetSource(MarketDataSource):
     def __init__(self, path: Path):
         self.path = path
 
-    def load_events(self, dataset_spec: DatasetSpec) -> list[NormalizedMarketEvent]:
+    def load_events(self, dataset_spec: DatasetSpec) -> Iterator[NormalizedMarketEvent]:
         try:
             import pyarrow.parquet as pq  # type: ignore[import-untyped]
         except ImportError as exc:  # pragma: no cover - optional dependency boundary
@@ -49,7 +50,7 @@ class LocalParquetSource(MarketDataSource):
                 if event.exchange in dataset_spec.exchanges and event.symbol in dataset_spec.symbols:
                     if dataset_spec.stream_available(event.exchange, event.stream_type):
                         events.append(event)
-        return sorted(events, key=lambda item: item.event_time)
+        yield from sorted(events, key=lambda item: item.event_time)
 
 
 class S3CompactedSource(MarketDataSource):
@@ -100,7 +101,7 @@ class S3CompactedSource(MarketDataSource):
             data_prefix=data_prefix,
         )
 
-    def load_events(self, dataset_spec: DatasetSpec) -> list[NormalizedMarketEvent]:
+    def load_events(self, dataset_spec: DatasetSpec) -> Iterator[NormalizedMarketEvent]:
         matching_partitions = self.list_matching_partitions(dataset_spec)
         object_keys: list[str] = []
         missing_partitions: list[str] = []
@@ -111,6 +112,8 @@ class S3CompactedSource(MarketDataSource):
                 continue
             object_keys.extend(discovered)
 
+        # Error check is eagerly evaluated before any yield so it fires on first
+        # consumption — generator bodies do not execute until next() is called.
         if not object_keys:
             visible = self.list_visible_keys(prefix=f"{self.data_prefix}/", max_keys=25)
             sample_prefixes = [self._partition_storage_prefix(ref) for ref in matching_partitions[:5]]
@@ -121,10 +124,8 @@ class S3CompactedSource(MarketDataSource):
                 f"partition_prefix_sample={sample_prefixes}"
             )
 
-        events: list[NormalizedMarketEvent] = []
         for key in sorted(set(object_keys)):
-            events.extend(self._read_object_events(key, dataset_spec))
-        return sorted(events, key=lambda item: item.event_time)
+            yield from self._read_object_events(key, dataset_spec)
 
     def load_state(self, refresh: bool = False) -> dict[str, Any]:
         if self._state_cache is not None and not refresh:
@@ -286,7 +287,7 @@ class S3CompactedSource(MarketDataSource):
             return True
         return any(found_key == key for found_key in self.list_visible_keys(prefix=key, max_keys=1))
 
-    def _read_object_events(self, key: str, dataset_spec: DatasetSpec) -> list[NormalizedMarketEvent]:
+    def _read_object_events(self, key: str, dataset_spec: DatasetSpec) -> Iterator[NormalizedMarketEvent]:
         body = self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
         if key.endswith(".parquet"):
             try:
@@ -304,13 +305,11 @@ class S3CompactedSource(MarketDataSource):
                     continue
                 rows.append(json.loads(line))
 
-        events: list[NormalizedMarketEvent] = []
         for raw in rows:
             event = _normalize_record(raw, source_label=f"s3://{self.bucket}/{key}")
             if event.exchange in dataset_spec.exchanges and event.symbol in dataset_spec.symbols:
                 if dataset_spec.stream_available(event.exchange, event.stream_type):
-                    events.append(event)
-        return events
+                    yield event
 
 
 @dataclass(slots=True)

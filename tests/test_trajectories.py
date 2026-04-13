@@ -25,7 +25,7 @@ def test_trajectory_builder_preserves_axes_and_masks(trajectory_bundle: Trajecto
     # V2: action_feasibility surface
     assert first_step.action_feasibility.abstain_feasible()
     flat_mask = first_step.action_feasibility.to_flat_mask()
-    assert flat_mask["abstain"] is True
+    assert bool(flat_mask["abstain"]) is True
     # raw_surface var ve ilk scale için tensor mevcut
     assert "1m" in first_step.observation.raw_surface
     tensor = first_step.observation.raw_surface["1m"]
@@ -54,8 +54,8 @@ def test_masks_distinguish_padding_structural_missing_and_stale(
     # padding=True olan koordinatlarda unavailable ve missing=False olmalı
     for i, p in enumerate(tensor.padding):
         if p:
-            assert tensor.unavailable_by_contract[i] is False
-            assert tensor.missing[i] is False
+            assert bool(tensor.unavailable_by_contract[i]) is False
+            assert bool(tensor.missing[i]) is False
 
     # binance open_interest unavailable_by_contract=True olmalı
     schema = first_train_step.observation.observation_schema

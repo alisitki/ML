@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from quantlab_ml.common import dump_model, hash_payload, load_model
 from quantlab_ml.contracts import EvaluationReport, POLICY_ARTIFACT_SCHEMA_VERSION, PolicyArtifact, TrajectoryBundle
 from quantlab_ml.registry import LocalRegistryStore
@@ -34,7 +36,9 @@ def test_v2_trajectory_bundle_round_trip(
     orig_tensor = orig_step.observation.raw_surface["1m"]
     loaded_tensor = loaded_step.observation.raw_surface["1m"]
     assert orig_tensor.shape == loaded_tensor.shape
-    assert orig_tensor.values == loaded_tensor.values
+    # values are now numpy ndarrays — use array_equal for element-wise comparison
+    assert np.array_equal(orig_tensor.values, loaded_tensor.values)
+
 
 
 def test_v2_policy_artifact_round_trip(

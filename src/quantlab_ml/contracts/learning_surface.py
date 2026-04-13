@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
+import numpy as np
 from pydantic import Field, model_validator
 
 from quantlab_ml.contracts.common import InvalidActionMaskSemantics, NumericBand, QuantBaseModel
 from quantlab_ml.contracts.dataset import DatasetSpec, WalkForwardSpec
+from quantlab_ml.contracts.numpy_types import NdArrayBool, NdArrayFloat32
 from quantlab_ml.contracts.rewards import RewardContext, RewardEventSpec, RewardSnapshot, RewardTimeline
 
 OBSERVATION_SCHEMA_VERSION = "observation_schema_v1"
@@ -57,17 +59,17 @@ class RawScaleTensor(QuantBaseModel):
     # shape bilgisi (time, symbol, exchange, stream, field)
     shape: list[int]  # 5 elemanlı liste
     # Ham değerler — eksik/unavailable/padding koordinatlarda 0.0
-    values: list[float]
+    values: Annotated[np.ndarray, NdArrayFloat32]
     # Kaç saniye önce geldiği — her koordinat için event yaşı (saniye)
-    age: list[float]
+    age: Annotated[np.ndarray, NdArrayFloat32]
     # True → bu koordinat padded (yetersiz tarihçe)
-    padding: list[bool]
+    padding: Annotated[np.ndarray, NdArrayBool]
     # True → bu koordinat yapısal olarak erişilemez (contract availability=False)
-    unavailable_by_contract: list[bool]
+    unavailable_by_contract: Annotated[np.ndarray, NdArrayBool]
     # True → koordinat erişilebilir ama bu adımda veri gelMEdi (runtime missing)
-    missing: list[bool]
+    missing: Annotated[np.ndarray, NdArrayBool]
     # True → koordinat erişilebilir, veri var ama freshness bound'u geçmiş
-    stale: list[bool]
+    stale: Annotated[np.ndarray, NdArrayBool]
 
     @model_validator(mode="after")
     def validate_flat_size(self) -> "RawScaleTensor":
