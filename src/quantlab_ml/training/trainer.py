@@ -1065,7 +1065,11 @@ class LinearPolicyTrainer:
                     validation_step_count=fold_prepared.val_step_count,
                 )
             )
-
+            # Free the large normalized matrices before the next fold allocates
+            # its own (fold_k normalized_train is 22-26 GB; without explicit
+            # del, Python's refcount may not release it before fold_k+1 alloc).
+            del fold_prepared
+            gc.collect()
         selection_total_net_return = _weighted_mean(
             [s.validation_total_net_return for s in fold_scores],
             [s.validation_step_count for s in fold_scores],
