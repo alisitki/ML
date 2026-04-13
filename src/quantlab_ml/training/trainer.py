@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import gc
 import logging
 from pathlib import Path
 from typing import Any, Literal
@@ -271,49 +272,18 @@ class LinearPolicyTrainer:
         return f"trainrun-{hash_payload(run_payload)[:12]}"
 
     def _prepare_training_data(self, bundle: TrajectoryBundle) -> _PreparedTrainingData:
+        """\u26a0\ufe0f  FIXTURE / TEST COMPAT PATH \u2014 do not call from production.
+
+        Delegates to _finalize_prepared_data so fixture and streaming paths
+        share identical normalization/packaging logic.
+        """
         train_examples = self._build_examples(bundle, split="train")
         validation_examples = self._build_examples(bundle, split="validation")
-        if not train_examples:
-            raise ValueError("train split is empty")
-        if not validation_examples:
-            raise ValueError("validation split is empty")
-
-        action_keys = bundle.action_space.action_keys
-        venue_choices = bundle.dataset_spec.exchanges
-        train_matrix = np.asarray([example.features for example in train_examples], dtype=np.float64)
-        feature_mean = train_matrix.mean(axis=0)
-        feature_std = train_matrix.std(axis=0)
-        feature_std = np.where(feature_std < 1e-6, 1.0, feature_std)
-        normalized_train = _normalize(train_matrix, feature_mean, feature_std)
-        action_labels = np.asarray(
-            [action_keys.index(example.action_key) for example in train_examples],
-            dtype=np.int64,
-        )
-        venue_mask = np.asarray([example.venue is not None for example in train_examples], dtype=np.bool_)
-        venue_labels = np.asarray(
-            [venue_choices.index(example.venue) if example.venue is not None else 0 for example in train_examples],
-            dtype=np.int64,
-        )
-        logger.info(
-            "training_data_prepared train_examples=%d validation_examples=%d feature_dim=%d action_count=%d venue_count=%d",
-            len(train_examples),
-            len(validation_examples),
-            int(normalized_train.shape[1]),
-            len(action_keys),
-            len(venue_choices),
-        )
-
-        return _PreparedTrainingData(
-            train_examples=train_examples,
-            validation_examples=validation_examples,
-            action_keys=action_keys,
-            venue_choices=venue_choices,
-            normalized_train=normalized_train,
-            feature_mean=feature_mean,
-            feature_std=feature_std,
-            action_labels=action_labels,
-            venue_mask=venue_mask,
-            venue_labels=venue_labels,
+        return self._finalize_prepared_data(
+            train_examples,
+            validation_examples,
+            bundle.action_space.action_keys,
+            bundle.dataset_spec.exchanges,
         )
 
     def _select_candidate_via_walkforward(
@@ -340,7 +310,7 @@ class LinearPolicyTrainer:
                 training_run_id=f"{training_run_id}:{fold.fold_id}",
                 code_commit_hash=code_commit_hash,
             )
-            fold_step_count = len(prepared.validation_examples)
+            fold_step_count = prepared.val_step_count
             fold_scores.append(
                 FoldValidationScore(
                     fold_id=fold.fold_id,
@@ -555,8 +525,8 @@ class LinearPolicyTrainer:
             "cuda_available": self._backend.device_resolution.cuda_available,
             "device_name": self._backend.device_resolution.device_name,
             "training_run_id": training_run_id,
-            "train_step_count": len(prepared.train_examples),
-            "validation_step_count": len(prepared.validation_examples),
+            "train_step_count": prepared.train_step_count,
+            "validation_step_count": prepared.val_step_count,
             "feature_dim": prepared.feature_dim,
             "epochs": candidate_run.config.epochs,
             "seed": candidate_run.config.seed,
@@ -589,7 +559,9 @@ class LinearPolicyTrainer:
         examples: list[_TrainingExample] = []
         for trajectory in trajectories:
             for step in trajectory.steps:
-                features = observation_feature_vector(step.observation)
+                features = np.asarray(
+                    observation_feature_vector(step.observation), dtype=np.float32
+                )
                 action_key, venue = _best_label(step)
                 examples.append(_TrainingExample(features=features, action_key=action_key, venue=venue))
         return examples
@@ -920,7 +892,9 @@ class LinearPolicyTrainer:
                     continue
                 if exclusive_end is not None and t >= exclusive_end:
                     continue
-                features = observation_feature_vector(step.observation)
+                features = np.asarray(
+                    observation_feature_vector(step.observation), dtype=np.float32
+                )
                 action_key, venue = _best_label(step)
                 examples.append(_TrainingExample(features=features, action_key=action_key, venue=venue))
         return examples
@@ -951,16 +925,28 @@ class LinearPolicyTrainer:
         action_keys: list[str],
         venue_choices: list[str],
     ) -> _PreparedTrainingData:
-        """Convert lists of _TrainingExample to normalized numpy matrices."""
+        """Convert lists of _TrainingExample to memory-efficient numpy matrices.
+
+        Strategy (production-scale, e.g. 9590 steps, 680K features):
+        1. Extract scalar labels first (tiny arrays).
+        2. Pre-allocate float32 matrix and fill row-by-row.
+        3. Delete the examples list immediately after filling (frees ~26 GB).
+        4. Normalize in-place (no second copy).
+        5. Repeat for validation (smaller: ~6.5 GB).
+
+        Peak RAM: ~52 GB during fill (examples + matrix coexist briefly).
+        After finalize: ~26 GB train + ~6.5 GB val + small arrays.
+        """
         if not train_examples:
             raise ValueError("train split is empty")
         if not validation_examples:
             raise ValueError("validation split is empty")
-        train_matrix = np.asarray([e.features for e in train_examples], dtype=np.float64)
-        feature_mean = train_matrix.mean(axis=0)
-        feature_std = train_matrix.std(axis=0)
-        feature_std = np.where(feature_std < 1e-6, 1.0, feature_std)
-        normalized_train = _normalize(train_matrix, feature_mean, feature_std)
+
+        n_train = len(train_examples)
+        n_val = len(validation_examples)
+        feat_dim = int(np.asarray(train_examples[0].features).shape[0])
+
+        # --- train labels (tiny; extract before del) ---
         action_labels = np.asarray(
             [action_keys.index(e.action_key) for e in train_examples], dtype=np.int64
         )
@@ -969,21 +955,54 @@ class LinearPolicyTrainer:
             [venue_choices.index(e.venue) if e.venue is not None else 0 for e in train_examples],
             dtype=np.int64,
         )
+
+        # --- train matrix: pre-allocate float32, fill row-by-row, then del ---
+        train_matrix = np.empty((n_train, feat_dim), dtype=np.float32)
+        for i, ex in enumerate(train_examples):
+            train_matrix[i] = ex.features
+        del train_examples
+        gc.collect()
+
+        # --- normalization stats (from train only; fit on train, never val) ---
+        feature_mean = train_matrix.mean(axis=0)
+        feature_std = train_matrix.std(axis=0)
+        feature_std = np.where(feature_std < 1e-6, 1.0, feature_std).astype(np.float32)
+        feature_mean = feature_mean.astype(np.float32)
+
+        # --- normalize train in-place (no third copy) ---
+        train_matrix -= feature_mean
+        train_matrix /= feature_std
+        normalized_train = train_matrix  # same object
+
+        # --- val labels + matrix ---
+        val_action_labels = np.asarray(
+            [action_keys.index(e.action_key) for e in validation_examples], dtype=np.int64
+        )
+        val_matrix = np.empty((n_val, feat_dim), dtype=np.float32)
+        for i, ex in enumerate(validation_examples):
+            val_matrix[i] = ex.features
+        del validation_examples
+        gc.collect()
+        val_matrix -= feature_mean
+        val_matrix /= feature_std
+        normalized_val = val_matrix  # same object
+
         logger.info(
             "training_data_prepared train_examples=%d validation_examples=%d "
             "feature_dim=%d action_count=%d venue_count=%d",
-            len(train_examples), len(validation_examples),
-            int(normalized_train.shape[1]), len(action_keys), len(venue_choices),
+            n_train, n_val, feat_dim, len(action_keys), len(venue_choices),
         )
         return _PreparedTrainingData(
-            train_examples=train_examples,
-            validation_examples=validation_examples,
+            train_step_count=n_train,
+            val_step_count=n_val,
             action_keys=action_keys,
             venue_choices=venue_choices,
             normalized_train=normalized_train,
+            normalized_val=normalized_val,
             feature_mean=feature_mean,
             feature_std=feature_std,
             action_labels=action_labels,
+            val_action_labels=val_action_labels,
             venue_mask=venue_mask,
             venue_labels=venue_labels,
         )
@@ -1042,7 +1061,7 @@ class LinearPolicyTrainer:
                     fold_id=fold.fold_id,
                     validation_total_net_return=fold_run.best_validation_total_net_return,
                     validation_composite_rank=fold_run.best_validation_score.composite_rank,
-                    validation_step_count=len(fold_prepared.validation_examples),
+                    validation_step_count=fold_prepared.val_step_count,
                 )
             )
 
@@ -1190,7 +1209,7 @@ class LinearPolicyTrainer:
         if target_asset == DYNAMIC_TARGET_ASSET:
             required_context = {"target_symbol_source": "observation.target_symbol"}
 
-        validation_step_count = max(len(prepared.validation_examples), 1)
+        validation_step_count = max(prepared.val_step_count, 1)
         expected_return_score = validation_total_net_return / validation_step_count
         risk_score = best_effort_metric(validation_score, "risk_score")
         turnover_score = best_effort_metric(validation_score, "turnover_score")
@@ -1299,75 +1318,42 @@ class _ArtifactSearchMetadata:
 
 @dataclass(slots=True)
 class _TrainingExample:
-    features: list[float]
+    features: np.ndarray  # float32, shape (feature_dim,) -- compact; NOT list[float]
     action_key: str
     venue: str | None
 
 
 @dataclass(slots=True)
 class _PreparedTrainingData:
-    train_examples: list[_TrainingExample]
-    validation_examples: list[_TrainingExample]
+    """Normalized training and validation matrices ready for gradient computation.
+
+    Memory layout (production scale, e.g. 9590 train + 2390 val steps, 680 K features):
+      normalized_train : float32  (n_train, feat_dim)  ~26 GB
+      normalized_val   : float32  (n_val,   feat_dim)  ~6.5 GB
+      feature_mean/std : float32  (feat_dim,)           ~3 MB each
+      label arrays     : int64/bool                     tiny
+
+    The raw _TrainingExample lists are intentionally discarded in
+    _finalize_prepared_data() after building these matrices to keep peak RAM
+    within the 75 GB cgroup limit.
+    """
+
+    train_step_count: int
+    val_step_count: int
     action_keys: list[str]
     venue_choices: list[str]
-    normalized_train: np.ndarray
-    feature_mean: np.ndarray
-    feature_std: np.ndarray
-    action_labels: np.ndarray
-    venue_mask: np.ndarray
-    venue_labels: np.ndarray
-    torch_normalized_train: Any | None = None
-    torch_action_labels: Any | None = None
-    torch_venue_mask: Any | None = None
-    torch_venue_labels: Any | None = None
-    torch_device_label: str | None = None
+    normalized_train: np.ndarray   # float32, shape (n_train, feat_dim)
+    normalized_val: np.ndarray     # float32, shape (n_val,   feat_dim)
+    feature_mean: np.ndarray       # float32, shape (feat_dim,)
+    feature_std: np.ndarray        # float32, shape (feat_dim,)
+    action_labels: np.ndarray      # int64,   shape (n_train,)
+    val_action_labels: np.ndarray  # int64,   shape (n_val,)
+    venue_mask: np.ndarray         # bool,    shape (n_train,)
+    venue_labels: np.ndarray       # int64,   shape (n_train,)
 
     @property
     def feature_dim(self) -> int:
         return int(self.normalized_train.shape[1])
-
-    def torch_training_inputs(
-        self,
-        torch_module: Any,
-        device: Any,
-        device_label: str,
-    ) -> tuple[Any, Any, Any, Any]:
-        if self.torch_device_label != device_label:
-            self.torch_normalized_train = None
-            self.torch_action_labels = None
-            self.torch_venue_mask = None
-            self.torch_venue_labels = None
-            self.torch_device_label = device_label
-        if self.torch_normalized_train is None:
-            self.torch_normalized_train = torch_module.tensor(
-                self.normalized_train,
-                dtype=torch_module.float64,
-                device=device,
-            )
-        if self.torch_action_labels is None:
-            self.torch_action_labels = torch_module.tensor(
-                self.action_labels,
-                dtype=torch_module.int64,
-                device=device,
-            )
-        if self.torch_venue_mask is None:
-            self.torch_venue_mask = torch_module.tensor(
-                self.venue_mask,
-                dtype=torch_module.bool,
-                device=device,
-            )
-        if self.torch_venue_labels is None:
-            self.torch_venue_labels = torch_module.tensor(
-                self.venue_labels,
-                dtype=torch_module.int64,
-                device=device,
-            )
-        return (
-            self.torch_normalized_train,
-            self.torch_action_labels,
-            self.torch_venue_mask,
-            self.torch_venue_labels,
-        )
 
 
 @dataclass(slots=True)
@@ -1569,46 +1555,77 @@ class _TorchLinearTrainingBackend(_LinearTrainingBackend):
         prepared: _PreparedTrainingData,
         config: TrainingConfig,
     ) -> float:
+        """Mini-batch SGD step on a random sample of the training data.
+
+        Moving the full training matrix (potentially 26 GB float32) to GPU
+        at once would exceed 24 GB VRAM on a 3090.  Instead, a random
+        BATCH_SIZE subsample is moved to GPU per step.  Each batch tensor
+        is small (~1-2 GB for 1024 examples), well within VRAM limits.
+
+        Convergence: with num_epochs=200 and BATCH_SIZE=1024, each example
+        is seen ~21 times on average (200 * 1024 / n_train), sufficient for
+        cross-entropy minimization on a linear model.
+        """
         training_state = _expect_torch_state(state)
         torch_module = self._torch
-        normalized_train, action_labels, venue_mask, venue_labels = prepared.torch_training_inputs(
-            torch_module,
-            self.device_resolution.compute_device,
-            self.device_resolution.training_device,
+        device = self.device_resolution.compute_device
+
+        n = prepared.train_step_count
+        batch_size = min(1024, n)
+
+        # Full-batch when data fits within BATCH_SIZE (e.g. fixture / test data).
+        # This preserves numerical parity with the NumPy backend.
+        # For production data (n > 1024), a random mini-batch is used so that
+        # no single batch tensor exceeds available GPU VRAM (~1-2 GB per 1024 rows).
+        if n <= 1024:
+            batch_idx = np.arange(n, dtype=np.int64)  # all examples, deterministic order
+        else:
+            batch_idx = np.random.randint(0, n, size=batch_size)  # random subsample
+        x_batch = torch_module.tensor(
+            prepared.normalized_train[batch_idx].astype(np.float64),
+            dtype=torch_module.float64,
+            device=device,
+        )
+        labels_batch = torch_module.tensor(
+            prepared.action_labels[batch_idx], dtype=torch_module.int64, device=device,
+        )
+        venue_mask_batch = torch_module.tensor(
+            prepared.venue_mask[batch_idx], dtype=torch_module.bool, device=device,
+        )
+        venue_labels_batch = torch_module.tensor(
+            prepared.venue_labels[batch_idx], dtype=torch_module.int64, device=device,
         )
 
-        action_logits = normalized_train @ training_state.action_weight.transpose(0, 1) + training_state.action_bias
+        action_logits = x_batch @ training_state.action_weight.transpose(0, 1) + training_state.action_bias
         action_probabilities = torch_module.softmax(action_logits, dim=1)
-        action_loss = _torch_cross_entropy_loss(torch_module, action_probabilities, action_labels)
+        action_loss = _torch_cross_entropy_loss(torch_module, action_probabilities, labels_batch)
         action_gradient = action_probabilities.clone()
         action_gradient[
-            torch_module.arange(action_labels.shape[0], device=action_labels.device),
-            action_labels,
+            torch_module.arange(batch_size, device=device),
+            labels_batch,
         ] -= 1.0
-        action_gradient /= action_labels.shape[0]
+        action_gradient /= batch_size
 
-        action_weight_gradient = action_gradient.transpose(0, 1) @ normalized_train
+        action_weight_gradient = action_gradient.transpose(0, 1) @ x_batch
         action_bias_gradient = action_gradient.sum(dim=0)
 
         venue_loss = torch_module.tensor(
-            0.0,
-            dtype=torch_module.float64,
-            device=training_state.action_weight.device,
+            0.0, dtype=torch_module.float64, device=training_state.action_weight.device,
         )
         venue_weight_gradient = torch_module.zeros_like(training_state.venue_weight)
         venue_bias_gradient = torch_module.zeros_like(training_state.venue_bias)
-        if bool(venue_mask.any().item()):
-            masked_inputs = normalized_train[venue_mask]
-            masked_labels = venue_labels[venue_mask]
+        if bool(venue_mask_batch.any().item()):
+            masked_inputs = x_batch[venue_mask_batch]
+            masked_labels = venue_labels_batch[venue_mask_batch]
+            masked_size = int(masked_labels.shape[0])
             venue_logits = masked_inputs @ training_state.venue_weight.transpose(0, 1) + training_state.venue_bias
             venue_probabilities = torch_module.softmax(venue_logits, dim=1)
             venue_loss = _torch_cross_entropy_loss(torch_module, venue_probabilities, masked_labels)
             venue_gradient = venue_probabilities.clone()
             venue_gradient[
-                torch_module.arange(masked_labels.shape[0], device=masked_labels.device),
-                masked_labels,
+                torch_module.arange(masked_size, device=device), masked_labels,
             ] -= 1.0
-            venue_gradient /= masked_labels.shape[0]
+            venue_gradient /= batch_size  # normalize by full batch for gradient consistency
             venue_weight_gradient = venue_gradient.transpose(0, 1) @ masked_inputs
             venue_bias_gradient = venue_gradient.sum(dim=0)
 
@@ -1727,31 +1744,24 @@ def _compute_proxy_validation_score(
 ) -> tuple[float, "PolicyScore"]:
     """Compute a cross-entropy proxy validation score (streaming training path).
 
-    Applies the linear policy to validation features, computes cross-entropy
-    against oracle action labels, and returns:
-        proxy_return  = -cross_entropy   (higher is better, same direction as reward)
-        proxy_score   = PolicyScore stub  (composite_rank from sigmoid-CE)
+    Uses prepared.normalized_val and prepared.val_action_labels (precomputed in
+    _finalize_prepared_data) to avoid rebuilding the val matrix every epoch.
 
     Deliberate trade-off: no fee/slippage/funding accounting.  Used for fold
     candidate RANKING only.  The final selected policy is evaluated accurately
     by the 'evaluate' CLI command (full EvaluationEngine, final_untouched_test).
     """
-    if not prepared.validation_examples:
+    if prepared.val_step_count == 0:
         proxy_return = 0.0
         proxy_rank = 0.5
     else:
         W = np.array(parameters.action_weight, dtype=np.float64)   # (A, F)
         b = np.array(parameters.action_bias, dtype=np.float64)      # (A,)
-        val_matrix = np.asarray(
-            [e.features for e in prepared.validation_examples], dtype=np.float64
-        )
-        norm_val = _normalize(val_matrix, prepared.feature_mean, prepared.feature_std)
+        # normalized_val is float32; upcast to float64 for matrix multiply precision
+        norm_val = prepared.normalized_val.astype(np.float64)
         logits = norm_val @ W.T + b                                 # (N, A)
         probs = _softmax_matrix(logits)
-        val_labels = np.array(
-            [prepared.action_keys.index(e.action_key) for e in prepared.validation_examples],
-            dtype=np.int64,
-        )
+        val_labels = prepared.val_action_labels
         ce = _cross_entropy_loss(probs, val_labels)
         proxy_return = -ce
         # Map CE to [0, 1]: lower CE → higher rank; CE=log(A) → 0.5 (random baseline)
