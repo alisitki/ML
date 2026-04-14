@@ -155,3 +155,25 @@ Status values:
   - do not change the runtime/inference boundary
   - do not change `linear-policy-v1` payload/export semantics
   - do not solve the problem by shrinking the controlled snapshot or upgrading the instance class
+
+## D-016 — Pre-computed tensor files are the training data format; Pydantic JSONL is output-only
+- status: accepted
+- date: 2026-04-14
+- decision: `build-trajectories` must write pre-computed float32 tensor files (e.g. `{split}_X.pt`) alongside JSONL during `build_to_directory`. The active `train` path reads binary tensor files directly without per-batch Pydantic deserialization. JSONL remains for human inspection and compat, not as the training read path.
+- why:
+  - first controlled remote GPU run (2026-04-14) proved the Pydantic JSONL path impractical: `feature_dim=680,413`, `batch_size=24`, `batches_per_epoch=300` \u2014 ~84 min/epoch estimated, GPU utilization 0%
+  - bottleneck is batch-assembly cost (Pydantic \u2192 numpy \u2192 torch in Python GIL per batch), not OOM, not instance size, not GPU memory
+  - fix is at the data pipeline boundary: feature extraction happens once at build time, stored as binary; training reads pre-assembled float32 tensors
+- guardrails:
+  - JSONL output remains unchanged (backward compat / inspection)
+  - tensor files must be deterministic: same input + same config \u2192 same tensor files
+  - feature extractor must still run only at build time, on train data only for normalization
+  - `train` must detect tensor file presence and fall back to JSONL-assembly only when absent (transition safety)
+- acceptance_signal:
+  - GPU utilization > 0% on RTX A6000 during controlled remote training run
+  - wall-time per epoch < 5 minutes for 8-epoch production config
+  - 8 epochs complete end-to-end in the controlled run
+- non_goals:
+  - do not change JSONL schema or manifest format
+  - do not change runtime/inference boundary
+  - do not change `linear-policy-v1` payload/export semantics

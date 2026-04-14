@@ -1235,6 +1235,8 @@ class LinearPolicyTrainer:
         best_validation_score: PolicyScore | None = None
         best_epoch = 0
         for epoch in range(1, config.epochs + 1):
+            import time as _time
+            _t_epoch0 = _time.perf_counter()
             total_loss = self._train_streaming_epoch(
                 directory=directory,
                 prepared=prepared,
@@ -1242,6 +1244,11 @@ class LinearPolicyTrainer:
                 store_cls=store_cls,
                 state=state,
                 config=config,
+            )
+            _t_epoch1 = _time.perf_counter()
+            logger.info(
+                "epoch_timing epoch=%d wall_sec=%.1f total_loss=%.6f",
+                epoch, _t_epoch1 - _t_epoch0, total_loss,
             )
             loss_history.append(total_loss)
             parameters = self._backend.parameters(
@@ -1331,6 +1338,8 @@ class LinearPolicyTrainer:
         state: object,
         config: TrainingConfig,
     ) -> float:
+        import time as _time  # diagnostic timing — non-semantic, safe to remove later
+
         batch_size = prepared.batch_plan.effective_batch_size
         action_key_to_index = {key: idx for idx, key in enumerate(prepared.action_keys)}
         venue_to_index = {venue: idx for idx, venue in enumerate(prepared.venue_choices)}
@@ -1342,20 +1351,43 @@ class LinearPolicyTrainer:
         seen = 0
         batch_row = 0
 
+        # --- diagnostic timing state ---
+        _prof_batch_num: int = 0
+        _prof_t_feature: float = 0.0  # observation_feature_vector + np.asarray
+        _prof_t_norm: float = 0.0     # mean/std normalization
+        _prof_t_assembly: float = 0.0 # batch row assignment
+        _prof_t_gpu: float = 0.0      # backend.batch_step (host->device + fwd/bwd)
+        _prof_step_count: int = 0     # steps accumulated in this partial batch
+        _PROF_LOG_FIRST_N = 10
+        _PROF_LOG_EVERY_N = 50
+
         for record in store_cls.iter_records(directory, train_window.split_name):
             for step in record.steps:
                 if not train_window.includes(step.event_time):
                     continue
+
+                _t0 = _time.perf_counter()
                 features = np.asarray(observation_feature_vector(step.observation), dtype=np.float64)
+                _t1 = _time.perf_counter()
                 features -= prepared.feature_mean
                 features /= prepared.feature_std
+                _t2 = _time.perf_counter()
+
                 action_key, venue = _best_label(step)
                 feature_batch[batch_row] = features
                 action_batch[batch_row] = action_key_to_index[action_key]
                 venue_mask_batch[batch_row] = venue is not None
                 venue_batch[batch_row] = venue_to_index[venue] if venue is not None else 0
+                _t3 = _time.perf_counter()
+
+                _prof_t_feature += _t1 - _t0
+                _prof_t_norm += _t2 - _t1
+                _prof_t_assembly += _t3 - _t2
+                _prof_step_count += 1
                 batch_row += 1
+
                 if batch_row == batch_size:
+                    _tg0 = _time.perf_counter()
                     batch_loss = self._backend.batch_step(
                         state=state,
                         batch_features=feature_batch,
@@ -1364,11 +1396,38 @@ class LinearPolicyTrainer:
                         batch_venue_labels=venue_batch,
                         config=config,
                     )
+                    _tg1 = _time.perf_counter()
+                    _prof_t_gpu += _tg1 - _tg0
+
                     weighted_loss_total += batch_loss * batch_row
                     seen += batch_row
+
+                    if _prof_batch_num < _PROF_LOG_FIRST_N or _prof_batch_num % _PROF_LOG_EVERY_N == 0:
+                        _batch_total = _prof_t_feature + _prof_t_norm + _prof_t_assembly + _prof_t_gpu
+                        logger.info(
+                            "batch_timing batch=%d steps=%d "
+                            "t_feature_ms=%.1f t_norm_ms=%.1f t_assembly_ms=%.1f t_gpu_ms=%.1f "
+                            "t_batch_total_ms=%.1f t_per_step_feature_ms=%.2f feature_dim=%d",
+                            _prof_batch_num, _prof_step_count,
+                            _prof_t_feature * 1000,
+                            _prof_t_norm * 1000,
+                            _prof_t_assembly * 1000,
+                            _prof_t_gpu * 1000,
+                            _batch_total * 1000,
+                            (_prof_t_feature / max(_prof_step_count, 1)) * 1000,
+                            prepared.feature_dim,
+                        )
+
+                    _prof_batch_num += 1
+                    _prof_t_feature = 0.0
+                    _prof_t_norm = 0.0
+                    _prof_t_assembly = 0.0
+                    _prof_t_gpu = 0.0
+                    _prof_step_count = 0
                     batch_row = 0
 
         if batch_row > 0:
+            _tg0 = _time.perf_counter()
             batch_loss = self._backend.batch_step(
                 state=state,
                 batch_features=feature_batch[:batch_row],
@@ -1377,6 +1436,7 @@ class LinearPolicyTrainer:
                 batch_venue_labels=venue_batch[:batch_row],
                 config=config,
             )
+            _tg1 = _time.perf_counter()
             weighted_loss_total += batch_loss * batch_row
             seen += batch_row
 

@@ -325,7 +325,29 @@ Status values:
   - train-only normalization remains explicit and test-covered
   - compat/test matrix-first helpers cannot silently re-enter the prod path
 
-## Parked items
+### QL-021
+- title: Implement pre-computed float32 tensor output in build-trajectories; update batch loader to read binary tensors
+- status: todo
+- depends_on: QL-020
+- path_classification: core direction
+- scope: write per-split float32 tensor files (shape=[N, feature_dim]) alongside JSONL during `build_to_directory`; update `StreamingBatchLoader` / batch plan to detect and use binary tensor files; add test verifying shape and dtype without Pydantic deserialization
+- motivation:
+  - first controlled remote GPU run (2026-04-14) confirmed: `build-trajectories` OOM-free ✅, `training_device=cuda` ✅
+  - bottleneck identified: each batch (batch_size=24 × feature_dim=680,413) assembles Pydantic `TrajectoryStep` → numpy → torch in Python GIL, ~130 MB/batch, 300 batches/epoch — estimated 84 min/epoch, 14+ hours for 8 epochs
+  - GPU utilization was 0% (CPU-bound data pipeline, not GPU-bound)
+  - bottleneck is NOT OOM, NOT instance size, NOT GPU memory — it is batch assembly cost
+- acceptance_criteria:
+  - `build-trajectories` writes `{split}_X.pt` + `{split}_y.pt` (or equivalent) alongside JSONL during `build_to_directory`
+  - `train` detects tensor files and reads them directly via `torch.load()` without Pydantic deserialization per batch
+  - no change to JSONL output (remains for compatibility / inspection)
+  - wall-time per epoch on RTX A6000 drops below 5 minutes
+  - GPU utilization > 0% confirmed by `nvidia-smi` during training
+- done_when:
+  - pre-computed tensor files are written by build and read by train
+  - GPU utilization > 0% on remote controlled run
+  - 8 epochs complete end-to-end in practical wall-time
+  - ruff/mypy/pytest still clean
+
 
 ### QL-100
 - title: ONNX / TensorRT runtime acceleration exploration

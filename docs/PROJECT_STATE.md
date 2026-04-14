@@ -17,10 +17,10 @@ This file must stay short and current.
 
 ## Current snapshot
 
-- current_phase: `Phase 5 core training path now consumes walk-forward folds, ships an explicit canonical production observation preset, records effective PyTorch device selection in training metadata, and now uses a fold-aware streaming-batch trainer plus streaming evaluation so production train/validation no longer assemble giant dense matrices`
-- current_focus: `Prod trainer matrix-first path removed from the active flow; train-only two-pass streaming normalization, deterministic streaming batches, and true streaming validation are now live with explicit batch visibility in logs and training_summary`
-- current_blocker: `controlled remote GPU rerun still pending — the new streaming-batch train/evaluate path must now prove OOM-free completion on the same controlled snapshot`
-- declared_next_task: `Execute the first controlled remote GPU rerun using docs/REMOTE_GPU_RUNBOOK.md and configs/data/controlled-remote-day.yaml via the streaming build-trajectories→train→evaluate path; confirm OOM-free build, OOM-free train, and OOM-free evaluate on the new streaming-batch trainer path`
+- current_phase: `Phase 5 — second controlled remote GPU profiling run completed (2026-04-14, RTX 3090). build-trajectories exit 0. Training profiling confirmed bottleneck: Python GIL single-threaded feature extraction. Diagnosis complete, QL-021 is the next implementation task.`
+- current_focus: `Implement QL-021: write pre-computed float32 tensor files at build-trajectories time; train reads binary via torch.load() — eliminates Python GIL bottleneck, enables GPU utilization.`
+- current_blocker: `none blocking QL-021 implementation — diagnosis done, path is clear`
+- declared_next_task: `QL-021 — implement pre-computed tensor output in build-trajectories (write per-split float32 .pt tensor files alongside JSONL), update _train_streaming_epoch to detect and load binary tensors, re-run controlled remote rerun to verify GPU utilization > 0% and epoch < 5 min`
 - not_now:
   - `live deployment plumbing`
   - `cloud provisioning automation`
@@ -30,17 +30,39 @@ This file must stay short and current.
 ## Active work item
 
 ```yaml
-id: first-controlled-remote-gpu-run-streaming-batch
-title: Execute the first controlled remote GPU rerun using the new streaming-batch trajectory/trainer path (build_to_directory + train_search_from_directory + streaming evaluate) — confirms OOM-free execution on the same controlled snapshot
-status: in_progress
+id: ql-021-precomputed-tensor-format
+title: Implement pre-computed float32 tensor output in build-trajectories; update train to read binary tensors
+status: ready_to_implement
+evidence:
+  profiling_run_date: 2026-04-14
+  instance: RTX 3090 / 96 GB RAM / 32 vCPU
+  fold1_epoch_wall_time: 40 min 10 sec
+  batch_wall_time: 8.03 sec/batch
+  step_wall_time: 0.335 sec/example
+  gpu_avg_utilization: 0.45%
+  gpu_max_utilization: 70% (single spike at model init)
+  vmstat_cpu: us=2-3% (1/32 cores), id=96-97%
+  wchan: 0 (pure userspace, not IO-blocked)
+  io_wait: 0%
+  block_read_during_train: ~0 (JSONL in page cache)
+  bottleneck_root: Python GIL single-threaded list assembly in observation_feature_vector()
+  mechanism: feature_dim=680K × 6 arrays/scale × 4 scales → Python .tolist() + np.asarray() per step
+  fix: pre-compute at build time → torch.load() at train time
+  expected_speedup: 160-500x per epoch
 ```
 
 ## Current blocker details
 
-None. The latest targeted gate record for the streaming-batch rerun readiness batch is:
-- `.venv/bin/ruff check .` → All checks passed!
-- `.venv/bin/mypy src` → Success: no issues found in 47 source files
-- `.venv/bin/pytest -q tests/test_streaming_trajectory.py tests/test_evaluation.py tests/test_cli_smoke.py tests/test_training_loop.py tests/test_training_parity.py tests/test_training_compat.py tests/test_reward_semantics.py` → 54 passed
+**Root cause confirmed by measurement (2026-04-14 profiling run, RTX 3090):**
+- `build-trajectories` exit 0: `total_records=220, total_steps=26360, fold_count=3` ✅
+- `train` started: `training_device=cuda`, `device_name=NVIDIA GeForce RTX 3090` ✅
+- `feature_dim=680,413`, `effective_batch_size=24`, `batches_per_epoch=300`
+- Fold 1 epoch: **40 min 10 sec** = **8.03 sec/batch** = **0.335 sec/example**
+- GPU: **0.45% average** (2020 nvidia-smi samples), 70% only at model init spike
+- vmstat: `us=2-3%, id=96-97%` — 1 Python thread on 1 of 32 CPUs
+- wchan=0 — pure userspace CPU, not blocked in kernel
+- bi≈0, wa=0% — JSONL files in 73 GB page cache, IO not the cause
+- Bottleneck: `observation_feature_vector()` inside `_train_streaming_epoch`, Python GIL list ops
 
 ## Recently completed
 
@@ -105,12 +127,12 @@ None. The latest targeted gate record for the streaming-batch rerun readiness ba
 
 ## Immediate next actions
 
-1. `ssh` to the Vast instance and run the 3-phase gate: `build-trajectories` (streaming, no OOM), `train` (streaming batch, no OOM), `evaluate` (streaming, no OOM) against `controlled-remote-day.yaml`.
-2. Confirm `training_device=cuda` plus `effective_batch_size`, `estimated_batch_bytes`, `batches_per_epoch`, and `proxy_validation_used=false` in the training logs/summary on the GPU instance.
-3. Review the resulting artifact/log bundle for controlled-run readiness before widening scope.
-4. If this rerun is clean, execute a slightly larger second controlled remote run without jumping to full-scale search.
-5. Run `quantlab-ml audit-continuity --registry-root ...` against active runtime registries as a parallel operational follow-up.
-6. Freeze or retire the NumPy reference path once the external audit confirms zero active dependency, then retire temporary legacy compat when its active dependency count reaches zero.
+1. **QL-021** — implement pre-computed tensor output in `build-trajectories`: write `train_tensors.pt`, `validation_tensors.pt`, `test_tensors.pt` (float32, shape=[N, feature_dim]) alongside JSONL during `build_to_directory`.
+2. Update `StreamingBatchLoader` (or batch plan) to detect and use binary tensor files, falling back to JSONL-assembly only when tensor files are absent.
+3. Add a test that verifies the tensor output path produces arrays with correct shape and dtype without Pydantic deserialization overhead.
+4. Re-run controlled remote GPU rerun after fix: confirm GPU utilization > 0%, wall-time per epoch < 5 min, 8 epochs complete end-to-end.
+5. Run `quantlab-ml audit-continuity` as a parallel operational follow-up after the run succeeds.
+6. Freeze or retire the NumPy reference path once external audit confirms zero active dependency.
 
 ## Update rule
 
