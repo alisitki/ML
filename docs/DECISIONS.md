@@ -136,3 +136,22 @@ Status values:
   - this decision does not require immediate cloud orchestration automation
   - this decision does not force every tiny smoke run onto rented GPU
   - this decision does not change runtime deployment architecture
+
+## D-015 — The active prod trainer path is streaming-batch only; matrix-first training is compat-only
+- status: accepted
+- date: 2026-04-14
+- decision: The active production trainer/evaluation path must use fold-aware streaming batch training, train-only two-pass streaming normalization, and real streaming validation/evaluation. Matrix-first feature assembly is allowed only inside explicit fixture/test compat helpers and may not be called from the prod directory path.
+- why:
+  - the earlier JSONL transition fixed build/output shape but not the real trainer blocker, because the active prod path still rebuilt giant dense train/validation matrices in memory
+  - a proxy validation score weakened the canonical validation discipline and hid potential behavior drift between training-time selection and official evaluation
+  - the controlled remote snapshot must prove correctness without relying on snapshot shrinkage, bigger hardware, or opaque RAM heuristics
+- guardrails:
+  - no giant dense train or validation matrix may be assembled in the active prod path
+  - train-only normalization must remain explicit and must fit only on the train window currently being used
+  - fold validation and canonical validation must use the real streaming evaluation path rather than a proxy score
+  - matrix-first helpers must carry explicit compat sentinels and remain grep-able as non-prod code
+  - batch policy may stay internal, but effective batch size, estimated batch bytes, and batches per epoch must be visible in logs and `training_summary`
+- non_goals:
+  - do not change the runtime/inference boundary
+  - do not change `linear-policy-v1` payload/export semantics
+  - do not solve the problem by shrinking the controlled snapshot or upgrading the instance class

@@ -119,21 +119,14 @@ def evaluate(
     engine = EvaluationEngine(boundary)
 
     if TrajectoryDirectoryStore.is_trajectory_directory(trajectories):
-        # PRODUCTION PATH: load manifest + stream test records into memory
-        # Test split is small (~20 records total) — safe to load fully.
+        # PRODUCTION PATH: streaming evaluation from the trajectory directory.
         manifest = TrajectoryDirectoryStore.read_manifest(trajectories)
-        test_records = list(TrajectoryDirectoryStore.iter_records(trajectories, "final_untouched_test"))
-        stub_bundle = TrajectoryBundle(
-            dataset_spec=manifest.dataset_spec,
-            trajectory_spec=manifest.trajectory_spec,
-            action_space=manifest.action_space,
-            reward_spec=manifest.reward_spec,
-            observation_schema=manifest.observation_schema,
-            split_artifact=manifest.split_artifact,
-            splits={"train": [], "validation": [], "final_untouched_test": test_records},
-            development_records=[],
+        report = engine.evaluate_records(
+            manifest.dataset_spec,
+            manifest.reward_spec,
+            TrajectoryDirectoryStore.iter_records(trajectories, "final_untouched_test"),
+            artifact,
         )
-        report = engine.evaluate(stub_bundle, artifact, split="final_untouched_test")
     else:
         # FIXTURE / TEST COMPAT PATH
         bundle = TrajectoryStore.read(trajectories)

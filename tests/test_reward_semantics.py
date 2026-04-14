@@ -145,6 +145,33 @@ def test_reward_engine_uses_requested_venue_not_best_venue(training_bundle, rewa
     assert snapshot.context.selected_venue == "bybit"
 
 
+def test_reward_engine_missing_requested_venue_forces_abstain_without_crash(training_bundle, reward_spec) -> None:
+    _, action_space, _ = training_bundle
+    engine = RewardEngine(reward_spec, action_space)
+    feasibility = _make_feasibility(action_space)
+    snapshot = engine.build_snapshot(
+        event_time=datetime(2024, 1, 1, tzinfo=UTC),
+        reward_context=_make_context(),
+        reward_timeline=_make_timeline(("binance", [110.0]), ("bybit", [105.0])),
+        action_feasibility=feasibility,
+    )
+
+    outcome = engine.apply_decision(
+        snapshot=snapshot,
+        requested_action_key="enter_long",
+        action_feasibility=feasibility,
+        infeasible_action_treatment="force_abstain",
+        venue="okx",
+        size_band_key="micro",
+        leverage_band_key="low",
+    )
+
+    assert outcome.applied_action_key == "abstain"
+    assert outcome.infeasible is True
+    assert outcome.reward_context is not None
+    assert outcome.reward_context.selected_venue is None
+
+
 def test_reward_engine_enforces_requested_size_and_leverage_cell(training_bundle, reward_spec) -> None:
     _, action_space, _ = training_bundle
     engine = RewardEngine(reward_spec, action_space)

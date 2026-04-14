@@ -21,6 +21,30 @@ def test_evaluation_respects_boundary(trajectory_bundle, policy_artifact, evalua
     assert report.realized_trade_count >= 0
 
 
+def test_evaluation_records_matches_bundle_path(
+    trajectory_bundle,
+    policy_artifact,
+    evaluation_boundary: EvaluationBoundary,
+):
+    bundle_engine = EvaluationEngine(evaluation_boundary)
+    stream_engine = EvaluationEngine(evaluation_boundary)
+
+    bundle_report = bundle_engine.evaluate(trajectory_bundle, policy_artifact)
+    stream_report = stream_engine.evaluate_records(
+        trajectory_bundle.dataset_spec,
+        trajectory_bundle.reward_spec,
+        (record.model_copy(deep=True) for record in trajectory_bundle.splits["validation"]),
+        policy_artifact,
+    )
+
+    assert stream_report.total_steps == bundle_report.total_steps
+    assert stream_report.total_net_return == bundle_report.total_net_return
+    assert stream_report.action_counts == bundle_report.action_counts
+    assert stream_report.coverage_symbols == bundle_report.coverage_symbols
+    assert stream_report.coverage_venues == bundle_report.coverage_venues
+    assert stream_report.coverage_streams == bundle_report.coverage_streams
+
+
 def test_evaluation_uses_explicit_requested_venue(
     trajectory_bundle,
     policy_artifact,

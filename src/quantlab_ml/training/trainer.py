@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-import gc
 import logging
 import os
 from pathlib import Path
@@ -37,10 +37,18 @@ from quantlab_ml.models.linear_policy import LinearPolicyParameters
 from quantlab_ml.runtime_contract import build_strict_runtime_contract
 from quantlab_ml.scoring import PolicyScorer
 from quantlab_ml.training.config import TrainingConfig
+from . import compat_matrix_first
+from .compat_matrix_first import CompatPreparedTrainingData as _PreparedTrainingData
 
 logger = logging.getLogger(__name__)
 
 TrainingBackendName = Literal["numpy", "pytorch"]
+
+_STREAMING_BATCH_TARGET_BYTES = 128 * 1024 * 1024
+_STREAMING_BATCH_MAX_SIZE = 4096
+_STREAMING_BATCH_LABEL_OVERHEAD_BYTES = (
+    np.dtype(np.int64).itemsize * 2 + np.dtype(np.bool_).itemsize
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +115,88 @@ class _CandidateSelectionRun:
     fold_scores: list[FoldValidationScore]
     selection_total_net_return: float
     selection_composite_rank: float
+
+
+@dataclass(slots=True)
+class StreamingFeatureStats:
+    count: int = 0
+    mean: np.ndarray | None = None
+    m2: np.ndarray | None = None
+
+    def update(self, features: np.ndarray) -> None:
+        vector = np.asarray(features, dtype=np.float64)
+        if self.mean is None or self.m2 is None:
+            self.mean = np.zeros_like(vector, dtype=np.float64)
+            self.m2 = np.zeros_like(vector, dtype=np.float64)
+        self.count += 1
+        delta = vector - self.mean
+        self.mean = self.mean + (delta / self.count)
+        delta2 = vector - self.mean
+        self.m2 = self.m2 + (delta * delta2)
+
+    @property
+    def feature_dim(self) -> int:
+        if self.mean is None:
+            return 0
+        return int(self.mean.shape[0])
+
+    def finalize(self) -> tuple[np.ndarray, np.ndarray]:
+        if self.count <= 0 or self.mean is None or self.m2 is None:
+            raise ValueError("streaming feature stats require at least one training example")
+        feature_mean = self.mean.astype(np.float32)
+        feature_std = np.sqrt(self.m2 / max(self.count, 1))
+        feature_std = np.where(feature_std < 1e-6, 1.0, feature_std).astype(np.float32)
+        return feature_mean, feature_std
+
+
+@dataclass(frozen=True, slots=True)
+class StreamingBatchPlan:
+    batch_target_bytes: int
+    bytes_per_example: int
+    effective_batch_size: int
+    estimated_batch_bytes: int
+    batches_per_epoch: int
+
+
+@dataclass(frozen=True, slots=True)
+class StreamingWindow:
+    split_name: str
+    start: datetime | None = None
+    end: datetime | None = None
+    exclusive_end: datetime | None = None
+
+    def includes(self, event_time: datetime) -> bool:
+        if self.start is not None and event_time < self.start:
+            return False
+        if self.end is not None and event_time > self.end:
+            return False
+        if self.exclusive_end is not None and event_time >= self.exclusive_end:
+            return False
+        return True
+
+
+@dataclass(slots=True)
+class StreamingEpochResult:
+    epoch: int
+    total_loss: float
+    validation_report: EvaluationReport
+    validation_score: PolicyScore
+    is_best: bool
+
+
+@dataclass(slots=True)
+class _StreamingPreparedData:
+    train_step_count: int
+    val_step_count: int
+    action_keys: list[str]
+    venue_choices: list[str]
+    feature_mean: np.ndarray
+    feature_std: np.ndarray
+    batch_plan: StreamingBatchPlan
+
+    @property
+    def feature_dim(self) -> int:
+        return int(self.feature_mean.shape[0])
 
 
 class LinearPolicyTrainer:
@@ -181,6 +271,10 @@ class LinearPolicyTrainer:
                 candidate_rank=candidate_rank,
                 selected_candidate=selected_candidate,
                 search_budget_summary=search_budget_summary,
+                training_data_flow="matrix_first_compat",
+                validation_data_flow="bundle_evaluation",
+                normalization_strategy="matrix_first_train_only",
+                proxy_validation_used=False,
             )
             artifact = self._build_artifact(
                 bundle=bundle,
@@ -273,19 +367,9 @@ class LinearPolicyTrainer:
         return f"trainrun-{hash_payload(run_payload)[:12]}"
 
     def _prepare_training_data(self, bundle: TrajectoryBundle) -> _PreparedTrainingData:
-        """\u26a0\ufe0f  FIXTURE / TEST COMPAT PATH \u2014 do not call from production.
+        """⚠️  FIXTURE / TEST COMPAT PATH — matrix-first helper wrapper."""
 
-        Delegates to _finalize_prepared_data so fixture and streaming paths
-        share identical normalization/packaging logic.
-        """
-        train_examples = self._build_examples(bundle, split="train")
-        validation_examples = self._build_examples(bundle, split="validation")
-        return self._finalize_prepared_data(
-            train_examples,
-            validation_examples,
-            bundle.action_space.action_keys,
-            bundle.dataset_spec.exchanges,
-        )
+        return compat_matrix_first.prepare_training_data(bundle)
 
     def _select_candidate_via_walkforward(
         self,
@@ -450,7 +534,10 @@ class LinearPolicyTrainer:
 
             parameters = self._backend.parameters(
                 state=state,
-                prepared=prepared,
+                action_keys=prepared.action_keys,
+                venue_choices=prepared.venue_choices,
+                feature_mean=prepared.feature_mean,
+                feature_std=prepared.feature_std,
                 config=config,
             )
             validation_artifact = self._build_artifact(
@@ -510,15 +597,20 @@ class LinearPolicyTrainer:
     def _candidate_training_summary(
         self,
         *,
-        prepared: _PreparedTrainingData,
+        prepared: _PreparedTrainingData | _StreamingPreparedData,
         candidate_run: _CandidateTrainingRun,
         selection_run: _CandidateSelectionRun,
         training_run_id: str,
         candidate_rank: int,
         selected_candidate: bool,
         search_budget_summary: SearchBudgetSummary,
+        training_data_flow: str,
+        validation_data_flow: str,
+        normalization_strategy: str,
+        proxy_validation_used: bool,
+        batch_plan: StreamingBatchPlan | None = None,
     ) -> dict[str, object]:
-        return {
+        summary: dict[str, object] = {
             "trainer_name": candidate_run.config.trainer_name,
             "surface_version": "v2",
             "training_backend": self._backend.backend_name,
@@ -550,36 +642,53 @@ class LinearPolicyTrainer:
             "selection_metric": "total_net_return",
             "final_untouched_test_used": False,
             "learned_normalization_fit_split": "train",
+            "training_data_flow": training_data_flow,
+            "validation_data_flow": validation_data_flow,
+            "normalization_strategy": normalization_strategy,
+            "proxy_validation_used": proxy_validation_used,
             "training_loss_history": candidate_run.loss_history,
             "validation_objective_history": candidate_run.validation_history,
             "search_budget_summary": search_budget_summary.model_dump(mode="json"),
         }
-
-    def _build_examples(self, bundle: TrajectoryBundle, split: str) -> list[_TrainingExample]:
-        trajectories = bundle.splits.get(split, [])
-        examples: list[_TrainingExample] = []
-        for trajectory in trajectories:
-            for step in trajectory.steps:
-                features = np.asarray(
-                    observation_feature_vector(step.observation), dtype=np.float32
-                )
-                action_key, venue = _best_label(step)
-                examples.append(_TrainingExample(features=features, action_key=action_key, venue=venue))
-        return examples
+        if batch_plan is not None:
+            summary.update(
+                {
+                    "effective_batch_size": batch_plan.effective_batch_size,
+                    "estimated_batch_bytes": batch_plan.estimated_batch_bytes,
+                    "batches_per_epoch": batch_plan.batches_per_epoch,
+                    "batch_target_bytes": batch_plan.batch_target_bytes,
+                }
+            )
+        else:
+            summary.update(
+                {
+                    "effective_batch_size": None,
+                    "estimated_batch_bytes": None,
+                    "batches_per_epoch": None,
+                    "batch_target_bytes": None,
+                }
+            )
+        return summary
 
     def _validation_report(self, bundle: TrajectoryBundle, artifact: PolicyArtifact) -> EvaluationReport:
         from quantlab_ml.evaluation import EvaluationEngine
 
-        boundary = EvaluationBoundary(
+        return EvaluationEngine(self._evaluation_boundary(bundle.reward_spec.timestamping)).evaluate(
+            bundle,
+            artifact,
+            split="validation",
+        )
+
+    def _evaluation_boundary(self, timestamping: str) -> EvaluationBoundary:
+        return EvaluationBoundary(
             fee_handling="shared_reward_contract",
             funding_handling="carry_from_funding_stream",
             slippage_handling="fixed_bps",
-            fill_assumption_mode=bundle.reward_spec.timestamping,
+            fill_assumption_mode=timestamping,
             timeout_semantics="force_terminal_at_data_end",
             terminal_semantics="trajectory_boundary_is_terminal",
             infeasible_action_treatment="force_abstain",
         )
-        return EvaluationEngine(boundary).evaluate(bundle, artifact, split="validation")
 
     def _build_artifact(
         self,
@@ -774,9 +883,14 @@ class LinearPolicyTrainer:
         ]
         ranked_selections = sorted(selection_runs, key=_selection_ranking_key)
 
-        # Final refit on full train + validation splits
+        final_train_window = StreamingWindow(split_name="train")
+        final_validation_window = StreamingWindow(split_name="validation")
         prepared = self._prepare_training_data_streaming(
-            manifest, directory, TrajectoryDirectoryStore
+            manifest,
+            directory,
+            TrajectoryDirectoryStore,
+            train_window=final_train_window,
+            validation_window=final_validation_window,
         )
 
         candidate_results: list[TrainingCandidateResult] = []
@@ -784,7 +898,11 @@ class LinearPolicyTrainer:
             selected_candidate = candidate_rank == 1
             candidate_run = self._train_candidate_from_manifest(
                 manifest=manifest,
+                directory=directory,
                 prepared=prepared,
+                train_window=final_train_window,
+                validation_window=final_validation_window,
+                store_cls=TrajectoryDirectoryStore,
                 candidate_spec=selection_run.candidate_spec,
                 candidate_index=selection_run.candidate_index,
                 parent_policy_id=parent_policy_id,
@@ -799,6 +917,11 @@ class LinearPolicyTrainer:
                 candidate_rank=candidate_rank,
                 selected_candidate=selected_candidate,
                 search_budget_summary=search_budget_summary,
+                training_data_flow="streaming_batch",
+                validation_data_flow="streaming_evaluation",
+                normalization_strategy="train_only_two_pass_streaming",
+                proxy_validation_used=False,
+                batch_plan=prepared.batch_plan,
             )
             artifact = self._build_artifact_from_manifest(
                 manifest=manifest,
@@ -815,7 +938,7 @@ class LinearPolicyTrainer:
                     candidate_rank=candidate_rank,
                     selected_candidate=selected_candidate,
                 ),
-                prepared=prepared,
+                validation_step_count=prepared.val_step_count,
             )
             candidate_results.append(
                 TrainingCandidateResult(
@@ -867,145 +990,116 @@ class LinearPolicyTrainer:
         }
         return f"trainrun-{hash_payload(run_payload)[:12]}"
 
-    def _build_examples_streaming(
+    def _iter_window_records(
         self,
         directory: Path,
-        split_name: str,
+        window: StreamingWindow,
         *,
-        start: datetime | None = None,
-        end: datetime | None = None,
-        exclusive_end: datetime | None = None,
         store_cls: Any,
-    ) -> list[_TrainingExample]:
-        """Stream JSONL records, apply optional time window, return _TrainingExample list.
+    ) -> Any:
+        for record in store_cls.iter_records(directory, window.split_name):
+            selected_steps = [step for step in record.steps if window.includes(step.event_time)]
+            if not selected_steps:
+                continue
+            trajectory_id = record.trajectory_id
+            if record.split != window.split_name:
+                trajectory_id = f"{window.split_name}-{record.trajectory_id}"
+            yield TrajectoryRecord(
+                trajectory_id=trajectory_id,
+                split=window.split_name,  # type: ignore[arg-type]
+                target_symbol=record.target_symbol,
+                start_time=selected_steps[0].event_time,
+                end_time=selected_steps[-1].event_time,
+                steps=selected_steps,
+                terminal=record.terminal,
+                terminal_reason=record.terminal_reason,
+            )
 
-        Feature extraction is done immediately per step; TrajectoryStep objects
-        are not accumulated.  The returned list holds only (features, action_key,
-        venue) tuples — ~750 floats × 4 bytes = ~3 KB per example.
-        """
-        examples: list[_TrainingExample] = []
-        for record in store_cls.iter_records(directory, split_name):
+    def _count_window_steps(
+        self,
+        directory: Path,
+        window: StreamingWindow,
+        *,
+        store_cls: Any,
+    ) -> int:
+        step_count = 0
+        for record in store_cls.iter_records(directory, window.split_name):
+            step_count += sum(1 for step in record.steps if window.includes(step.event_time))
+        return step_count
+
+    def _streaming_feature_stats(
+        self,
+        directory: Path,
+        window: StreamingWindow,
+        *,
+        store_cls: Any,
+    ) -> StreamingFeatureStats:
+        stats = StreamingFeatureStats()
+        for record in store_cls.iter_records(directory, window.split_name):
             for step in record.steps:
-                t = step.event_time
-                if start is not None and t < start:
+                if not window.includes(step.event_time):
                     continue
-                if end is not None and t > end:
-                    continue
-                if exclusive_end is not None and t >= exclusive_end:
-                    continue
-                features = np.asarray(
-                    observation_feature_vector(step.observation), dtype=np.float32
-                )
-                action_key, venue = _best_label(step)
-                examples.append(_TrainingExample(features=features, action_key=action_key, venue=venue))
-        return examples
+                stats.update(np.asarray(observation_feature_vector(step.observation), dtype=np.float64))
+        if stats.count <= 0:
+            raise ValueError(
+                f"streaming stats window {window.split_name!r} returned 0 qualifying examples"
+            )
+        return stats
+
+    def _streaming_batch_plan(self, *, feature_dim: int, train_step_count: int) -> StreamingBatchPlan:
+        bytes_per_example = (feature_dim * np.dtype(np.float64).itemsize) + _STREAMING_BATCH_LABEL_OVERHEAD_BYTES
+        effective_batch_size = max(
+            1,
+            min(_STREAMING_BATCH_MAX_SIZE, _STREAMING_BATCH_TARGET_BYTES // max(bytes_per_example, 1)),
+        )
+        estimated_batch_bytes = effective_batch_size * bytes_per_example
+        batches_per_epoch = math.ceil(train_step_count / effective_batch_size)
+        return StreamingBatchPlan(
+            batch_target_bytes=_STREAMING_BATCH_TARGET_BYTES,
+            bytes_per_example=bytes_per_example,
+            effective_batch_size=int(effective_batch_size),
+            estimated_batch_bytes=int(estimated_batch_bytes),
+            batches_per_epoch=int(batches_per_epoch),
+        )
 
     def _prepare_training_data_streaming(
         self,
         manifest: TrajectoryManifest,
         directory: Path,
         store_cls: type,
-    ) -> _PreparedTrainingData:
-        """Stream train.jsonl and validation.jsonl to build _PreparedTrainingData."""
-        train_examples = self._build_examples_streaming(
-            directory, "train", store_cls=store_cls
-        )
-        validation_examples = self._build_examples_streaming(
-            directory, "validation", store_cls=store_cls
-        )
-        return self._finalize_prepared_data(
-            train_examples, validation_examples,
-            manifest.action_space.action_keys,
-            manifest.dataset_spec.exchanges,
-        )
-
-    def _finalize_prepared_data(
-        self,
-        train_examples: list[_TrainingExample],
-        validation_examples: list[_TrainingExample],
-        action_keys: list[str],
-        venue_choices: list[str],
-    ) -> _PreparedTrainingData:
-        """Convert lists of _TrainingExample to memory-efficient numpy matrices.
-
-        Strategy (production-scale, e.g. 9590 steps, 680K features):
-        1. Extract scalar labels first (tiny arrays).
-        2. Pre-allocate float32 matrix and fill row-by-row.
-        3. Delete the examples list immediately after filling (frees ~26 GB).
-        4. Normalize in-place (no second copy).
-        5. Repeat for validation (smaller: ~6.5 GB).
-
-        Peak RAM: ~52 GB during fill (examples + matrix coexist briefly).
-        After finalize: ~26 GB train + ~6.5 GB val + small arrays.
-        """
-        if not train_examples:
-            raise ValueError("train split is empty")
-        if not validation_examples:
+        *,
+        train_window: StreamingWindow,
+        validation_window: StreamingWindow,
+    ) -> _StreamingPreparedData:
+        stats = self._streaming_feature_stats(directory, train_window, store_cls=store_cls)
+        feature_mean, feature_std = stats.finalize()
+        val_step_count = self._count_window_steps(directory, validation_window, store_cls=store_cls)
+        if val_step_count <= 0:
             raise ValueError("validation split is empty")
-
-        n_train = len(train_examples)
-        n_val = len(validation_examples)
-        feat_dim = int(np.asarray(train_examples[0].features).shape[0])
-
-        # --- train labels (tiny; extract before del) ---
-        action_labels = np.asarray(
-            [action_keys.index(e.action_key) for e in train_examples], dtype=np.int64
+        batch_plan = self._streaming_batch_plan(
+            feature_dim=stats.feature_dim,
+            train_step_count=stats.count,
         )
-        venue_mask = np.asarray([e.venue is not None for e in train_examples], dtype=np.bool_)
-        venue_labels = np.asarray(
-            [venue_choices.index(e.venue) if e.venue is not None else 0 for e in train_examples],
-            dtype=np.int64,
-        )
-
-        # --- train matrix: pre-allocate float32, fill row-by-row, then del ---
-        train_matrix = np.empty((n_train, feat_dim), dtype=np.float32)
-        for i, ex in enumerate(train_examples):
-            train_matrix[i] = ex.features
-        del train_examples
-        gc.collect()
-
-        # --- normalization stats (from train only; fit on train, never val) ---
-        feature_mean = train_matrix.mean(axis=0)
-        feature_std = train_matrix.std(axis=0)
-        feature_std = np.where(feature_std < 1e-6, 1.0, feature_std).astype(np.float32)
-        feature_mean = feature_mean.astype(np.float32)
-
-        # --- normalize train in-place (no third copy) ---
-        train_matrix -= feature_mean
-        train_matrix /= feature_std
-        normalized_train = train_matrix  # same object
-
-        # --- val labels + matrix ---
-        val_action_labels = np.asarray(
-            [action_keys.index(e.action_key) for e in validation_examples], dtype=np.int64
-        )
-        val_matrix = np.empty((n_val, feat_dim), dtype=np.float32)
-        for i, ex in enumerate(validation_examples):
-            val_matrix[i] = ex.features
-        del validation_examples
-        gc.collect()
-        val_matrix -= feature_mean
-        val_matrix /= feature_std
-        normalized_val = val_matrix  # same object
-
         logger.info(
-            "training_data_prepared train_examples=%d validation_examples=%d "
-            "feature_dim=%d action_count=%d venue_count=%d",
-            n_train, n_val, feat_dim, len(action_keys), len(venue_choices),
+            "streaming_training_data_prepared train_examples=%d validation_examples=%d "
+            "feature_dim=%d effective_batch_size=%d estimated_batch_bytes=%d "
+            "batches_per_epoch=%d batch_target_bytes=%d",
+            stats.count,
+            val_step_count,
+            stats.feature_dim,
+            batch_plan.effective_batch_size,
+            batch_plan.estimated_batch_bytes,
+            batch_plan.batches_per_epoch,
+            batch_plan.batch_target_bytes,
         )
-        return _PreparedTrainingData(
-            train_step_count=n_train,
-            val_step_count=n_val,
-            action_keys=action_keys,
-            venue_choices=venue_choices,
-            normalized_train=normalized_train,
-            normalized_val=normalized_val,
+        return _StreamingPreparedData(
+            train_step_count=stats.count,
+            val_step_count=val_step_count,
+            action_keys=manifest.action_space.action_keys,
+            venue_choices=manifest.dataset_spec.exchanges,
             feature_mean=feature_mean,
             feature_std=feature_std,
-            action_labels=action_labels,
-            val_action_labels=val_action_labels,
-            venue_mask=venue_mask,
-            venue_labels=venue_labels,
+            batch_plan=batch_plan,
         )
 
     def _select_candidate_via_walkforward_streaming(
@@ -1028,29 +1122,31 @@ class LinearPolicyTrainer:
             purge_cutoff = fold.validation_window.start - (
                 interval * fold.purge_width_steps
             )
-            train_examples = self._build_examples_streaming(
-                directory,
-                "development",
+            train_window = StreamingWindow(
+                split_name="development",
                 start=fold.train_window.start,
                 end=fold.train_window.end,
                 exclusive_end=purge_cutoff if fold.purge_width_steps > 0 else None,
-                store_cls=TrajectoryDirectoryStore,
             )
-            val_examples = self._build_examples_streaming(
-                directory,
-                "development",
+            validation_window = StreamingWindow(
+                split_name="development",
                 start=fold.validation_window.start,
                 end=fold.validation_window.end,
-                store_cls=TrajectoryDirectoryStore,
             )
-            fold_prepared = self._finalize_prepared_data(
-                train_examples, val_examples,
-                manifest.action_space.action_keys,
-                manifest.dataset_spec.exchanges,
+            fold_prepared = self._prepare_training_data_streaming(
+                manifest,
+                directory,
+                TrajectoryDirectoryStore,
+                train_window=train_window,
+                validation_window=validation_window,
             )
             fold_run = self._train_candidate_from_manifest(
                 manifest=manifest,
+                directory=directory,
                 prepared=fold_prepared,
+                train_window=train_window,
+                validation_window=validation_window,
+                store_cls=TrajectoryDirectoryStore,
                 candidate_spec=candidate_spec,
                 candidate_index=candidate_index,
                 parent_policy_id=parent_policy_id,
@@ -1065,11 +1161,6 @@ class LinearPolicyTrainer:
                     validation_step_count=fold_prepared.val_step_count,
                 )
             )
-            # Free the large normalized matrices before the next fold allocates
-            # its own (fold_k normalized_train is 22-26 GB; without explicit
-            # del, Python's refcount may not release it before fold_k+1 alloc).
-            del fold_prepared
-            gc.collect()
         selection_total_net_return = _weighted_mean(
             [s.validation_total_net_return for s in fold_scores],
             [s.validation_step_count for s in fold_scores],
@@ -1098,25 +1189,18 @@ class LinearPolicyTrainer:
         self,
         *,
         manifest: TrajectoryManifest,
-        prepared: _PreparedTrainingData,
+        directory: Path,
+        prepared: _StreamingPreparedData,
+        train_window: StreamingWindow,
+        validation_window: StreamingWindow,
+        store_cls: Any,
         candidate_spec: TrainingCandidateSpec,
         candidate_index: int,
         parent_policy_id: str | None,
         training_run_id: str,
         code_commit_hash: str,
     ) -> _CandidateTrainingRun:
-        """Train all epochs using streaming-compatible proxy validation.
-
-        Unlike the in-memory path (_train_candidate), this method does NOT do
-        per-epoch early stopping via the full EvaluationEngine.  It trains
-        config.epochs epochs and scores the final model with a cross-entropy
-        proxy on validation features (_compute_proxy_validation_score).
-
-        The proxy metric has the same optimisation direction as actual performance
-        and is sufficient for fold candidate ranking.  The final selected policy
-        is evaluated accurately by the 'evaluate' CLI command (EvaluationEngine on
-        final_untouched_test.jsonl).
-        """
+        """PRODUCTION PATH — streaming batch training with streaming validation."""
         config = self.config.model_copy(
             update={
                 "seed": candidate_spec.seed,
@@ -1131,31 +1215,196 @@ class LinearPolicyTrainer:
             venue_count=len(prepared.venue_choices),
             feature_dim=prepared.feature_dim,
         )
+        logger.info(
+            "streaming_training_candidate_started candidate_index=%d seed=%d learning_rate=%.6f "
+            "l2_weight=%.6f effective_batch_size=%d estimated_batch_bytes=%d "
+            "batches_per_epoch=%d batch_target_bytes=%d",
+            candidate_index,
+            candidate_spec.seed,
+            candidate_spec.learning_rate,
+            candidate_spec.l2_weight,
+            prepared.batch_plan.effective_batch_size,
+            prepared.batch_plan.estimated_batch_bytes,
+            prepared.batch_plan.batches_per_epoch,
+            prepared.batch_plan.batch_target_bytes,
+        )
         loss_history: list[float] = []
-
+        validation_history: list[float] = []
+        best_validation_total_net_return: float | None = None
+        best_parameters: LinearPolicyParameters | None = None
+        best_validation_score: PolicyScore | None = None
+        best_epoch = 0
         for epoch in range(1, config.epochs + 1):
-            total_loss = self._backend.step(state=state, prepared=prepared, config=config)
+            total_loss = self._train_streaming_epoch(
+                directory=directory,
+                prepared=prepared,
+                train_window=train_window,
+                store_cls=store_cls,
+                state=state,
+                config=config,
+            )
             loss_history.append(total_loss)
+            parameters = self._backend.parameters(
+                state=state,
+                action_keys=prepared.action_keys,
+                venue_choices=prepared.venue_choices,
+                feature_mean=prepared.feature_mean,
+                feature_std=prepared.feature_std,
+                config=config,
+            )
+            validation_artifact = self._build_artifact_from_manifest(
+                manifest=manifest,
+                config=config,
+                training_run_id=training_run_id,
+                code_commit_hash=code_commit_hash,
+                parameters=parameters,
+                parent_policy_id=parent_policy_id,
+                validation_total_net_return=0.0,
+                validation_score=None,
+                training_summary={},
+                search_metadata=None,
+                validation_step_count=prepared.val_step_count,
+            )
+            validation_report = self._validation_report_from_manifest(
+                manifest=manifest,
+                directory=directory,
+                artifact=validation_artifact,
+                validation_window=validation_window,
+                store_cls=store_cls,
+            )
+            validation_score = PolicyScorer().score(validation_report)
+            validation_history.append(validation_report.total_net_return)
+            is_best = (
+                best_validation_total_net_return is None
+                or validation_report.total_net_return > best_validation_total_net_return
+            )
+            epoch_result = StreamingEpochResult(
+                epoch=epoch,
+                total_loss=total_loss,
+                validation_report=validation_report,
+                validation_score=validation_score,
+                is_best=is_best,
+            )
+            if epoch_result.is_best:
+                best_epoch = epoch
+                best_parameters = parameters
+                best_validation_total_net_return = validation_report.total_net_return
+                best_validation_score = validation_score
 
-        parameters = self._backend.parameters(state=state, prepared=prepared, config=config)
-        proxy_return, proxy_score = _compute_proxy_validation_score(prepared, parameters)
-
+        assert best_parameters is not None
+        assert best_validation_total_net_return is not None
+        assert best_validation_score is not None
         logger.info(
             "training_candidate_completed candidate_index=%d seed=%d "
-            "epochs=%d proxy_validation_return=%.6f training_backend=%s",
-            candidate_index, candidate_spec.seed, config.epochs,
-            proxy_return, self._backend.backend_name,
+            "best_epoch=%d best_validation_total_net_return=%.6f "
+            "best_validation_composite_rank=%.6f effective_batch_size=%d "
+            "estimated_batch_bytes=%d batches_per_epoch=%d training_backend=%s",
+            candidate_index,
+            candidate_spec.seed,
+            best_epoch,
+            best_validation_total_net_return,
+            best_validation_score.composite_rank,
+            prepared.batch_plan.effective_batch_size,
+            prepared.batch_plan.estimated_batch_bytes,
+            prepared.batch_plan.batches_per_epoch,
+            self._backend.backend_name,
         )
         return _CandidateTrainingRun(
             config=config,
             candidate_spec=candidate_spec,
             candidate_index=candidate_index,
-            best_epoch=config.epochs,
-            best_parameters=parameters,
-            best_validation_total_net_return=proxy_return,
-            best_validation_score=proxy_score,
+            best_epoch=best_epoch,
+            best_parameters=best_parameters,
+            best_validation_total_net_return=best_validation_total_net_return,
+            best_validation_score=best_validation_score,
             loss_history=loss_history,
-            validation_history=[],
+            validation_history=validation_history,
+        )
+
+    def _train_streaming_epoch(
+        self,
+        *,
+        directory: Path,
+        prepared: _StreamingPreparedData,
+        train_window: StreamingWindow,
+        store_cls: Any,
+        state: object,
+        config: TrainingConfig,
+    ) -> float:
+        batch_size = prepared.batch_plan.effective_batch_size
+        action_key_to_index = {key: idx for idx, key in enumerate(prepared.action_keys)}
+        venue_to_index = {venue: idx for idx, venue in enumerate(prepared.venue_choices)}
+        feature_batch = np.empty((batch_size, prepared.feature_dim), dtype=np.float64)
+        action_batch = np.empty(batch_size, dtype=np.int64)
+        venue_mask_batch = np.empty(batch_size, dtype=np.bool_)
+        venue_batch = np.empty(batch_size, dtype=np.int64)
+        weighted_loss_total = 0.0
+        seen = 0
+        batch_row = 0
+
+        for record in store_cls.iter_records(directory, train_window.split_name):
+            for step in record.steps:
+                if not train_window.includes(step.event_time):
+                    continue
+                features = np.asarray(observation_feature_vector(step.observation), dtype=np.float64)
+                features -= prepared.feature_mean
+                features /= prepared.feature_std
+                action_key, venue = _best_label(step)
+                feature_batch[batch_row] = features
+                action_batch[batch_row] = action_key_to_index[action_key]
+                venue_mask_batch[batch_row] = venue is not None
+                venue_batch[batch_row] = venue_to_index[venue] if venue is not None else 0
+                batch_row += 1
+                if batch_row == batch_size:
+                    batch_loss = self._backend.batch_step(
+                        state=state,
+                        batch_features=feature_batch,
+                        batch_action_labels=action_batch,
+                        batch_venue_mask=venue_mask_batch,
+                        batch_venue_labels=venue_batch,
+                        config=config,
+                    )
+                    weighted_loss_total += batch_loss * batch_row
+                    seen += batch_row
+                    batch_row = 0
+
+        if batch_row > 0:
+            batch_loss = self._backend.batch_step(
+                state=state,
+                batch_features=feature_batch[:batch_row],
+                batch_action_labels=action_batch[:batch_row],
+                batch_venue_mask=venue_mask_batch[:batch_row],
+                batch_venue_labels=venue_batch[:batch_row],
+                config=config,
+            )
+            weighted_loss_total += batch_loss * batch_row
+            seen += batch_row
+
+        if seen <= 0:
+            raise ValueError("train split is empty")
+        return float(weighted_loss_total / seen)
+
+    def _validation_report_from_manifest(
+        self,
+        *,
+        manifest: TrajectoryManifest,
+        directory: Path,
+        artifact: PolicyArtifact,
+        validation_window: StreamingWindow,
+        store_cls: Any,
+    ) -> EvaluationReport:
+        from quantlab_ml.evaluation import EvaluationEngine
+
+        engine = EvaluationEngine(self._evaluation_boundary(manifest.reward_spec.timestamping))
+        return engine.evaluate_records(
+            manifest.dataset_spec,
+            manifest.reward_spec,
+            self._iter_window_records(
+                directory,
+                validation_window,
+                store_cls=store_cls,
+            ),
+            artifact,
         )
 
     def _build_artifact_from_manifest(
@@ -1171,7 +1420,7 @@ class LinearPolicyTrainer:
         validation_score: PolicyScore | None,
         training_summary: dict[str, object],
         search_metadata: _ArtifactSearchMetadata | None,
-        prepared: _PreparedTrainingData,
+        validation_step_count: int,
     ) -> PolicyArtifact:
         payload_blob = parameters.model_dump_json()
         payload = OpaquePolicyPayload(
@@ -1214,8 +1463,7 @@ class LinearPolicyTrainer:
         if target_asset == DYNAMIC_TARGET_ASSET:
             required_context = {"target_symbol_source": "observation.target_symbol"}
 
-        validation_step_count = max(prepared.val_step_count, 1)
-        expected_return_score = validation_total_net_return / validation_step_count
+        expected_return_score = validation_total_net_return / max(validation_step_count, 1)
         risk_score = best_effort_metric(validation_score, "risk_score")
         turnover_score = best_effort_metric(validation_score, "turnover_score")
         confidence_or_quality_score = min(
@@ -1322,46 +1570,6 @@ class _ArtifactSearchMetadata:
 
 
 @dataclass(slots=True)
-class _TrainingExample:
-    features: np.ndarray  # float32, shape (feature_dim,) -- compact; NOT list[float]
-    action_key: str
-    venue: str | None
-
-
-@dataclass(slots=True)
-class _PreparedTrainingData:
-    """Normalized training and validation matrices ready for gradient computation.
-
-    Memory layout (production scale, e.g. 9590 train + 2390 val steps, 680 K features):
-      normalized_train : float32  (n_train, feat_dim)  ~26 GB
-      normalized_val   : float32  (n_val,   feat_dim)  ~6.5 GB
-      feature_mean/std : float32  (feat_dim,)           ~3 MB each
-      label arrays     : int64/bool                     tiny
-
-    The raw _TrainingExample lists are intentionally discarded in
-    _finalize_prepared_data() after building these matrices to keep peak RAM
-    within the 75 GB cgroup limit.
-    """
-
-    train_step_count: int
-    val_step_count: int
-    action_keys: list[str]
-    venue_choices: list[str]
-    normalized_train: np.ndarray   # float32, shape (n_train, feat_dim)
-    normalized_val: np.ndarray     # float32, shape (n_val,   feat_dim)
-    feature_mean: np.ndarray       # float32, shape (feat_dim,)
-    feature_std: np.ndarray        # float32, shape (feat_dim,)
-    action_labels: np.ndarray      # int64,   shape (n_train,)
-    val_action_labels: np.ndarray  # int64,   shape (n_val,)
-    venue_mask: np.ndarray         # bool,    shape (n_train,)
-    venue_labels: np.ndarray       # int64,   shape (n_train,)
-
-    @property
-    def feature_dim(self) -> int:
-        return int(self.normalized_train.shape[1])
-
-
-@dataclass(slots=True)
 class _CandidateTrainingRun:
     config: TrainingConfig
     candidate_spec: TrainingCandidateSpec
@@ -1397,11 +1605,26 @@ class _LinearTrainingBackend:
     ) -> float:
         raise NotImplementedError
 
+    def batch_step(
+        self,
+        *,
+        state: object,
+        batch_features: np.ndarray,
+        batch_action_labels: np.ndarray,
+        batch_venue_mask: np.ndarray,
+        batch_venue_labels: np.ndarray,
+        config: TrainingConfig,
+    ) -> float:
+        raise NotImplementedError
+
     def parameters(
         self,
         *,
         state: object,
-        prepared: _PreparedTrainingData,
+        action_keys: list[str],
+        venue_choices: list[str],
+        feature_mean: np.ndarray,
+        feature_std: np.ndarray,
         config: TrainingConfig,
     ) -> LinearPolicyParameters:
         raise NotImplementedError
@@ -1452,23 +1675,61 @@ class _NumpyLinearTrainingBackend(_LinearTrainingBackend):
         prepared: _PreparedTrainingData,
         config: TrainingConfig,
     ) -> float:
-        training_state = _expect_numpy_state(state)
-        action_logits = prepared.normalized_train @ training_state.action_weight.T + training_state.action_bias
-        action_probabilities = _softmax_matrix(action_logits)
-        action_loss = _cross_entropy_loss(action_probabilities, prepared.action_labels)
-        action_gradient = action_probabilities.copy()
-        action_gradient[np.arange(len(prepared.action_labels)), prepared.action_labels] -= 1.0
-        action_gradient /= len(prepared.action_labels)
+        return self._step_arrays(
+            state=state,
+            batch_features=prepared.normalized_train.astype(np.float64),
+            batch_action_labels=prepared.action_labels,
+            batch_venue_mask=prepared.venue_mask,
+            batch_venue_labels=prepared.venue_labels,
+            config=config,
+        )
 
-        action_weight_gradient = action_gradient.T @ prepared.normalized_train
+    def batch_step(
+        self,
+        *,
+        state: object,
+        batch_features: np.ndarray,
+        batch_action_labels: np.ndarray,
+        batch_venue_mask: np.ndarray,
+        batch_venue_labels: np.ndarray,
+        config: TrainingConfig,
+    ) -> float:
+        return self._step_arrays(
+            state=state,
+            batch_features=batch_features,
+            batch_action_labels=batch_action_labels,
+            batch_venue_mask=batch_venue_mask,
+            batch_venue_labels=batch_venue_labels,
+            config=config,
+        )
+
+    def _step_arrays(
+        self,
+        *,
+        state: object,
+        batch_features: np.ndarray,
+        batch_action_labels: np.ndarray,
+        batch_venue_mask: np.ndarray,
+        batch_venue_labels: np.ndarray,
+        config: TrainingConfig,
+    ) -> float:
+        training_state = _expect_numpy_state(state)
+        action_logits = batch_features @ training_state.action_weight.T + training_state.action_bias
+        action_probabilities = _softmax_matrix(action_logits)
+        action_loss = _cross_entropy_loss(action_probabilities, batch_action_labels)
+        action_gradient = action_probabilities.copy()
+        action_gradient[np.arange(len(batch_action_labels)), batch_action_labels] -= 1.0
+        action_gradient /= len(batch_action_labels)
+
+        action_weight_gradient = action_gradient.T @ batch_features
         action_bias_gradient = action_gradient.sum(axis=0)
 
         venue_loss = 0.0
         venue_weight_gradient = np.zeros_like(training_state.venue_weight)
         venue_bias_gradient = np.zeros_like(training_state.venue_bias)
-        if prepared.venue_mask.any():
-            masked_inputs = prepared.normalized_train[prepared.venue_mask]
-            masked_labels = prepared.venue_labels[prepared.venue_mask]
+        if batch_venue_mask.any():
+            masked_inputs = batch_features[batch_venue_mask]
+            masked_labels = batch_venue_labels[batch_venue_mask]
             venue_logits = masked_inputs @ training_state.venue_weight.T + training_state.venue_bias
             venue_probabilities = _softmax_matrix(venue_logits)
             venue_loss = _cross_entropy_loss(venue_probabilities, masked_labels)
@@ -1496,12 +1757,18 @@ class _NumpyLinearTrainingBackend(_LinearTrainingBackend):
         self,
         *,
         state: object,
-        prepared: _PreparedTrainingData,
+        action_keys: list[str],
+        venue_choices: list[str],
+        feature_mean: np.ndarray,
+        feature_std: np.ndarray,
         config: TrainingConfig,
     ) -> LinearPolicyParameters:
         training_state = _expect_numpy_state(state)
         return _build_linear_policy_parameters(
-            prepared=prepared,
+            action_keys=action_keys,
+            venue_choices=venue_choices,
+            feature_mean=feature_mean,
+            feature_std=feature_std,
             config=config,
             action_weight=training_state.action_weight.tolist(),
             action_bias=training_state.action_bias.tolist(),
@@ -1574,10 +1841,6 @@ class _TorchLinearTrainingBackend(_LinearTrainingBackend):
         is seen ~21 times on average (200 * 1024 / n_train), sufficient for
         cross-entropy minimization on a linear model.
         """
-        training_state = _expect_torch_state(state)
-        torch_module = self._torch
-        device = self.device_resolution.compute_device
-
         n = prepared.train_step_count
         batch_size = min(1024, n)
 
@@ -1589,20 +1852,34 @@ class _TorchLinearTrainingBackend(_LinearTrainingBackend):
             batch_idx = np.arange(n, dtype=np.int64)  # all examples, deterministic order
         else:
             batch_idx = np.random.randint(0, n, size=batch_size)  # random subsample
-        x_batch = torch_module.tensor(
-            prepared.normalized_train[batch_idx].astype(np.float64),
-            dtype=torch_module.float64,
-            device=device,
+        return self.batch_step(
+            state=state,
+            batch_features=prepared.normalized_train[batch_idx].astype(np.float64),
+            batch_action_labels=prepared.action_labels[batch_idx],
+            batch_venue_mask=prepared.venue_mask[batch_idx],
+            batch_venue_labels=prepared.venue_labels[batch_idx],
+            config=config,
         )
-        labels_batch = torch_module.tensor(
-            prepared.action_labels[batch_idx], dtype=torch_module.int64, device=device,
-        )
-        venue_mask_batch = torch_module.tensor(
-            prepared.venue_mask[batch_idx], dtype=torch_module.bool, device=device,
-        )
-        venue_labels_batch = torch_module.tensor(
-            prepared.venue_labels[batch_idx], dtype=torch_module.int64, device=device,
-        )
+
+    def batch_step(
+        self,
+        *,
+        state: object,
+        batch_features: np.ndarray,
+        batch_action_labels: np.ndarray,
+        batch_venue_mask: np.ndarray,
+        batch_venue_labels: np.ndarray,
+        config: TrainingConfig,
+    ) -> float:
+        training_state = _expect_torch_state(state)
+        torch_module = self._torch
+        device = self.device_resolution.compute_device
+        batch_size = int(batch_action_labels.shape[0])
+
+        x_batch = torch_module.tensor(batch_features, dtype=torch_module.float64, device=device)
+        labels_batch = torch_module.tensor(batch_action_labels, dtype=torch_module.int64, device=device)
+        venue_mask_batch = torch_module.tensor(batch_venue_mask, dtype=torch_module.bool, device=device)
+        venue_labels_batch = torch_module.tensor(batch_venue_labels, dtype=torch_module.int64, device=device)
 
         action_logits = x_batch @ training_state.action_weight.transpose(0, 1) + training_state.action_bias
         action_probabilities = torch_module.softmax(action_logits, dim=1)
@@ -1633,7 +1910,7 @@ class _TorchLinearTrainingBackend(_LinearTrainingBackend):
             venue_gradient[
                 torch_module.arange(masked_size, device=device), masked_labels,
             ] -= 1.0
-            venue_gradient /= batch_size  # normalize by full batch for gradient consistency
+            venue_gradient /= batch_size
             venue_weight_gradient = venue_gradient.transpose(0, 1) @ masked_inputs
             venue_bias_gradient = venue_gradient.sum(dim=0)
 
@@ -1655,12 +1932,18 @@ class _TorchLinearTrainingBackend(_LinearTrainingBackend):
         self,
         *,
         state: object,
-        prepared: _PreparedTrainingData,
+        action_keys: list[str],
+        venue_choices: list[str],
+        feature_mean: np.ndarray,
+        feature_std: np.ndarray,
         config: TrainingConfig,
     ) -> LinearPolicyParameters:
         training_state = _expect_torch_state(state)
         return _build_linear_policy_parameters(
-            prepared=prepared,
+            action_keys=action_keys,
+            venue_choices=venue_choices,
+            feature_mean=feature_mean,
+            feature_std=feature_std,
             config=config,
             action_weight=training_state.action_weight.detach().cpu().tolist(),
             action_bias=training_state.action_bias.detach().cpu().tolist(),
@@ -1727,10 +2010,6 @@ def _torch_cross_entropy_loss(torch_module: Any, probabilities: Any, labels: Any
     return -torch_module.mean(torch_module.log(clipped))
 
 
-def _normalize(matrix: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
-    return (matrix - mean) / std
-
-
 def _initial_parameter_arrays(
     *,
     seed: int,
@@ -1746,54 +2025,12 @@ def _initial_parameter_arrays(
     return action_weight, action_bias, venue_weight, venue_bias
 
 
-def _compute_proxy_validation_score(
-    prepared: _PreparedTrainingData,
-    parameters: LinearPolicyParameters,
-) -> tuple[float, "PolicyScore"]:
-    """Compute a cross-entropy proxy validation score (streaming training path).
-
-    Uses prepared.normalized_val and prepared.val_action_labels (precomputed in
-    _finalize_prepared_data) to avoid rebuilding the val matrix every epoch.
-
-    Deliberate trade-off: no fee/slippage/funding accounting.  Used for fold
-    candidate RANKING only.  The final selected policy is evaluated accurately
-    by the 'evaluate' CLI command (full EvaluationEngine, final_untouched_test).
-    """
-    if prepared.val_step_count == 0:
-        proxy_return = 0.0
-        proxy_rank = 0.5
-    else:
-        W = np.array(parameters.action_weight, dtype=np.float64)   # (A, F)
-        b = np.array(parameters.action_bias, dtype=np.float64)      # (A,)
-        # normalized_val is float32; upcast to float64 for matrix multiply precision
-        norm_val = prepared.normalized_val.astype(np.float64)
-        logits = norm_val @ W.T + b                                 # (N, A)
-        probs = _softmax_matrix(logits)
-        val_labels = prepared.val_action_labels
-        ce = _cross_entropy_loss(probs, val_labels)
-        proxy_return = -ce
-        # Map CE to [0, 1]: lower CE → higher rank; CE=log(A) → 0.5 (random baseline)
-        random_ce = float(np.log(max(len(prepared.action_keys), 2)))
-        proxy_rank = float(np.clip(1.0 - ce / max(random_ce * 2.0, 1e-6), 0.0, 0.99))
-
-    stub_id = f"proxy-{abs(hash(proxy_return)):012x}"
-    score = PolicyScore(
-        policy_id=stub_id,
-        evaluation_id=stub_id,
-        created_at=utcnow(),
-        expected_return_score=proxy_return,
-        risk_score=0.5,
-        turnover_score=0.5,
-        stability_score=proxy_rank,
-        applicability_score=0.5,
-        composite_rank=proxy_rank,
-    )
-    return proxy_return, score
-
-
 def _build_linear_policy_parameters(
     *,
-    prepared: _PreparedTrainingData,
+    action_keys: list[str],
+    venue_choices: list[str],
+    feature_mean: np.ndarray,
+    feature_std: np.ndarray,
     config: TrainingConfig,
     action_weight: list[list[float]],
     action_bias: list[float],
@@ -1801,10 +2038,10 @@ def _build_linear_policy_parameters(
     venue_bias: list[float],
 ) -> LinearPolicyParameters:
     return LinearPolicyParameters(
-        action_keys=prepared.action_keys,
-        venue_choices=prepared.venue_choices,
-        feature_mean=prepared.feature_mean.tolist(),
-        feature_std=prepared.feature_std.tolist(),
+        action_keys=action_keys,
+        venue_choices=venue_choices,
+        feature_mean=feature_mean.tolist(),
+        feature_std=feature_std.tolist(),
         action_weight=action_weight,
         action_bias=action_bias,
         venue_weight=venue_weight,

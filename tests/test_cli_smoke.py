@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 from quantlab_ml.cli.app import app
 from quantlab_ml.common import load_model
 from quantlab_ml.contracts import InferenceArtifactExport, PolicyArtifact, PromotionEvidence, ReproducibilityMetadata
+from quantlab_ml.evaluation import EvaluationEngine
 from quantlab_ml.registry import LocalRegistryStore
 
 
@@ -345,6 +346,76 @@ def test_cli_audit_continuity_reports_core_backend_status(
     assert audit["active_training_backend_counts"] == {"pytorch": 1}
     assert audit["active_numpy_training_backend_count"] == 0
     assert audit["ready_to_close_numpy_continuity_window"] is True
+
+
+def test_cli_evaluate_directory_uses_streaming_api(
+    repo_root: Path,
+    fixture_path: Path,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    trajectories = tmp_path / "outputs" / "trajectories"
+    policy = tmp_path / "outputs" / "policy.json"
+    evaluation = tmp_path / "outputs" / "evaluation.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "build-trajectories",
+            "--input",
+            str(fixture_path),
+            "--output",
+            str(trajectories),
+            "--data-config",
+            str(repo_root / "configs" / "data" / "fixture.yaml"),
+            "--training-config",
+            str(repo_root / "configs" / "training" / "default.yaml"),
+            "--reward-config",
+            str(repo_root / "configs" / "reward" / "default.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    result = runner.invoke(
+        app,
+        [
+            "train",
+            "--trajectories",
+            str(trajectories),
+            "--output",
+            str(policy),
+            "--training-config",
+            str(repo_root / "configs" / "training" / "default.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    called = {"count": 0}
+    original = EvaluationEngine.evaluate_records
+
+    def wrapped(self, dataset_spec, reward_spec, trajectories_iter, artifact):
+        called["count"] += 1
+        return original(self, dataset_spec, reward_spec, trajectories_iter, artifact)
+
+    monkeypatch.setattr(EvaluationEngine, "evaluate_records", wrapped)
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "--trajectories",
+            str(trajectories),
+            "--policy",
+            str(policy),
+            "--output",
+            str(evaluation),
+            "--evaluation-config",
+            str(repo_root / "configs" / "evaluation" / "default.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert called["count"] == 1
 
 
 def _tag_map(tags: list[str]) -> dict[str, str]:

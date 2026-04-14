@@ -198,6 +198,14 @@ Inside `training_summary`, confirm:
 - `selection_fold_count > 0`
 - `final_untouched_test_used = false`
 - `learned_normalization_fit_split = train`
+- `training_data_flow = streaming_batch`
+- `validation_data_flow = streaming_evaluation`
+- `normalization_strategy = train_only_two_pass_streaming`
+- `proxy_validation_used = false`
+- `effective_batch_size > 0`
+- `estimated_batch_bytes > 0`
+- `batches_per_epoch > 0`
+- `batch_target_bytes = 134217728`
 
 ## Acceptance criteria
 
@@ -207,6 +215,8 @@ The first controlled run is successful when:
 - the full artifact chain is written successfully
 - training records `cuda` as the selected device
 - walk-forward and train-only normalization evidence remain intact
+- training logs expose `effective_batch_size`, `estimated_batch_bytes`, `batches_per_epoch`, and `batch_target_bytes`
+- no phase exits with `137` or other OOM-kill evidence
 
 This run does not need:
 - positive economic score

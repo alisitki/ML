@@ -315,6 +315,8 @@ class RewardEngine:
     ) -> RewardContext | None:
         if reward_context is None:
             return None
+        if venue is not None and venue not in reward_context.venues:
+            return reward_context
         return RewardContext(
             **reward_context.model_dump(exclude={"selected_venue"}),
             selected_venue=venue,

@@ -292,6 +292,39 @@ Status values:
   - production-profile runs no longer read like laptop-sized local work
   - artifact/report expectations are explicit before promotion-facing training begins
 
+### QL-019
+- title: Stream production trajectory build output instead of assembling a full bundle
+- status: done
+- depends_on: QL-018
+- scope: persist the canonical build output as manifest plus per-split JSONL so production-size builds do not require an in-memory `TrajectoryBundle`
+- completion_notes:
+  - `TrajectoryBuilder.build_to_directory()` now writes `manifest.json` plus `development/train/validation/final_untouched_test` JSONL files through `TrajectoryDirectoryStore`
+  - line-size guardrails now warn at 512 MB and fail at 2 GB so oversized trajectory records surface immediately
+  - `TrajectoryBundle` and `TrajectoryStore` are now explicitly marked FIXTURE / TEST COMPAT ONLY instead of reading like the default path
+- done_when:
+  - production build writes a streaming trajectory directory
+  - production build no longer depends on full-bundle assembly
+  - compat boundaries are explicit in code
+
+### QL-020
+- title: Replace the active prod matrix-first trainer path with fold-aware streaming batch training
+- status: done
+- depends_on: QL-019, D-013, D-014
+- scope: remove giant dense train/validation matrix assembly from the active prod trainer/evaluate path while preserving fold selection, purge discipline, train-only normalization, runtime payload compatibility, and final untouched test separation
+- blocker_reason:
+  - streaming JSONL alone did not fix the real blocker because the active prod trainer still rebuilt full dense train/validation matrices and degraded validation to a proxy score
+  - overlap leakage and backtest-overfitting risk remain underdocumented if prod validation differs from the real evaluation path
+- completion_notes:
+  - prod `train_search_from_directory()` now uses train-only two-pass streaming stats, deterministic bounded batches, and true streaming validation/evaluation rather than proxy validation
+  - matrix-first preparation now lives only in explicit `training/compat_matrix_first.py` helpers with a grep-able `_FIXTURE_TEST_COMPAT_ONLY` sentinel; guard tests verify prod directory train does not call them
+  - prod logs and `training_summary` now expose `effective_batch_size`, `estimated_batch_bytes`, `batches_per_epoch`, `batch_target_bytes`, `training_data_flow`, `validation_data_flow`, and `proxy_validation_used=false`
+  - directory `evaluate` now streams `final_untouched_test` through `EvaluationEngine.evaluate_records()` instead of materializing the split list first
+- done_when:
+  - prod trainer never assembles a giant dense train or validation matrix
+  - prod validation uses the real streaming evaluation path
+  - train-only normalization remains explicit and test-covered
+  - compat/test matrix-first helpers cannot silently re-enter the prod path
+
 ## Parked items
 
 ### QL-100

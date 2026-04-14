@@ -6,7 +6,7 @@ Verifies:
     3. iter_records() round-trips records correctly (data identity).
     4. build_to_directory() produces valid JSONL directory from fixture events.
     5. TrajectoryManifest is written alongside split files.
-    6. Train streaming path (train_search_from_directory) runs without error.
+    6. Train streaming path uses real streaming validation and visible batch metrics.
     7. TrajectoryStore (compat) is NOT used in any of the above.
 
 All tests use fixture data only — no production-profile snapshot.
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 
 import pytest
@@ -352,7 +353,7 @@ class TestTrainSearchFromDirectory:
         assert isinstance(result.selected_artifact, PolicyArtifact)
         assert result.selected_artifact.policy_id.startswith("policy-")
 
-    def test_train_proxy_score_bounded(
+    def test_train_summary_records_streaming_validation_and_batch_metrics(
         self,
         tmp_path: Path,
         fixture_path: Path,
@@ -360,7 +361,7 @@ class TestTrainSearchFromDirectory:
         training_bundle,
         reward_spec,
     ) -> None:
-        """Proxy composite_rank must be in [0, 1)."""
+        """Prod streaming train must expose real-validation and batch visibility fields."""
         trajectory_spec, action_space, training_config = training_bundle
         builder, events = _make_builder(
             fixture_path, dataset_spec,
@@ -372,8 +373,80 @@ class TestTrainSearchFromDirectory:
         manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
         trainer = LinearPolicyTrainer(training_config)
         result = trainer.train_search_from_directory(manifest, tmp_path)
-        cr = result.candidate_results[0].best_validation_composite_rank
-        assert 0.0 <= cr < 1.0, f"composite_rank out of bounds: {cr}"
+        summary = result.selected_artifact.training_summary
+
+        assert summary["training_data_flow"] == "streaming_batch"
+        assert summary["validation_data_flow"] == "streaming_evaluation"
+        assert summary["normalization_strategy"] == "train_only_two_pass_streaming"
+        assert summary["proxy_validation_used"] is False
+        assert summary["effective_batch_size"] > 0
+        assert summary["estimated_batch_bytes"] > 0
+        assert summary["batch_target_bytes"] == 128 * 1024 * 1024
+        assert summary["batches_per_epoch"] == math.ceil(
+            summary["train_step_count"] / summary["effective_batch_size"]
+        )
+        assert len(summary["validation_objective_history"]) == training_config.epochs
+        assert 0.0 <= result.candidate_results[0].best_validation_composite_rank < 1.0
+
+    def test_train_logs_batch_metrics(
+        self,
+        tmp_path: Path,
+        fixture_path: Path,
+        dataset_spec,
+        training_bundle,
+        reward_spec,
+        caplog,
+    ) -> None:
+        """Prod streaming train logs effective batch visibility fields."""
+        trajectory_spec, action_space, training_config = training_bundle
+        builder, events = _make_builder(
+            fixture_path, dataset_spec,
+            (trajectory_spec, action_space, training_config),
+            reward_spec,
+        )
+        builder.build_to_directory(events, tmp_path)
+
+        manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
+        trainer = LinearPolicyTrainer(training_config)
+        with caplog.at_level(logging.INFO, logger="quantlab_ml.training.trainer"):
+            trainer.train_search_from_directory(manifest, tmp_path)
+        messages = " ".join(record.message for record in caplog.records)
+        assert "effective_batch_size=" in messages
+        assert "estimated_batch_bytes=" in messages
+        assert "batches_per_epoch=" in messages
+        assert "batch_target_bytes=" in messages
+
+    def test_prod_train_does_not_use_compat_matrix_first_helpers(
+        self,
+        tmp_path: Path,
+        fixture_path: Path,
+        dataset_spec,
+        training_bundle,
+        reward_spec,
+        monkeypatch,
+    ) -> None:
+        """Prod directory train must not fall back to matrix-first compat helpers."""
+        from quantlab_ml.training import compat_matrix_first
+
+        trajectory_spec, action_space, training_config = training_bundle
+        builder, events = _make_builder(
+            fixture_path, dataset_spec,
+            (trajectory_spec, action_space, training_config),
+            reward_spec,
+        )
+        builder.build_to_directory(events, tmp_path)
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("compat matrix-first helper must not be used by prod train")
+
+        monkeypatch.setattr(compat_matrix_first, "prepare_training_data", _boom)
+        monkeypatch.setattr(compat_matrix_first, "build_examples", _boom)
+        monkeypatch.setattr(compat_matrix_first, "finalize_prepared_data", _boom)
+
+        manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
+        trainer = LinearPolicyTrainer(training_config)
+        result = trainer.train_search_from_directory(manifest, tmp_path)
+        assert result.selected_artifact.policy_id.startswith("policy-")
 
     def test_streaming_artifact_ids_differ_between_runs(
         self,
@@ -416,6 +489,12 @@ class TestTrainSearchFromDirectory:
 
 class TestCompatPathMarker:
     """Verify that TrajectoryStore is correctly marked as test/fixture compat only."""
+
+    def test_matrix_first_compat_module_has_marker(self) -> None:
+        """Matrix-first compat module must expose `_FIXTURE_TEST_COMPAT_ONLY`."""
+        from quantlab_ml.training.compat_matrix_first import _FIXTURE_TEST_COMPAT_ONLY
+
+        assert _FIXTURE_TEST_COMPAT_ONLY is True
 
     def test_trajectorystore_has_compat_marker(self) -> None:
         """TrajectoryStore module must expose _FIXTURE_TEST_COMPAT_ONLY sentinel."""

@@ -17,10 +17,10 @@ This file must stay short and current.
 
 ## Current snapshot
 
-- current_phase: `Phase 5 core training path now consumes walk-forward folds, ships an explicit canonical production observation preset, records effective PyTorch device selection in training metadata, and now has a streaming JSONL trajectory dataflow to eliminate the OOM blocker on production-profile snapshots`
-- current_focus: `OOM blocker eliminated: streaming build→train→evaluate path replaces in-memory TrajectoryBundle assembly; next task is executing the first controlled Vast run with the new streaming CLI path`
-- current_blocker: `none`
-- declared_next_task: `Execute the first controlled remote GPU run using docs/REMOTE_GPU_RUNBOOK.md and configs/data/controlled-remote-day.yaml via the streaming build-trajectories→train→evaluate path; confirm OOM-free build, OOM-free train, and OOM-free evaluate on the remote instance`
+- current_phase: `Phase 5 core training path now consumes walk-forward folds, ships an explicit canonical production observation preset, records effective PyTorch device selection in training metadata, and now uses a fold-aware streaming-batch trainer plus streaming evaluation so production train/validation no longer assemble giant dense matrices`
+- current_focus: `Prod trainer matrix-first path removed from the active flow; train-only two-pass streaming normalization, deterministic streaming batches, and true streaming validation are now live with explicit batch visibility in logs and training_summary`
+- current_blocker: `controlled remote GPU rerun still pending — the new streaming-batch train/evaluate path must now prove OOM-free completion on the same controlled snapshot`
+- declared_next_task: `Execute the first controlled remote GPU rerun using docs/REMOTE_GPU_RUNBOOK.md and configs/data/controlled-remote-day.yaml via the streaming build-trajectories→train→evaluate path; confirm OOM-free build, OOM-free train, and OOM-free evaluate on the new streaming-batch trainer path`
 - not_now:
   - `live deployment plumbing`
   - `cloud provisioning automation`
@@ -30,17 +30,17 @@ This file must stay short and current.
 ## Active work item
 
 ```yaml
-id: first-controlled-remote-gpu-run-streaming
-title: Execute the first controlled remote GPU run using the new streaming JSONL trajectory path (build_to_directory + train_search_from_directory) — confirms OOM-free execution on the 78 GB Vast instance
+id: first-controlled-remote-gpu-run-streaming-batch
+title: Execute the first controlled remote GPU rerun using the new streaming-batch trajectory/trainer path (build_to_directory + train_search_from_directory + streaming evaluate) — confirms OOM-free execution on the same controlled snapshot
 status: in_progress
 ```
 
 ## Current blocker details
 
-None. The latest targeted gate record for the remote GPU readiness batch is:
-- `.venv/bin/ruff check src tests` → All checks passed!
-- `.venv/bin/mypy src` → Success: no issues found in 43 source files
-- `.venv/bin/pytest -q tests/test_training_loop.py tests/test_training_parity.py tests/test_logging_scaffold.py tests/test_data_contract.py tests/test_docs_consistency.py` → 21 passed
+None. The latest targeted gate record for the streaming-batch rerun readiness batch is:
+- `.venv/bin/ruff check .` → All checks passed!
+- `.venv/bin/mypy src` → Success: no issues found in 47 source files
+- `.venv/bin/pytest -q tests/test_streaming_trajectory.py tests/test_evaluation.py tests/test_cli_smoke.py tests/test_training_loop.py tests/test_training_parity.py tests/test_training_compat.py tests/test_reward_semantics.py` → 54 passed
 
 ## Recently completed
 
@@ -95,18 +95,20 @@ None. The latest targeted gate record for the remote GPU readiness batch is:
 - QL-017 completed: the trainer now records the effective training device, CUDA availability, and device name in structured logs and `training_summary`, and the repo now has an official provider-agnostic remote GPU workflow centered on a controlled first run instead of laptop-scale continuity examples
 - QL-018 completed: `configs/data/controlled-remote-day.yaml` now provides the official bounded full-day remote snapshot example, and `docs/REMOTE_GPU_RUNBOOK.md` defines bootstrap, preflight, command flow, expected outputs, acceptance criteria, and first-failure triage for the first controlled Vast run
 - README now points explicitly to the controlled remote-day config and the official remote GPU runbook so the first real run no longer depends on inferred workflow knowledge
-- QL-019 completed: streaming JSONL trajectory dataflow implemented; `TrajectoryBuilder.build_to_directory()` and `LinearPolicyTrainer.train_search_from_directory()` now stream records to/from disk one at a time — OOM blocker for the production-profile controlled snapshot is eliminated
+- QL-019 completed: streaming JSONL trajectory build/directory flow implemented; `TrajectoryBuilder.build_to_directory()` and `TrajectoryDirectoryStore` now persist metadata plus per-split JSONL records without assembling a production-size `TrajectoryBundle`
 - `TrajectoryDirectoryStore` writes manifest.json + per-split JSONL files; explicit line-size guard (warn 512 MB / fail 2 GB) makes oversized records immediately visible
 - `TrajectoryBundle` in-memory path is now explicitly marked FIXTURE / TEST COMPAT ONLY at module, class, and method level with a grep-able `_FIXTURE_TEST_COMPAT_ONLY` sentinel
-- CLI `build-trajectories` now calls streaming path by default; `train` and `evaluate` auto-detect directory vs legacy JSON file
-- 29 new streaming-specific tests added (store roundtrip, line-size guard, build integration, train integration, compat marker) — all 138 tests pass; ruff and mypy clean
+- QL-020 completed: the active prod trainer/evaluate path now uses fold-aware streaming batch training, train-only two-pass streaming normalization, and true streaming validation/evaluation; prod no longer assembles giant dense train/validation matrices and the matrix-first path lives only in explicit compat/test helpers
+- prod streaming logs and `training_summary` now expose `effective_batch_size`, `estimated_batch_bytes`, `batches_per_epoch`, `batch_target_bytes`, and `proxy_validation_used=false` so remote OOM/throughput triage is not blind
+- CLI `build-trajectories` now calls streaming path by default; `train` and `evaluate` auto-detect directory vs legacy JSON file, and directory `evaluate` now streams `final_untouched_test` instead of materializing the split list
+- 54 targeted training/evaluation/CLI/reward tests now pass for the streaming-batch refactor; `.venv/bin/ruff check .` and `.venv/bin/mypy src` are clean
 
 ## Immediate next actions
 
-1. `ssh` to the Vast instance and run the 3-phase gate: `build-trajectories` (streaming, no OOM), `train` (streaming, no OOM), `evaluate` (streaming, no OOM) against `controlled-remote-day.yaml`.
-2. Confirm `training_device=cuda` in training logs on the GPU instance.
+1. `ssh` to the Vast instance and run the 3-phase gate: `build-trajectories` (streaming, no OOM), `train` (streaming batch, no OOM), `evaluate` (streaming, no OOM) against `controlled-remote-day.yaml`.
+2. Confirm `training_device=cuda` plus `effective_batch_size`, `estimated_batch_bytes`, `batches_per_epoch`, and `proxy_validation_used=false` in the training logs/summary on the GPU instance.
 3. Review the resulting artifact/log bundle for controlled-run readiness before widening scope.
-4. If the first run is clean, execute a slightly larger second controlled remote run without jumping to full-scale search.
+4. If this rerun is clean, execute a slightly larger second controlled remote run without jumping to full-scale search.
 5. Run `quantlab-ml audit-continuity --registry-root ...` against active runtime registries as a parallel operational follow-up.
 6. Freeze or retire the NumPy reference path once the external audit confirms zero active dependency, then retire temporary legacy compat when its active dependency count reaches zero.
 
