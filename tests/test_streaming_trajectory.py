@@ -17,7 +17,9 @@ import json
 import logging
 import math
 from pathlib import Path
+import shutil
 
+import numpy as np
 import pytest
 
 from quantlab_ml.contracts import (
@@ -25,12 +27,20 @@ from quantlab_ml.contracts import (
     TrajectoryRecord,
 )
 from quantlab_ml.data import LocalFixtureSource
+from quantlab_ml.policies import PolicyRuntimeBridge
 from quantlab_ml.training import LinearPolicyTrainer
 from quantlab_ml.trajectories import TrajectoryBuilder, TrajectoryDirectoryStore
 from quantlab_ml.trajectories.streaming_store import (
     MANIFEST_FILENAME,
     FAIL_RECORD_LINE_MB,
     _split_filename,
+)
+from quantlab_ml.trajectories.tensor_cache import (
+    TENSOR_CACHE_FORMAT_VERSION,
+    load_tensor_cache_shard,
+    read_tensor_cache_manifest,
+    tensor_cache_directory,
+    tensor_cache_manifest_path,
 )
 
 
@@ -319,6 +329,53 @@ class TestBuildToDirectory:
         }
         assert manifest.format_version == "trajectories_streaming_v1"
 
+    def test_build_writes_tensor_cache_manifest_and_aligned_shards(
+        self,
+        tmp_path: Path,
+        fixture_path: Path,
+        dataset_spec,
+        training_bundle,
+        reward_spec,
+    ) -> None:
+        """Build must write tensor-cache shards for every prod split alongside canonical JSONL."""
+        builder, events = _make_builder(fixture_path, dataset_spec, training_bundle, reward_spec)
+        builder.build_to_directory(events, tmp_path)
+
+        assert tensor_cache_manifest_path(tmp_path).exists()
+        cache_manifest = read_tensor_cache_manifest(tmp_path)
+
+        assert cache_manifest.format_version == TENSOR_CACHE_FORMAT_VERSION
+        assert cache_manifest.feature_dtype == "float32"
+        assert cache_manifest.feature_dim > 0
+        assert set(cache_manifest.splits) == {
+            "development",
+            "train",
+            "validation",
+            "final_untouched_test",
+        }
+
+        total_rows = 0
+        total_steps = 0
+        for split_name, split_manifest in cache_manifest.splits.items():
+            assert split_manifest.shard_count >= 1
+            assert len(split_manifest.shards) == split_manifest.shard_count
+            split_steps = sum(
+                len(record.steps) for record in TrajectoryDirectoryStore.iter_records(tmp_path, split_name)
+            )
+            assert split_manifest.row_count == split_steps
+            first_shard = load_tensor_cache_shard(tmp_path, split_manifest.shards[0])
+            assert first_shard.features.dtype == np.float32
+            assert first_shard.features.shape[1] == cache_manifest.feature_dim
+            assert first_shard.action_labels.dtype == np.int64
+            assert first_shard.venue_labels.dtype == np.int64
+            assert first_shard.venue_mask.dtype == np.bool_
+            assert first_shard.row_count == len(first_shard.replay_rows)
+            total_rows += split_manifest.row_count
+            total_steps += split_steps
+
+        assert total_rows == total_steps
+        assert tensor_cache_directory(tmp_path).exists()
+
 
 # ---------------------------------------------------------------------------
 # Integration: train_search_from_directory()
@@ -375,10 +432,14 @@ class TestTrainSearchFromDirectory:
         result = trainer.train_search_from_directory(manifest, tmp_path)
         summary = result.selected_artifact.training_summary
 
-        assert summary["training_data_flow"] == "streaming_batch"
-        assert summary["validation_data_flow"] == "streaming_evaluation"
-        assert summary["normalization_strategy"] == "train_only_two_pass_streaming"
+        assert summary["training_data_flow"] == "tensor_shard_batch"
+        assert summary["validation_data_flow"] == "tensor_shard_evaluation"
+        assert summary["normalization_strategy"] == "train_only_two_pass_tensor_cache"
         assert summary["proxy_validation_used"] is False
+        assert summary["tensor_cache_used"] is True
+        assert summary["jsonl_fallback_used"] is False
+        assert summary["tensor_cache_format"] == TENSOR_CACHE_FORMAT_VERSION
+        assert summary["tensor_cache_shard_count"] > 0
         assert summary["effective_batch_size"] > 0
         assert summary["estimated_batch_bytes"] > 0
         assert summary["batch_target_bytes"] == 128 * 1024 * 1024
@@ -386,6 +447,7 @@ class TestTrainSearchFromDirectory:
             summary["train_step_count"] / summary["effective_batch_size"]
         )
         assert len(summary["validation_objective_history"]) == training_config.epochs
+        assert len(summary["validation_wall_sec_history"]) == training_config.epochs
         assert 0.0 <= result.candidate_results[0].best_validation_composite_rank < 1.0
 
     def test_train_logs_batch_metrics(
@@ -447,6 +509,127 @@ class TestTrainSearchFromDirectory:
         trainer = LinearPolicyTrainer(training_config)
         result = trainer.train_search_from_directory(manifest, tmp_path)
         assert result.selected_artifact.policy_id.startswith("policy-")
+
+    def test_prod_train_does_not_iterate_jsonl_when_tensor_cache_exists(
+        self,
+        tmp_path: Path,
+        fixture_path: Path,
+        dataset_spec,
+        training_bundle,
+        reward_spec,
+        monkeypatch,
+    ) -> None:
+        """Prod directory train must fail if it accidentally re-enters JSONL iteration."""
+        trajectory_spec, action_space, training_config = training_bundle
+        builder, events = _make_builder(
+            fixture_path, dataset_spec,
+            (trajectory_spec, action_space, training_config),
+            reward_spec,
+        )
+        builder.build_to_directory(events, tmp_path)
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("prod tensor-cache train must not iterate JSONL records")
+
+        monkeypatch.setattr(TrajectoryDirectoryStore, "iter_records", _boom)
+
+        manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
+        trainer = LinearPolicyTrainer(training_config)
+        result = trainer.train_search_from_directory(manifest, tmp_path)
+        assert result.selected_artifact.policy_id.startswith("policy-")
+
+    def test_prod_train_does_not_recompute_observation_features_when_cache_exists(
+        self,
+        tmp_path: Path,
+        fixture_path: Path,
+        dataset_spec,
+        training_bundle,
+        reward_spec,
+        monkeypatch,
+    ) -> None:
+        """Prod directory train must not call observation_feature_vector() after build."""
+        from quantlab_ml.training import trainer as trainer_module
+
+        trajectory_spec, action_space, training_config = training_bundle
+        builder, events = _make_builder(
+            fixture_path, dataset_spec,
+            (trajectory_spec, action_space, training_config),
+            reward_spec,
+        )
+        builder.build_to_directory(events, tmp_path)
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("prod tensor-cache train must not rebuild observation features")
+
+        monkeypatch.setattr(trainer_module, "observation_feature_vector", _boom)
+
+        manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
+        trainer = LinearPolicyTrainer(training_config)
+        result = trainer.train_search_from_directory(manifest, tmp_path)
+        assert result.selected_artifact.policy_id.startswith("policy-")
+
+    def test_train_time_validation_uses_shared_batched_evaluator(
+        self,
+        tmp_path: Path,
+        fixture_path: Path,
+        dataset_spec,
+        training_bundle,
+        reward_spec,
+        monkeypatch,
+    ) -> None:
+        """Train-time validation must not fall back to per-step runtime bridge inference."""
+        trajectory_spec, action_space, training_config = training_bundle
+        builder, events = _make_builder(
+            fixture_path, dataset_spec,
+            (trajectory_spec, action_space, training_config),
+            reward_spec,
+        )
+        builder.build_to_directory(events, tmp_path)
+
+        def _boom(self, artifact, observation):
+            raise AssertionError("train-time validation must use the batched tensor-cache evaluator")
+
+        monkeypatch.setattr(PolicyRuntimeBridge, "decide", _boom)
+
+        manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
+        trainer = LinearPolicyTrainer(training_config)
+        result = trainer.train_search_from_directory(manifest, tmp_path)
+        assert result.selected_artifact.policy_id.startswith("policy-")
+
+    def test_train_requires_explicit_jsonl_fallback_when_tensor_cache_is_missing(
+        self,
+        tmp_path: Path,
+        fixture_path: Path,
+        dataset_spec,
+        training_bundle,
+        reward_spec,
+    ) -> None:
+        """Prod directory train must fail closed unless JSONL fallback is explicitly requested."""
+        trajectory_spec, action_space, training_config = training_bundle
+        builder, events = _make_builder(
+            fixture_path, dataset_spec,
+            (trajectory_spec, action_space, training_config),
+            reward_spec,
+        )
+        builder.build_to_directory(events, tmp_path)
+        shutil.rmtree(tensor_cache_directory(tmp_path))
+
+        manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
+        trainer = LinearPolicyTrainer(training_config)
+
+        with pytest.raises(ValueError, match="tensor cache manifest missing"):
+            trainer.train_search_from_directory(manifest, tmp_path)
+
+        result = trainer.train_search_from_directory(
+            manifest,
+            tmp_path,
+            allow_jsonl_fallback=True,
+        )
+        summary = result.selected_artifact.training_summary
+        assert summary["tensor_cache_used"] is False
+        assert summary["jsonl_fallback_used"] is True
+        assert summary["training_data_flow"] == "streaming_batch"
+        assert summary["validation_data_flow"] == "streaming_evaluation"
 
     def test_streaming_artifact_ids_differ_between_runs(
         self,

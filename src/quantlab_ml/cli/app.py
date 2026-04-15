@@ -77,15 +77,22 @@ def train(
     training_config: Path = typer.Option(Path("configs/training/default.yaml"), exists=True),
     registry_root: Path | None = typer.Option(None, help="Optional registry root."),
     parent_policy_id: str | None = typer.Option(None, help="Optional parent policy id."),
+    allow_jsonl_fallback: bool = typer.Option(
+        False,
+        help="Allow temporary JSONL-only compatibility fallback when tensor cache is missing.",
+    ),
 ) -> None:
     _, _, training_config_model = _load_training_bundle(training_config)
     trainer = LinearPolicyTrainer(training_config_model)
 
     if TrajectoryDirectoryStore.is_trajectory_directory(trajectories):
-        # PRODUCTION PATH: streaming train from JSONL directory
+        # PRODUCTION PATH: tensor-cache directory train; JSONL fallback is explicit compat only.
         manifest = TrajectoryDirectoryStore.read_manifest(trajectories)
         search_result = trainer.train_search_from_directory(
-            manifest, trajectories, parent_policy_id=parent_policy_id
+            manifest,
+            trajectories,
+            parent_policy_id=parent_policy_id,
+            allow_jsonl_fallback=allow_jsonl_fallback,
         )
         dump_model(output, search_result.selected_artifact)
         if len(search_result.candidate_results) > 1:
@@ -113,19 +120,24 @@ def evaluate(
     policy: Path = typer.Option(..., exists=True, readable=True),
     output: Path = typer.Option(..., help="Evaluation report output path."),
     evaluation_config: Path = typer.Option(Path("configs/evaluation/default.yaml"), exists=True),
+    allow_jsonl_fallback: bool = typer.Option(
+        False,
+        help="Allow temporary JSONL-only compatibility fallback when tensor cache is missing.",
+    ),
 ) -> None:
     artifact = load_model(policy, PolicyArtifact)
     boundary = _load_evaluation_boundary(evaluation_config)
     engine = EvaluationEngine(boundary)
 
     if TrajectoryDirectoryStore.is_trajectory_directory(trajectories):
-        # PRODUCTION PATH: streaming evaluation from the trajectory directory.
+        # PRODUCTION PATH: tensor-cache evaluation from the trajectory directory.
         manifest = TrajectoryDirectoryStore.read_manifest(trajectories)
-        report = engine.evaluate_records(
-            manifest.dataset_spec,
-            manifest.reward_spec,
-            TrajectoryDirectoryStore.iter_records(trajectories, "final_untouched_test"),
-            artifact,
+        report = engine.evaluate_directory(
+            manifest=manifest,
+            directory=trajectories,
+            artifact=artifact,
+            split_name="final_untouched_test",
+            allow_jsonl_fallback=allow_jsonl_fallback,
         )
     else:
         # FIXTURE / TEST COMPAT PATH

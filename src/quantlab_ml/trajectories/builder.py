@@ -40,6 +40,14 @@ from quantlab_ml.contracts import (
     WalkForwardFold,
 )
 from quantlab_ml.rewards import RewardEngine
+from quantlab_ml.runtime_contract import expected_feature_dim
+from quantlab_ml.trajectories.tensor_cache import (
+    DEFAULT_TENSOR_CACHE_SHARD_TARGET_BYTES,
+    TensorCacheManifest,
+    TensorCacheSplitManifest,
+    TensorCacheSplitWriter,
+    write_tensor_cache_manifest_atomic,
+)
 
 class _CompactEvent:
     """Minimum event representation for the build-time index.
@@ -181,7 +189,7 @@ class TrajectoryBuilder:
         events: Iterable[NormalizedMarketEvent],
         output_dir: Path,
     ) -> TrajectoryManifest:
-        """PRODUCTION PATH — build trajectories streaming to a JSONL directory.
+        """PRODUCTION PATH — build trajectories to JSONL plus tensor-cache sidecar.
 
         Writes one TrajectoryRecord at a time to disk, never holding more than
         one record in memory (plus the event index).  Returns the manifest
@@ -228,12 +236,35 @@ class TrajectoryBuilder:
 
         total_records = 0
         total_steps = 0
+        feature_dim = expected_feature_dim(self.observation_schema)
+        tensor_cache_splits: dict[str, TensorCacheSplitManifest] = {}
         for split_name, split_range in zip(split_names, split_ranges):
             logger.info("building_split split=%s", split_name)
             records_iter = self._build_split_iter(split_name, split_range, indexed, history_start)
-            rec_count, step_count = TrajectoryDirectoryStore.write_split(
-                output_dir, split_name, records_iter
+            tensor_writer = TensorCacheSplitWriter(
+                directory=output_dir,
+                split_name=split_name,
+                feature_dim=feature_dim,
+                action_keys=self.action_space.action_keys,
+                venue_choices=self.dataset_spec.exchanges,
+                shard_target_bytes=DEFAULT_TENSOR_CACHE_SHARD_TARGET_BYTES,
             )
+
+            def _tapped_records() -> Iterator[TrajectoryRecord]:
+                for record in records_iter:
+                    tensor_writer.consume_record(record)
+                    yield record
+
+            rec_count, step_count = TrajectoryDirectoryStore.write_split(
+                output_dir, split_name, _tapped_records()
+            )
+            split_cache_manifest = tensor_writer.finalize()
+            if split_cache_manifest.row_count != step_count:
+                raise ValueError(
+                    f"tensor cache row count mismatch for split={split_name!r}: "
+                    f"cache_rows={split_cache_manifest.row_count}, split_steps={step_count}"
+                )
+            tensor_cache_splits[split_name] = split_cache_manifest
             total_records += rec_count
             total_steps += step_count
             gc.collect()
@@ -241,14 +272,28 @@ class TrajectoryBuilder:
                 "split_complete split=%s records=%d steps=%d", split_name, rec_count, step_count
             )
 
+        write_tensor_cache_manifest_atomic(
+            output_dir,
+            TensorCacheManifest(
+                feature_dtype="float32",
+                feature_dim=feature_dim,
+                shard_target_bytes=DEFAULT_TENSOR_CACHE_SHARD_TARGET_BYTES,
+                splits=tensor_cache_splits,
+            ),
+        )
         logger.info(
             "trajectory_build_completed slice_id=%s total_records=%d total_steps=%d "
-            "fold_count=%d output_dir=%s",
+            "fold_count=%d output_dir=%s tensor_cache_format=%s cache_feature_dtype=%s "
+            "cache_feature_dim=%d tensor_cache_shard_count=%d",
             self.dataset_spec.slice_id,
             total_records,
             total_steps,
             len(split_artifact.folds),
             output_dir,
+            "tensor_cache_v1",
+            "float32",
+            feature_dim,
+            sum(split.shard_count for split in tensor_cache_splits.values()),
         )
         return manifest
 

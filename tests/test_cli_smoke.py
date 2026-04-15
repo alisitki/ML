@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 
 from typer.testing import CliRunner
 
@@ -9,7 +10,10 @@ from quantlab_ml.cli.app import app
 from quantlab_ml.common import load_model
 from quantlab_ml.contracts import InferenceArtifactExport, PolicyArtifact, PromotionEvidence, ReproducibilityMetadata
 from quantlab_ml.evaluation import EvaluationEngine
+from quantlab_ml.policies import PolicyRuntimeBridge
 from quantlab_ml.registry import LocalRegistryStore
+from quantlab_ml.trajectories import TrajectoryDirectoryStore
+from quantlab_ml.trajectories.tensor_cache import tensor_cache_directory
 
 
 def test_cli_smoke(repo_root: Path, fixture_path: Path, tmp_path: Path) -> None:
@@ -348,7 +352,7 @@ def test_cli_audit_continuity_reports_core_backend_status(
     assert audit["ready_to_close_numpy_continuity_window"] is True
 
 
-def test_cli_evaluate_directory_uses_streaming_api(
+def test_cli_evaluate_directory_uses_tensor_cache_api(
     repo_root: Path,
     fixture_path: Path,
     tmp_path: Path,
@@ -392,6 +396,103 @@ def test_cli_evaluate_directory_uses_streaming_api(
     assert result.exit_code == 0, result.stdout
 
     called = {"count": 0}
+    original = EvaluationEngine._evaluate_tensor_cache
+
+    def wrapped(self, *args, **kwargs):
+        called["count"] += 1
+        return original(self, *args, **kwargs)
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("CLI directory evaluate must not iterate JSONL when tensor cache exists")
+
+    def _bridge_boom(self, artifact, observation):
+        raise AssertionError("CLI directory evaluate must not use PolicyRuntimeBridge.decide()")
+
+    monkeypatch.setattr(EvaluationEngine, "_evaluate_tensor_cache", wrapped)
+    monkeypatch.setattr(TrajectoryDirectoryStore, "iter_records", _boom)
+    monkeypatch.setattr(PolicyRuntimeBridge, "decide", _bridge_boom)
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "--trajectories",
+            str(trajectories),
+            "--policy",
+            str(policy),
+            "--output",
+            str(evaluation),
+            "--evaluation-config",
+            str(repo_root / "configs" / "evaluation" / "default.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert called["count"] == 1
+
+
+def test_cli_evaluate_directory_requires_explicit_jsonl_fallback_when_cache_missing(
+    repo_root: Path,
+    fixture_path: Path,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    trajectories = tmp_path / "outputs" / "trajectories"
+    policy = tmp_path / "outputs" / "policy.json"
+    evaluation = tmp_path / "outputs" / "evaluation.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "build-trajectories",
+            "--input",
+            str(fixture_path),
+            "--output",
+            str(trajectories),
+            "--data-config",
+            str(repo_root / "configs" / "data" / "fixture.yaml"),
+            "--training-config",
+            str(repo_root / "configs" / "training" / "default.yaml"),
+            "--reward-config",
+            str(repo_root / "configs" / "reward" / "default.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    result = runner.invoke(
+        app,
+        [
+            "train",
+            "--trajectories",
+            str(trajectories),
+            "--output",
+            str(policy),
+            "--training-config",
+            str(repo_root / "configs" / "training" / "default.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    shutil.rmtree(tensor_cache_directory(trajectories))
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "--trajectories",
+            str(trajectories),
+            "--policy",
+            str(policy),
+            "--output",
+            str(evaluation),
+            "--evaluation-config",
+            str(repo_root / "configs" / "evaluation" / "default.yaml"),
+        ],
+    )
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+
+    called = {"count": 0}
     original = EvaluationEngine.evaluate_records
 
     def wrapped(self, dataset_spec, reward_spec, trajectories_iter, artifact):
@@ -412,6 +513,7 @@ def test_cli_evaluate_directory_uses_streaming_api(
             str(evaluation),
             "--evaluation-config",
             str(repo_root / "configs" / "evaluation" / "default.yaml"),
+            "--allow-jsonl-fallback",
         ],
     )
     assert result.exit_code == 0, result.stdout

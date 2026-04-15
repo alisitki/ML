@@ -157,13 +157,14 @@ Status values:
   - do not solve the problem by shrinking the controlled snapshot or upgrading the instance class
 
 ## D-016 — Pre-computed tensor files are the training data format; Pydantic JSONL is output-only
-- status: accepted
+- status: superseded
 - date: 2026-04-14
 - decision: `build-trajectories` must write pre-computed float32 tensor files (e.g. `{split}_X.pt`) alongside JSONL during `build_to_directory`. The active `train` path reads binary tensor files directly without per-batch Pydantic deserialization. JSONL remains for human inspection and compat, not as the training read path.
 - why:
   - first controlled remote GPU run (2026-04-14) proved the Pydantic JSONL path impractical: `feature_dim=680,413`, `batch_size=24`, `batches_per_epoch=300` \u2014 ~84 min/epoch estimated, GPU utilization 0%
   - bottleneck is batch-assembly cost (Pydantic \u2192 numpy \u2192 torch in Python GIL per batch), not OOM, not instance size, not GPU memory
   - fix is at the data pipeline boundary: feature extraction happens once at build time, stored as binary; training reads pre-assembled float32 tensors
+- superseded_by: D-017
 - guardrails:
   - JSONL output remains unchanged (backward compat / inspection)
   - tensor files must be deterministic: same input + same config \u2192 same tensor files
@@ -177,3 +178,27 @@ Status values:
   - do not change JSONL schema or manifest format
   - do not change runtime/inference boundary
   - do not change `linear-policy-v1` payload/export semantics
+
+## D-017 — Prod hot paths use shard-based raw tensor cache sidecars with shared batched evaluation
+- status: accepted
+- date: 2026-04-15
+- decision: `build-trajectories` writes canonical JSONL plus a bounded `tensor_cache_v1/` shard family for `development`, `train`, `validation`, and `final_untouched_test`. The active prod `train`, train-time `validation`, and prod directory `evaluate` paths all consume this same cache family. Canonical JSONL remains the inspection/rebuild format and an explicit temporary compatibility fallback only.
+- why:
+  - solving only the train loop leaves the same Python/GIL blocker waiting inside validation and final evaluate
+  - a single giant split-wide tensor file would create a new monolithic load/failure-isolation bottleneck
+  - train-only normalization must remain leak-free, so the cache must stay raw rather than storing global pre-normalized features
+  - runtime/inference boundaries do not need to change; the optimization is entirely inside offline build/train/evaluate dataflow
+- guardrails:
+  - cache shards are bounded; giant split-wide monoliths are forbidden as the default design
+  - cache stores raw feature tensors only; normalization still fits on the active train window only
+  - train-time validation and final evaluate must share the same batched evaluator path rather than diverging into separate inference implementations
+  - prod directory paths fail closed when tensor cache is missing; JSONL fallback is explicit temporary compatibility maintenance only
+  - no new runtime adapter, artifact family, selector boundary, or executor behavior is introduced
+- acceptance_signal:
+  - `tensor_cache_used=true` and `jsonl_fallback_used=false` are visible in the controlled remote rerun
+  - `training_data_flow=tensor_shard_batch` and `validation_data_flow=tensor_shard_evaluation` are visible in `training_summary`
+  - controlled remote rerun shows `epoch_wall_sec < 300`, per-epoch `validation_wall_sec < 60`, `evaluate_wall_sec < 180`, average GPU utilization `>= 20`, and no `137`/OOM exits
+- non_goals:
+  - do not add checkpoint/resume design in this batch
+  - do not change canonical JSONL schema
+  - do not widen the runtime or inference artifact surface

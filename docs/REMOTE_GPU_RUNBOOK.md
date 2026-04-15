@@ -138,9 +138,10 @@ quantlab-ml build-trajectories \
   --output "$RUN_ROOT/trajectories" \
   2>&1 | tee "$RUN_ROOT/build.log"
 
-# NOTE: --output is a directory (streaming JSONL format).
-# The directory will contain manifest.json + per-split JSONL files.
-# The train and evaluate commands auto-detect the directory format.
+# NOTE: --output is a directory.
+# The directory will contain canonical JSONL plus a tensor_cache_v1 sidecar.
+# The prod train/evaluate commands auto-detect the directory format and
+# must use tensor-cache fast paths unless explicit compat fallback is requested.
 
 quantlab-ml train \
   --trajectories "$RUN_ROOT/trajectories" \
@@ -174,12 +175,14 @@ quantlab-ml export-policy \
 
 The first controlled run should leave behind:
 - `inspect_s3.json`
-- `trajectories/` (JSONL streaming directory)
-  - `manifest.json`
-  - `train.jsonl`
-  - `validation.jsonl`
-  - `development.jsonl`
-  - `final_untouched_test.jsonl`
+- `trajectories/` (canonical JSONL directory + tensor cache sidecar)
+- `trajectories/manifest.json`
+- `trajectories/train.jsonl`
+- `trajectories/validation.jsonl`
+- `trajectories/development.jsonl`
+- `trajectories/final_untouched_test.jsonl`
+- `trajectories/tensor_cache_v1/tensor_cache_manifest.json`
+- split-scoped tensor cache shard files and replay sidecars under `trajectories/tensor_cache_v1/`
 - `policy.json`
 - `evaluation.json`
 - `score.json`
@@ -198,14 +201,25 @@ Inside `training_summary`, confirm:
 - `selection_fold_count > 0`
 - `final_untouched_test_used = false`
 - `learned_normalization_fit_split = train`
-- `training_data_flow = streaming_batch`
-- `validation_data_flow = streaming_evaluation`
-- `normalization_strategy = train_only_two_pass_streaming`
+- `training_data_flow = tensor_shard_batch`
+- `validation_data_flow = tensor_shard_evaluation`
+- `normalization_strategy = train_only_two_pass_tensor_cache`
 - `proxy_validation_used = false`
+- `tensor_cache_used = true`
+- `jsonl_fallback_used = false`
+- `tensor_cache_format = tensor_cache_v1`
+- `tensor_cache_shard_count > 0`
 - `effective_batch_size > 0`
 - `estimated_batch_bytes > 0`
 - `batches_per_epoch > 0`
 - `batch_target_bytes = 134217728`
+- `validation_wall_sec_history` length matches `epochs`
+
+Inside the logs, confirm:
+- `tensor_cache_used=true`
+- `jsonl_fallback_used=false`
+- `compiled_policy_mode=tensor_cache_linear_policy_batch`
+- `train_rows_per_sec`, `validation_rows_per_sec`, and `evaluation_rows_per_sec` are present
 
 ## Acceptance criteria
 
@@ -215,7 +229,13 @@ The first controlled run is successful when:
 - the full artifact chain is written successfully
 - training records `cuda` as the selected device
 - walk-forward and train-only normalization evidence remain intact
-- training logs expose `effective_batch_size`, `estimated_batch_bytes`, `batches_per_epoch`, and `batch_target_bytes`
+- training/evaluate logs prove the tensor-cache hot path is active (`tensor_cache_used=true`, `jsonl_fallback_used=false`)
+- training logs expose `effective_batch_size`, `estimated_batch_bytes`, `batches_per_epoch`, `batch_target_bytes`, `train_rows_per_sec`, and `validation_rows_per_sec`
+- evaluate logs expose `evaluation_rows_per_sec` and `compiled_policy_mode=tensor_cache_linear_policy_batch`
+- train `epoch_wall_sec < 300`
+- per-epoch `validation_wall_sec < 60`
+- final `evaluate_wall_sec < 180`
+- average GPU utilization reaches at least `20%`
 - no phase exits with `137` or other OOM-kill evidence
 
 This run does not need:
@@ -237,6 +257,11 @@ Check first:
 - remote environment is not exposing GPU to PyTorch
 - the run is not valid as the first controlled GPU evidence run
 
+### `tensor_cache_used=false` or `jsonl_fallback_used=true`
+- prod directory fast path is not active
+- tensor cache sidecar is missing or unreadable
+- the run is not valid as QL-021 acceptance evidence unless compat fallback was explicitly being debugged
+
 ### `build-trajectories` fails or becomes too slow
 - controlled snapshot is too large for the host RAM/disk
 - compact object readability is degraded
@@ -251,6 +276,11 @@ Check first:
 - wrong data config
 - smoke profile used accidentally
 - production profile not actually used
+
+### training or evaluation is still slow despite CUDA
+- tensor cache fast path may not be active
+- the run may be spending time in compat fallback or another hidden JSONL path
+- inspect `train.log` / `evaluate.log` for `tensor_cache_used`, `jsonl_fallback_used`, and throughput fields before changing hardware size
 
 ## What comes next
 

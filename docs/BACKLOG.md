@@ -326,27 +326,35 @@ Status values:
   - compat/test matrix-first helpers cannot silently re-enter the prod path
 
 ### QL-021
-- title: Implement pre-computed float32 tensor output in build-trajectories; update batch loader to read binary tensors
-- status: todo
+- title: Implement shard-based raw tensor cache sidecars and shared batched prod evaluation
+- status: in_progress
 - depends_on: QL-020
 - path_classification: core direction
-- scope: write per-split float32 tensor files (shape=[N, feature_dim]) alongside JSONL during `build_to_directory`; update `StreamingBatchLoader` / batch plan to detect and use binary tensor files; add test verifying shape and dtype without Pydantic deserialization
+- scope: write `tensor_cache_v1` shard sidecars for `development`, `train`, `validation`, and `final_untouched_test` during `build_to_directory`; keep canonical JSONL unchanged; move prod `train`, train-time `validation`, and prod directory `evaluate` onto the same cache family with explicit compat-only JSONL fallback
 - motivation:
   - first controlled remote GPU run (2026-04-14) confirmed: `build-trajectories` OOM-free ✅, `training_device=cuda` ✅
-  - bottleneck identified: each batch (batch_size=24 × feature_dim=680,413) assembles Pydantic `TrajectoryStep` → numpy → torch in Python GIL, ~130 MB/batch, 300 batches/epoch — estimated 84 min/epoch, 14+ hours for 8 epochs
+  - bottleneck identified: each batch (batch_size=24 × feature_dim=680,413) assembles Pydantic `TrajectoryStep` -> numpy -> torch in Python GIL, ~130 MB/batch, 300 batches/epoch — estimated 84 min/epoch, 14+ hours for 8 epochs
   - GPU utilization was 0% (CPU-bound data pipeline, not GPU-bound)
   - bottleneck is NOT OOM, NOT instance size, NOT GPU memory — it is batch assembly cost
+  - train-only acceleration is insufficient; validation/final evaluate would reintroduce the same Python-side blocker unless they share the cache family and batched inference path
+- completion_notes:
+  - `TrajectoryBuilder.build_to_directory()` now writes canonical JSONL plus `tensor_cache_v1/` shard manifests and bounded shard files for every prod split
+  - prod `LinearPolicyTrainer.train_search_from_directory()` now uses raw tensor shards for feature stats, batch assembly, and train-time validation; cache-missing directories fail closed unless `allow_jsonl_fallback` is passed explicitly
+  - `EvaluationEngine.evaluate_directory()` now uses the same tensor-cache family and batched linear-policy inference; directory evaluate no longer depends on per-step `PolicyRuntimeBridge.decide()`
+  - targeted local verification now covers cache output parity, prod fast-path guardrails, train/evaluate fail-closed behavior, and explicit temporary-compat fallback behavior
 - acceptance_criteria:
-  - `build-trajectories` writes `{split}_X.pt` + `{split}_y.pt` (or equivalent) alongside JSONL during `build_to_directory`
-  - `train` detects tensor files and reads them directly via `torch.load()` without Pydantic deserialization per batch
+  - `build-trajectories` writes canonical JSONL plus `tensor_cache_v1` shard sidecars, replay sidecars, and a cache manifest for all 4 prod splits during `build_to_directory`
+  - prod `train`, train-time `validation`, and prod directory `evaluate` use the tensor-cache family by default with `tensor_cache_used=true` and `jsonl_fallback_used=false`
   - no change to JSONL output (remains for compatibility / inspection)
-  - wall-time per epoch on RTX A6000 drops below 5 minutes
-  - GPU utilization > 0% confirmed by `nvidia-smi` during training
+  - controlled remote rerun shows `epoch_wall_sec < 300`, per-epoch `validation_wall_sec < 60`, `evaluate_wall_sec < 180`, and no `137`/OOM exits
+  - average GPU utilization materially increases above the baseline and reaches at least `20%`
 - done_when:
-  - pre-computed tensor files are written by build and read by train
-  - GPU utilization > 0% on remote controlled run
-  - 8 epochs complete end-to-end in practical wall-time
-  - ruff/mypy/pytest still clean
+  - shard-based tensor cache sidecars are written by build and consumed by train/validation/evaluate
+  - the controlled remote rerun proves the throughput and GPU-utilization gates above
+  - 8 epochs complete end-to-end in practical wall-time with no silent JSONL fallback
+  - local verification remains clean (`ruff`, `mypy`, targeted `pytest`)
+- open_items:
+  - execute the controlled remote rerun and attach the evidence bundle to state/runbook notes
 
 
 ### QL-100

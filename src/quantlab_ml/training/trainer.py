@@ -37,6 +37,15 @@ from quantlab_ml.models.linear_policy import LinearPolicyParameters
 from quantlab_ml.runtime_contract import build_strict_runtime_contract
 from quantlab_ml.scoring import PolicyScorer
 from quantlab_ml.training.config import TrainingConfig
+from quantlab_ml.trajectories.tensor_cache import (
+    TENSOR_CACHE_FORMAT_VERSION,
+    TensorCacheManifest,
+    best_label_from_step,
+    has_tensor_cache,
+    load_tensor_cache_shard,
+    read_tensor_cache_manifest,
+    window_row_indices,
+)
 from . import compat_matrix_first
 from .compat_matrix_first import CompatPreparedTrainingData as _PreparedTrainingData
 
@@ -275,6 +284,10 @@ class LinearPolicyTrainer:
                 validation_data_flow="bundle_evaluation",
                 normalization_strategy="matrix_first_train_only",
                 proxy_validation_used=False,
+                tensor_cache_used=False,
+                jsonl_fallback_used=False,
+                tensor_cache_format=None,
+                tensor_cache_shard_count=None,
             )
             artifact = self._build_artifact(
                 bundle=bundle,
@@ -369,7 +382,17 @@ class LinearPolicyTrainer:
     def _prepare_training_data(self, bundle: TrajectoryBundle) -> _PreparedTrainingData:
         """⚠️  FIXTURE / TEST COMPAT PATH — matrix-first helper wrapper."""
 
-        return compat_matrix_first.prepare_training_data(bundle)
+        prepared = compat_matrix_first.prepare_training_data(bundle)
+        logger.info(
+            "training_data_prepared train_examples=%d validation_examples=%d "
+            "feature_dim=%d action_count=%d venue_count=%d path_classification=temporary_compatibility_maintenance",
+            prepared.train_step_count,
+            prepared.val_step_count,
+            prepared.feature_dim,
+            len(prepared.action_keys),
+            len(prepared.venue_choices),
+        )
+        return prepared
 
     def _select_candidate_via_walkforward(
         self,
@@ -519,12 +542,15 @@ class LinearPolicyTrainer:
 
         loss_history: list[float] = []
         validation_history: list[float] = []
+        validation_wall_sec_history: list[float] = []
         best_validation_total_net_return: float | None = None
         best_epoch = 0
         best_parameters: LinearPolicyParameters | None = None
         best_validation_score = None
 
         for epoch in range(1, config.epochs + 1):
+            import time as _time
+
             total_loss = self._backend.step(
                 state=state,
                 prepared=prepared,
@@ -552,7 +578,9 @@ class LinearPolicyTrainer:
                 training_summary={},
                 search_metadata=None,
             )
+            validation_started_at = _time.perf_counter()
             validation_report = self._validation_report(bundle, validation_artifact)
+            validation_wall_sec_history.append(_time.perf_counter() - validation_started_at)
             validation_history.append(validation_report.total_net_return)
             validation_score = PolicyScorer().score(validation_report)
 
@@ -592,6 +620,7 @@ class LinearPolicyTrainer:
             best_validation_score=best_validation_score,
             loss_history=loss_history,
             validation_history=validation_history,
+            validation_wall_sec_history=validation_wall_sec_history,
         )
 
     def _candidate_training_summary(
@@ -608,6 +637,10 @@ class LinearPolicyTrainer:
         validation_data_flow: str,
         normalization_strategy: str,
         proxy_validation_used: bool,
+        tensor_cache_used: bool,
+        jsonl_fallback_used: bool,
+        tensor_cache_format: str | None,
+        tensor_cache_shard_count: int | None,
         batch_plan: StreamingBatchPlan | None = None,
     ) -> dict[str, object]:
         summary: dict[str, object] = {
@@ -646,8 +679,13 @@ class LinearPolicyTrainer:
             "validation_data_flow": validation_data_flow,
             "normalization_strategy": normalization_strategy,
             "proxy_validation_used": proxy_validation_used,
+            "tensor_cache_used": tensor_cache_used,
+            "jsonl_fallback_used": jsonl_fallback_used,
+            "tensor_cache_format": tensor_cache_format,
+            "tensor_cache_shard_count": tensor_cache_shard_count,
             "training_loss_history": candidate_run.loss_history,
             "validation_objective_history": candidate_run.validation_history,
+            "validation_wall_sec_history": candidate_run.validation_wall_sec_history,
             "search_budget_summary": search_budget_summary.model_dump(mode="json"),
         }
         if batch_plan is not None:
@@ -837,13 +875,192 @@ class LinearPolicyTrainer:
         manifest: TrajectoryManifest,
         directory: Path,
         parent_policy_id: str | None = None,
+        *,
+        allow_jsonl_fallback: bool = False,
     ) -> TrainingSearchResult:
-        """PRODUCTION PATH — train from a streaming JSONL trajectory directory.
+        """PRODUCTION PATH — train from a tensor-cache backed trajectory directory.
 
-        Streams development.jsonl per fold for walk-forward CV, then streams
-        train.jsonl / validation.jsonl for final model fit.  Never assembles
-        a full TrajectoryBundle in memory.
+        Uses `tensor_cache_v1` shards when present. JSONL streaming remains only
+        as an explicit temporary compatibility fallback.
         """
+        if has_tensor_cache(directory):
+            return self._train_search_from_directory_tensor_cache(
+                manifest=manifest,
+                directory=directory,
+                cache_manifest=read_tensor_cache_manifest(directory),
+                parent_policy_id=parent_policy_id,
+            )
+        if not allow_jsonl_fallback:
+            raise ValueError(
+                "tensor cache manifest missing for trajectory directory; "
+                "pass allow_jsonl_fallback=True only for temporary compatibility maintenance"
+            )
+        logger.warning(
+            "training_directory_tensor_cache_missing path=%s tensor_cache_used=false "
+            "jsonl_fallback_used=true path_classification=temporary_compatibility_maintenance",
+            directory,
+        )
+        return self._train_search_from_directory_jsonl(
+            manifest=manifest,
+            directory=directory,
+            parent_policy_id=parent_policy_id,
+        )
+
+    def _train_search_from_directory_tensor_cache(
+        self,
+        *,
+        manifest: TrajectoryManifest,
+        directory: Path,
+        cache_manifest: TensorCacheManifest,
+        parent_policy_id: str | None,
+    ) -> TrainingSearchResult:
+        if cache_manifest.format_version != TENSOR_CACHE_FORMAT_VERSION:
+            raise ValueError(
+                f"unsupported tensor cache format: {cache_manifest.format_version!r}"
+            )
+        candidate_specs = self._candidate_specs()
+        code_commit_hash = current_code_commit_hash()
+        training_run_id = self._training_run_id_from_manifest(
+            manifest,
+            parent_policy_id=parent_policy_id,
+            code_commit_hash=code_commit_hash,
+            candidate_specs=candidate_specs,
+        )
+        search_budget_summary = _search_budget_summary(candidate_specs)
+        tensor_cache_shard_count = sum(split.shard_count for split in cache_manifest.splits.values())
+        logger.info(
+            "training_search_started training_run_id=%s candidate_count=%d split_version=%s reward_version=%s "
+            "training_backend=%s training_device=%s cuda_available=%s device_name=%s "
+            "tensor_cache_format=%s tensor_cache_used=true jsonl_fallback_used=false "
+            "tensor_cache_shard_count=%d cache_feature_dtype=%s cache_feature_dim=%d",
+            training_run_id,
+            len(candidate_specs),
+            manifest.split_artifact.split_version,
+            manifest.reward_spec.reward_version,
+            self._backend.backend_name,
+            self._backend.device_resolution.training_device,
+            self._backend.device_resolution.cuda_available,
+            self._backend.device_resolution.device_name,
+            cache_manifest.format_version,
+            tensor_cache_shard_count,
+            cache_manifest.feature_dtype,
+            cache_manifest.feature_dim,
+        )
+
+        selection_runs = [
+            self._select_candidate_via_walkforward_tensor_cache(
+                manifest=manifest,
+                directory=directory,
+                cache_manifest=cache_manifest,
+                candidate_spec=candidate_spec,
+                candidate_index=candidate_index,
+                parent_policy_id=parent_policy_id,
+                training_run_id=training_run_id,
+                code_commit_hash=code_commit_hash,
+            )
+            for candidate_index, candidate_spec in enumerate(candidate_specs)
+        ]
+        ranked_selections = sorted(selection_runs, key=_selection_ranking_key)
+
+        final_train_window = StreamingWindow(split_name="train")
+        final_validation_window = StreamingWindow(split_name="validation")
+        prepared = self._prepare_training_data_tensor_cache(
+            manifest=manifest,
+            directory=directory,
+            cache_manifest=cache_manifest,
+            train_window=final_train_window,
+            validation_window=final_validation_window,
+        )
+
+        candidate_results: list[TrainingCandidateResult] = []
+        for candidate_rank, selection_run in enumerate(ranked_selections, start=1):
+            selected_candidate = candidate_rank == 1
+            candidate_run = self._train_candidate_from_tensor_cache(
+                manifest=manifest,
+                directory=directory,
+                cache_manifest=cache_manifest,
+                prepared=prepared,
+                train_window=final_train_window,
+                validation_window=final_validation_window,
+                candidate_spec=selection_run.candidate_spec,
+                candidate_index=selection_run.candidate_index,
+                parent_policy_id=parent_policy_id,
+                training_run_id=training_run_id,
+                code_commit_hash=code_commit_hash,
+            )
+            candidate_summary = self._candidate_training_summary(
+                prepared=prepared,
+                candidate_run=candidate_run,
+                selection_run=selection_run,
+                training_run_id=training_run_id,
+                candidate_rank=candidate_rank,
+                selected_candidate=selected_candidate,
+                search_budget_summary=search_budget_summary,
+                training_data_flow="tensor_shard_batch",
+                validation_data_flow="tensor_shard_evaluation",
+                normalization_strategy="train_only_two_pass_tensor_cache",
+                proxy_validation_used=False,
+                tensor_cache_used=True,
+                jsonl_fallback_used=False,
+                tensor_cache_format=cache_manifest.format_version,
+                tensor_cache_shard_count=tensor_cache_shard_count,
+                batch_plan=prepared.batch_plan,
+            )
+            artifact = self._build_artifact_from_manifest(
+                manifest=manifest,
+                config=candidate_run.config,
+                training_run_id=training_run_id,
+                code_commit_hash=code_commit_hash,
+                parameters=candidate_run.best_parameters,
+                parent_policy_id=parent_policy_id,
+                validation_total_net_return=candidate_run.best_validation_total_net_return,
+                validation_score=candidate_run.best_validation_score,
+                training_summary=candidate_summary,
+                search_metadata=_ArtifactSearchMetadata(
+                    candidate_index=selection_run.candidate_index,
+                    candidate_rank=candidate_rank,
+                    selected_candidate=selected_candidate,
+                ),
+                validation_step_count=prepared.val_step_count,
+            )
+            candidate_results.append(
+                TrainingCandidateResult(
+                    artifact=artifact,
+                    candidate_index=selection_run.candidate_index,
+                    candidate_rank=candidate_rank,
+                    selected_candidate=selected_candidate,
+                    candidate_spec=selection_run.candidate_spec,
+                    best_validation_total_net_return=candidate_run.best_validation_total_net_return,
+                    best_validation_composite_rank=candidate_run.best_validation_score.composite_rank,
+                )
+            )
+
+        result = TrainingSearchResult(
+            training_run_id=training_run_id,
+            selected_artifact=candidate_results[0].artifact,
+            candidate_results=candidate_results,
+            search_budget_summary=search_budget_summary,
+        )
+        logger.info(
+            "training_search_completed training_run_id=%s selected_policy_id=%s candidate_count=%d "
+            "selected_validation_total_net_return=%.6f selected_validation_composite_rank=%.6f "
+            "tensor_cache_used=true jsonl_fallback_used=false",
+            training_run_id,
+            result.selected_artifact.policy_id,
+            len(candidate_results),
+            candidate_results[0].best_validation_total_net_return,
+            candidate_results[0].best_validation_composite_rank,
+        )
+        return result
+
+    def _train_search_from_directory_jsonl(
+        self,
+        *,
+        manifest: TrajectoryManifest,
+        directory: Path,
+        parent_policy_id: str | None,
+    ) -> TrainingSearchResult:
+        """TEMPORARY COMPAT PATH — train from streaming JSONL only."""
         from quantlab_ml.trajectories.streaming_store import TrajectoryDirectoryStore
 
         candidate_specs = self._candidate_specs()
@@ -857,7 +1074,8 @@ class LinearPolicyTrainer:
         search_budget_summary = _search_budget_summary(candidate_specs)
         logger.info(
             "training_search_started training_run_id=%s candidate_count=%d split_version=%s reward_version=%s "
-            "training_backend=%s training_device=%s cuda_available=%s device_name=%s",
+            "training_backend=%s training_device=%s cuda_available=%s device_name=%s "
+            "tensor_cache_used=false jsonl_fallback_used=true path_classification=temporary_compatibility_maintenance",
             training_run_id,
             len(candidate_specs),
             manifest.split_artifact.split_version,
@@ -921,6 +1139,10 @@ class LinearPolicyTrainer:
                 validation_data_flow="streaming_evaluation",
                 normalization_strategy="train_only_two_pass_streaming",
                 proxy_validation_used=False,
+                tensor_cache_used=False,
+                jsonl_fallback_used=True,
+                tensor_cache_format=None,
+                tensor_cache_shard_count=None,
                 batch_plan=prepared.batch_plan,
             )
             artifact = self._build_artifact_from_manifest(
@@ -960,7 +1182,8 @@ class LinearPolicyTrainer:
         )
         logger.info(
             "training_search_completed training_run_id=%s selected_policy_id=%s candidate_count=%d "
-            "selected_validation_total_net_return=%.6f selected_validation_composite_rank=%.6f",
+            "selected_validation_total_net_return=%.6f selected_validation_composite_rank=%.6f "
+            "tensor_cache_used=false jsonl_fallback_used=true",
             training_run_id,
             result.selected_artifact.policy_id,
             len(candidate_results),
@@ -1026,6 +1249,445 @@ class LinearPolicyTrainer:
         for record in store_cls.iter_records(directory, window.split_name):
             step_count += sum(1 for step in record.steps if window.includes(step.event_time))
         return step_count
+
+    def _tensor_cache_split_manifest(
+        self,
+        cache_manifest: TensorCacheManifest,
+        split_name: str,
+    ) -> Any:
+        split_manifest = cache_manifest.splits.get(split_name)
+        if split_manifest is None:
+            raise ValueError(f"tensor cache is missing split {split_name!r}")
+        return split_manifest
+
+    def _count_window_steps_tensor_cache(
+        self,
+        directory: Path,
+        cache_manifest: TensorCacheManifest,
+        window: StreamingWindow,
+    ) -> int:
+        step_count = 0
+        for shard in self._tensor_cache_split_manifest(cache_manifest, window.split_name).shards:
+            loaded = load_tensor_cache_shard(directory, shard)
+            step_count += int(
+                window_row_indices(
+                    loaded.event_time_ms,
+                    start=window.start,
+                    end=window.end,
+                    exclusive_end=window.exclusive_end,
+                ).shape[0]
+            )
+        return step_count
+
+    def _tensor_cache_feature_stats(
+        self,
+        directory: Path,
+        cache_manifest: TensorCacheManifest,
+        window: StreamingWindow,
+    ) -> tuple[int, np.ndarray, np.ndarray]:
+        total_count = 0
+        feature_sum: np.ndarray | None = None
+        feature_sum_sq: np.ndarray | None = None
+
+        for shard in self._tensor_cache_split_manifest(cache_manifest, window.split_name).shards:
+            loaded = load_tensor_cache_shard(directory, shard)
+            row_idx = window_row_indices(
+                loaded.event_time_ms,
+                start=window.start,
+                end=window.end,
+                exclusive_end=window.exclusive_end,
+            )
+            if row_idx.size == 0:
+                continue
+            batch = loaded.features[row_idx].astype(np.float64, copy=False)
+            if feature_sum is None or feature_sum_sq is None:
+                feature_sum = np.zeros(batch.shape[1], dtype=np.float64)
+                feature_sum_sq = np.zeros(batch.shape[1], dtype=np.float64)
+            feature_sum += batch.sum(axis=0)
+            feature_sum_sq += np.square(batch).sum(axis=0)
+            total_count += int(row_idx.shape[0])
+
+        if total_count <= 0 or feature_sum is None or feature_sum_sq is None:
+            raise ValueError(f"tensor cache stats window {window.split_name!r} returned 0 qualifying examples")
+
+        feature_mean = feature_sum / total_count
+        feature_var = np.maximum((feature_sum_sq / total_count) - np.square(feature_mean), 0.0)
+        feature_std = np.sqrt(feature_var)
+        feature_std = np.where(feature_std < 1e-6, 1.0, feature_std).astype(np.float32)
+        return total_count, feature_mean.astype(np.float32), feature_std
+
+    def _prepare_training_data_tensor_cache(
+        self,
+        *,
+        manifest: TrajectoryManifest,
+        directory: Path,
+        cache_manifest: TensorCacheManifest,
+        train_window: StreamingWindow,
+        validation_window: StreamingWindow,
+    ) -> _StreamingPreparedData:
+        expected_cache_feature_dim = build_strict_runtime_contract(
+            manifest.observation_schema,
+            policy_kind=self.config.runtime_adapter,
+        ).expected_feature_dim
+        if cache_manifest.feature_dim != expected_cache_feature_dim:
+            raise ValueError(
+                "tensor cache feature dimension does not match manifest observation schema: "
+                f"cache_feature_dim={cache_manifest.feature_dim}, "
+                f"expected_feature_dim={expected_cache_feature_dim}"
+            )
+        train_step_count, feature_mean, feature_std = self._tensor_cache_feature_stats(
+            directory,
+            cache_manifest,
+            train_window,
+        )
+        val_step_count = self._count_window_steps_tensor_cache(directory, cache_manifest, validation_window)
+        if val_step_count <= 0:
+            raise ValueError("validation split is empty")
+        batch_plan = self._streaming_batch_plan(
+            feature_dim=int(feature_mean.shape[0]),
+            train_step_count=train_step_count,
+        )
+        logger.info(
+            "tensor_cache_training_data_prepared train_examples=%d validation_examples=%d "
+            "feature_dim=%d effective_batch_size=%d estimated_batch_bytes=%d "
+            "batches_per_epoch=%d batch_target_bytes=%d tensor_cache_format=%s "
+            "tensor_cache_used=true jsonl_fallback_used=false",
+            train_step_count,
+            val_step_count,
+            feature_mean.shape[0],
+            batch_plan.effective_batch_size,
+            batch_plan.estimated_batch_bytes,
+            batch_plan.batches_per_epoch,
+            batch_plan.batch_target_bytes,
+            cache_manifest.format_version,
+        )
+        return _StreamingPreparedData(
+            train_step_count=train_step_count,
+            val_step_count=val_step_count,
+            action_keys=manifest.action_space.action_keys,
+            venue_choices=manifest.dataset_spec.exchanges,
+            feature_mean=feature_mean,
+            feature_std=feature_std,
+            batch_plan=batch_plan,
+        )
+
+    def _select_candidate_via_walkforward_tensor_cache(
+        self,
+        *,
+        manifest: TrajectoryManifest,
+        directory: Path,
+        cache_manifest: TensorCacheManifest,
+        candidate_spec: TrainingCandidateSpec,
+        candidate_index: int,
+        parent_policy_id: str | None,
+        training_run_id: str,
+        code_commit_hash: str,
+    ) -> _CandidateSelectionRun:
+        fold_scores: list[FoldValidationScore] = []
+        interval = timedelta(seconds=manifest.dataset_spec.sampling_interval_seconds)
+
+        for fold in manifest.split_artifact.folds:
+            purge_cutoff = fold.validation_window.start - (interval * fold.purge_width_steps)
+            train_window = StreamingWindow(
+                split_name="development",
+                start=fold.train_window.start,
+                end=fold.train_window.end,
+                exclusive_end=purge_cutoff if fold.purge_width_steps > 0 else None,
+            )
+            validation_window = StreamingWindow(
+                split_name="development",
+                start=fold.validation_window.start,
+                end=fold.validation_window.end,
+            )
+            fold_prepared = self._prepare_training_data_tensor_cache(
+                manifest=manifest,
+                directory=directory,
+                cache_manifest=cache_manifest,
+                train_window=train_window,
+                validation_window=validation_window,
+            )
+            fold_run = self._train_candidate_from_tensor_cache(
+                manifest=manifest,
+                directory=directory,
+                cache_manifest=cache_manifest,
+                prepared=fold_prepared,
+                train_window=train_window,
+                validation_window=validation_window,
+                candidate_spec=candidate_spec,
+                candidate_index=candidate_index,
+                parent_policy_id=parent_policy_id,
+                training_run_id=f"{training_run_id}:{fold.fold_id}",
+                code_commit_hash=code_commit_hash,
+            )
+            fold_scores.append(
+                FoldValidationScore(
+                    fold_id=fold.fold_id,
+                    validation_total_net_return=fold_run.best_validation_total_net_return,
+                    validation_composite_rank=fold_run.best_validation_score.composite_rank,
+                    validation_step_count=fold_prepared.val_step_count,
+                )
+            )
+        selection_total_net_return = _weighted_mean(
+            [score.validation_total_net_return for score in fold_scores],
+            [score.validation_step_count for score in fold_scores],
+        )
+        selection_composite_rank = _weighted_mean(
+            [score.validation_composite_rank for score in fold_scores],
+            [score.validation_step_count for score in fold_scores],
+        )
+        logger.info(
+            "training_candidate_walkforward_completed candidate_index=%d seed=%d "
+            "learning_rate=%.6f l2_weight=%.6f fold_count=%d "
+            "selection_total_net_return=%.6f selection_composite_rank=%.6f "
+            "tensor_cache_used=true jsonl_fallback_used=false",
+            candidate_index,
+            candidate_spec.seed,
+            candidate_spec.learning_rate,
+            candidate_spec.l2_weight,
+            len(fold_scores),
+            selection_total_net_return,
+            selection_composite_rank,
+        )
+        return _CandidateSelectionRun(
+            candidate_spec=candidate_spec,
+            candidate_index=candidate_index,
+            fold_scores=fold_scores,
+            selection_total_net_return=selection_total_net_return,
+            selection_composite_rank=selection_composite_rank,
+        )
+
+    def _train_tensor_cache_epoch(
+        self,
+        *,
+        directory: Path,
+        cache_manifest: TensorCacheManifest,
+        prepared: _StreamingPreparedData,
+        train_window: StreamingWindow,
+        state: object,
+        config: TrainingConfig,
+    ) -> float:
+        batch_size = prepared.batch_plan.effective_batch_size
+        weighted_loss_total = 0.0
+        seen = 0
+
+        for shard in self._tensor_cache_split_manifest(cache_manifest, train_window.split_name).shards:
+            loaded = load_tensor_cache_shard(directory, shard)
+            row_idx = window_row_indices(
+                loaded.event_time_ms,
+                start=train_window.start,
+                end=train_window.end,
+                exclusive_end=train_window.exclusive_end,
+            )
+            if row_idx.size == 0:
+                continue
+
+            normalized = loaded.features[row_idx].astype(np.float64, copy=False)
+            normalized -= prepared.feature_mean
+            normalized /= prepared.feature_std
+            action_labels = loaded.action_labels[row_idx]
+            venue_mask = loaded.venue_mask[row_idx]
+            venue_labels = loaded.venue_labels[row_idx]
+
+            for start_idx in range(0, int(row_idx.shape[0]), batch_size):
+                end_idx = min(start_idx + batch_size, int(row_idx.shape[0]))
+                batch_features = normalized[start_idx:end_idx]
+                batch_action_labels = action_labels[start_idx:end_idx]
+                batch_venue_mask = venue_mask[start_idx:end_idx]
+                batch_venue_labels = venue_labels[start_idx:end_idx]
+                batch_loss = self._backend.batch_step(
+                    state=state,
+                    batch_features=batch_features,
+                    batch_action_labels=batch_action_labels,
+                    batch_venue_mask=batch_venue_mask,
+                    batch_venue_labels=batch_venue_labels,
+                    config=config,
+                )
+                batch_rows = end_idx - start_idx
+                weighted_loss_total += batch_loss * batch_rows
+                seen += batch_rows
+
+        if seen <= 0:
+            raise ValueError("train split is empty")
+        return float(weighted_loss_total / seen)
+
+    def _train_candidate_from_tensor_cache(
+        self,
+        *,
+        manifest: TrajectoryManifest,
+        directory: Path,
+        cache_manifest: TensorCacheManifest,
+        prepared: _StreamingPreparedData,
+        train_window: StreamingWindow,
+        validation_window: StreamingWindow,
+        candidate_spec: TrainingCandidateSpec,
+        candidate_index: int,
+        parent_policy_id: str | None,
+        training_run_id: str,
+        code_commit_hash: str,
+    ) -> _CandidateTrainingRun:
+        config = self.config.model_copy(
+            update={
+                "seed": candidate_spec.seed,
+                "learning_rate": candidate_spec.learning_rate,
+                "l2_weight": candidate_spec.l2_weight,
+                "candidate_search": None,
+            }
+        )
+        state = self._backend.initialize_state(
+            seed=config.seed,
+            action_count=len(prepared.action_keys),
+            venue_count=len(prepared.venue_choices),
+            feature_dim=prepared.feature_dim,
+        )
+        logger.info(
+            "tensor_cache_training_candidate_started candidate_index=%d seed=%d learning_rate=%.6f "
+            "l2_weight=%.6f effective_batch_size=%d estimated_batch_bytes=%d "
+            "batches_per_epoch=%d batch_target_bytes=%d tensor_cache_format=%s",
+            candidate_index,
+            candidate_spec.seed,
+            candidate_spec.learning_rate,
+            candidate_spec.l2_weight,
+            prepared.batch_plan.effective_batch_size,
+            prepared.batch_plan.estimated_batch_bytes,
+            prepared.batch_plan.batches_per_epoch,
+            prepared.batch_plan.batch_target_bytes,
+            cache_manifest.format_version,
+        )
+        loss_history: list[float] = []
+        validation_history: list[float] = []
+        validation_wall_sec_history: list[float] = []
+        best_validation_total_net_return: float | None = None
+        best_parameters: LinearPolicyParameters | None = None
+        best_validation_score: PolicyScore | None = None
+        best_epoch = 0
+        for epoch in range(1, config.epochs + 1):
+            import time as _time
+
+            epoch_started_at = _time.perf_counter()
+            total_loss = self._train_tensor_cache_epoch(
+                directory=directory,
+                cache_manifest=cache_manifest,
+                prepared=prepared,
+                train_window=train_window,
+                state=state,
+                config=config,
+            )
+            epoch_wall_sec = _time.perf_counter() - epoch_started_at
+            train_rows_per_sec = prepared.train_step_count / max(epoch_wall_sec, 1e-9)
+            logger.info(
+                "epoch_timing epoch=%d wall_sec=%.1f total_loss=%.6f train_rows_per_sec=%.2f "
+                "tensor_cache_used=true jsonl_fallback_used=false",
+                epoch,
+                epoch_wall_sec,
+                total_loss,
+                train_rows_per_sec,
+            )
+            loss_history.append(total_loss)
+            parameters = self._backend.parameters(
+                state=state,
+                action_keys=prepared.action_keys,
+                venue_choices=prepared.venue_choices,
+                feature_mean=prepared.feature_mean,
+                feature_std=prepared.feature_std,
+                config=config,
+            )
+            validation_artifact = self._build_artifact_from_manifest(
+                manifest=manifest,
+                config=config,
+                training_run_id=training_run_id,
+                code_commit_hash=code_commit_hash,
+                parameters=parameters,
+                parent_policy_id=parent_policy_id,
+                validation_total_net_return=0.0,
+                validation_score=None,
+                training_summary={},
+                search_metadata=None,
+                validation_step_count=prepared.val_step_count,
+            )
+            validation_started_at = _time.perf_counter()
+            validation_report = self._validation_report_from_tensor_cache(
+                manifest=manifest,
+                directory=directory,
+                cache_manifest=cache_manifest,
+                artifact=validation_artifact,
+                validation_window=validation_window,
+            )
+            validation_wall_sec = _time.perf_counter() - validation_started_at
+            validation_rows_per_sec = prepared.val_step_count / max(validation_wall_sec, 1e-9)
+            logger.info(
+                "validation_timing epoch=%d wall_sec=%.1f validation_rows_per_sec=%.2f "
+                "tensor_cache_used=true jsonl_fallback_used=false",
+                epoch,
+                validation_wall_sec,
+                validation_rows_per_sec,
+            )
+            validation_score = PolicyScorer().score(validation_report)
+            validation_history.append(validation_report.total_net_return)
+            validation_wall_sec_history.append(validation_wall_sec)
+            is_best = (
+                best_validation_total_net_return is None
+                or validation_report.total_net_return > best_validation_total_net_return
+            )
+            if is_best:
+                best_epoch = epoch
+                best_parameters = parameters
+                best_validation_total_net_return = validation_report.total_net_return
+                best_validation_score = validation_score
+
+        assert best_parameters is not None
+        assert best_validation_total_net_return is not None
+        assert best_validation_score is not None
+        logger.info(
+            "training_candidate_completed candidate_index=%d seed=%d best_epoch=%d "
+            "best_validation_total_net_return=%.6f best_validation_composite_rank=%.6f "
+            "effective_batch_size=%d estimated_batch_bytes=%d batches_per_epoch=%d "
+            "training_backend=%s tensor_cache_used=true jsonl_fallback_used=false",
+            candidate_index,
+            candidate_spec.seed,
+            best_epoch,
+            best_validation_total_net_return,
+            best_validation_score.composite_rank,
+            prepared.batch_plan.effective_batch_size,
+            prepared.batch_plan.estimated_batch_bytes,
+            prepared.batch_plan.batches_per_epoch,
+            self._backend.backend_name,
+        )
+        return _CandidateTrainingRun(
+            config=config,
+            candidate_spec=candidate_spec,
+            candidate_index=candidate_index,
+            best_epoch=best_epoch,
+            best_parameters=best_parameters,
+            best_validation_total_net_return=best_validation_total_net_return,
+            best_validation_score=best_validation_score,
+            loss_history=loss_history,
+            validation_history=validation_history,
+            validation_wall_sec_history=validation_wall_sec_history,
+        )
+
+    def _validation_report_from_tensor_cache(
+        self,
+        *,
+        manifest: TrajectoryManifest,
+        directory: Path,
+        cache_manifest: TensorCacheManifest,
+        artifact: PolicyArtifact,
+        validation_window: StreamingWindow,
+    ) -> EvaluationReport:
+        from quantlab_ml.evaluation import EvaluationEngine
+
+        engine = EvaluationEngine(self._evaluation_boundary(manifest.reward_spec.timestamping))
+        return engine.evaluate_directory(
+            manifest=manifest,
+            directory=directory,
+            artifact=artifact,
+            cache_manifest=cache_manifest,
+            split_name=validation_window.split_name,
+            start=validation_window.start,
+            end=validation_window.end,
+            exclusive_end=validation_window.exclusive_end,
+            allow_jsonl_fallback=False,
+        )
 
     def _streaming_feature_stats(
         self,
@@ -1230,6 +1892,7 @@ class LinearPolicyTrainer:
         )
         loss_history: list[float] = []
         validation_history: list[float] = []
+        validation_wall_sec_history: list[float] = []
         best_validation_total_net_return: float | None = None
         best_parameters: LinearPolicyParameters | None = None
         best_validation_score: PolicyScore | None = None
@@ -1247,8 +1910,11 @@ class LinearPolicyTrainer:
             )
             _t_epoch1 = _time.perf_counter()
             logger.info(
-                "epoch_timing epoch=%d wall_sec=%.1f total_loss=%.6f",
-                epoch, _t_epoch1 - _t_epoch0, total_loss,
+                "epoch_timing epoch=%d wall_sec=%.1f total_loss=%.6f train_rows_per_sec=%.2f",
+                epoch,
+                _t_epoch1 - _t_epoch0,
+                total_loss,
+                prepared.train_step_count / max(_t_epoch1 - _t_epoch0, 1e-9),
             )
             loss_history.append(total_loss)
             parameters = self._backend.parameters(
@@ -1272,6 +1938,7 @@ class LinearPolicyTrainer:
                 search_metadata=None,
                 validation_step_count=prepared.val_step_count,
             )
+            _t_val0 = _time.perf_counter()
             validation_report = self._validation_report_from_manifest(
                 manifest=manifest,
                 directory=directory,
@@ -1279,8 +1946,17 @@ class LinearPolicyTrainer:
                 validation_window=validation_window,
                 store_cls=store_cls,
             )
+            _t_val1 = _time.perf_counter()
             validation_score = PolicyScorer().score(validation_report)
             validation_history.append(validation_report.total_net_return)
+            validation_wall_sec_history.append(_t_val1 - _t_val0)
+            logger.info(
+                "validation_timing epoch=%d wall_sec=%.1f validation_rows_per_sec=%.2f "
+                "tensor_cache_used=false jsonl_fallback_used=true",
+                epoch,
+                _t_val1 - _t_val0,
+                prepared.val_step_count / max(_t_val1 - _t_val0, 1e-9),
+            )
             is_best = (
                 best_validation_total_net_return is None
                 or validation_report.total_net_return > best_validation_total_net_return
@@ -1326,6 +2002,7 @@ class LinearPolicyTrainer:
             best_validation_score=best_validation_score,
             loss_history=loss_history,
             validation_history=validation_history,
+            validation_wall_sec_history=validation_wall_sec_history,
         )
 
     def _train_streaming_epoch(
@@ -1640,6 +2317,7 @@ class _CandidateTrainingRun:
     best_validation_score: PolicyScore
     loss_history: list[float]
     validation_history: list[float]
+    validation_wall_sec_history: list[float]
 
 
 class _LinearTrainingBackend:
@@ -2040,16 +2718,7 @@ def _weighted_mean(values: list[float], weights: list[int]) -> float:
 
 
 def _best_label(step: TrajectoryStep) -> tuple[str, str | None]:
-    abstain_reward = step.reward_snapshot.for_action("abstain").net_reward
-    best_directional = None
-    for reward in step.reward_snapshot.action_rewards:
-        if reward.action_key == "abstain" or not reward.applicable:
-            continue
-        if best_directional is None or reward.net_reward > best_directional.net_reward:
-            best_directional = reward
-    if best_directional is None or best_directional.net_reward <= abstain_reward:
-        return "abstain", None
-    return best_directional.action_key, best_directional.venue
+    return best_label_from_step(step)
 
 
 def _softmax_matrix(logits: np.ndarray) -> np.ndarray:

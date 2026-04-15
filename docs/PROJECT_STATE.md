@@ -17,10 +17,10 @@ This file must stay short and current.
 
 ## Current snapshot
 
-- current_phase: `Phase 5 — second controlled remote GPU profiling run completed (2026-04-14, RTX 3090). build-trajectories exit 0. Training profiling confirmed bottleneck: Python GIL single-threaded feature extraction. Diagnosis complete, QL-021 is the next implementation task.`
-- current_focus: `Implement QL-021: write pre-computed float32 tensor files at build-trajectories time; train reads binary via torch.load() — eliminates Python GIL bottleneck, enables GPU utilization.`
-- current_blocker: `none blocking QL-021 implementation — diagnosis done, path is clear`
-- declared_next_task: `QL-021 — implement pre-computed tensor output in build-trajectories (write per-split float32 .pt tensor files alongside JSONL), update _train_streaming_epoch to detect and load binary tensors, re-run controlled remote rerun to verify GPU utilization > 0% and epoch < 5 min`
+- current_phase: `Phase 5 — QL-021 local implementation landed (2026-04-15). build-trajectories now writes shard-based tensor cache sidecars; prod train, train-time validation, and prod directory evaluate share the same tensor-cache hot path. Controlled remote rerun evidence is still pending.`
+- current_focus: `Run the QL-021 controlled remote rerun and prove that tensor_cache_v1 is the active prod path with materially higher GPU utilization and lower epoch/validation/evaluate wall time.`
+- current_blocker: `remote throughput proof is still missing; local implementation and targeted verification are complete`
+- declared_next_task: `QL-021 — execute the controlled remote rerun against configs/training/production.yaml + configs/data/controlled-remote-day.yaml and collect tensor_cache_used/jsonl_fallback_used, epoch wall time, validation wall time, evaluate wall time, GPU utilization, and OOM-free evidence`
 - not_now:
   - `live deployment plumbing`
   - `cloud provisioning automation`
@@ -30,9 +30,9 @@ This file must stay short and current.
 ## Active work item
 
 ```yaml
-id: ql-021-precomputed-tensor-format
-title: Implement pre-computed float32 tensor output in build-trajectories; update train to read binary tensors
-status: ready_to_implement
+id: ql-021-sharded-tensor-cache
+title: Implement shard-based raw tensor cache sidecars and shared batched prod evaluation
+status: implemented_locally_pending_remote_verification
 evidence:
   profiling_run_date: 2026-04-14
   instance: RTX 3090 / 96 GB RAM / 32 vCPU
@@ -45,10 +45,17 @@ evidence:
   wchan: 0 (pure userspace, not IO-blocked)
   io_wait: 0%
   block_read_during_train: ~0 (JSONL in page cache)
-  bottleneck_root: Python GIL single-threaded list assembly in observation_feature_vector()
-  mechanism: feature_dim=680K × 6 arrays/scale × 4 scales → Python .tolist() + np.asarray() per step
-  fix: pre-compute at build time → torch.load() at train time
-  expected_speedup: 160-500x per epoch
+  bottleneck_root: Python GIL single-threaded feature materialization plus repeated JSONL/Pydantic -> numpy -> torch conversion
+  mechanism: feature_dim=680K × 6 arrays/scale × 4 scales -> Python .tolist() + np.asarray() per step and per-step runtime inference on validation/evaluate
+  implemented_fix: build-time tensor_cache_v1 shards + aligned replay sidecars for development/train/validation/final_untouched_test; prod train and prod directory evaluate read cached tensors first
+  local_verification: 44 targeted trajectory/evaluation/CLI tests passed on 2026-04-15
+  remote_acceptance_pending:
+    - epoch_wall_sec < 300
+    - validation_wall_sec < 60
+    - evaluate_wall_sec < 180
+    - avg_gpu_utilization >= 20
+    - tensor_cache_used = true
+    - jsonl_fallback_used = false
 ```
 
 ## Current blocker details
@@ -124,14 +131,18 @@ evidence:
 - prod streaming logs and `training_summary` now expose `effective_batch_size`, `estimated_batch_bytes`, `batches_per_epoch`, `batch_target_bytes`, and `proxy_validation_used=false` so remote OOM/throughput triage is not blind
 - CLI `build-trajectories` now calls streaming path by default; `train` and `evaluate` auto-detect directory vs legacy JSON file, and directory `evaluate` now streams `final_untouched_test` instead of materializing the split list
 - 54 targeted training/evaluation/CLI/reward tests now pass for the streaming-batch refactor; `.venv/bin/ruff check .` and `.venv/bin/mypy src` are clean
+- QL-021 local implementation completed: `build-trajectories` now writes canonical JSONL plus `tensor_cache_v1/` shard sidecars for `development`, `train`, `validation`, and `final_untouched_test`
+- prod directory train now uses tensor-cache shards for train-only feature stats, vectorized batch assembly, and train-time validation; JSONL fallback is explicit temporary compatibility only
+- prod directory evaluate now uses the same tensor-cache family and a shared batched linear-policy evaluator, so final evaluate no longer reparses policy payloads or rebuilds features step-by-step
+- 44 targeted tensor-cache trajectory/evaluation/CLI tests passed locally, covering cache output, prod fast-path guardrails, and explicit JSONL fallback behavior
 
 ## Immediate next actions
 
-1. **QL-021** — implement pre-computed tensor output in `build-trajectories`: write `train_tensors.pt`, `validation_tensors.pt`, `test_tensors.pt` (float32, shape=[N, feature_dim]) alongside JSONL during `build_to_directory`.
-2. Update `StreamingBatchLoader` (or batch plan) to detect and use binary tensor files, falling back to JSONL-assembly only when tensor files are absent.
-3. Add a test that verifies the tensor output path produces arrays with correct shape and dtype without Pydantic deserialization overhead.
-4. Re-run controlled remote GPU rerun after fix: confirm GPU utilization > 0%, wall-time per epoch < 5 min, 8 epochs complete end-to-end.
-5. Run `quantlab-ml audit-continuity` as a parallel operational follow-up after the run succeeds.
+1. **QL-021 remote proof** — rerun the controlled remote chain and confirm `tensor_cache_used=true`, `jsonl_fallback_used=false`, `training_data_flow=tensor_shard_batch`, `validation_data_flow=tensor_shard_evaluation`, and `compiled_policy_mode=tensor_cache_linear_policy_batch`.
+2. Collect throughput evidence from the rerun: `epoch_wall_sec`, `validation_wall_sec`, `evaluate_wall_sec`, `train_rows_per_sec`, `validation_rows_per_sec`, `evaluation_rows_per_sec`, and average GPU utilization.
+3. Verify the acceptance gates on the controlled rerun: `epoch_wall_sec < 300`, `validation_wall_sec < 60`, `evaluate_wall_sec < 180`, `avg_gpu_utilization >= 20`, and no `137`/OOM exit.
+4. If the rerun passes, move QL-021 to done in state/backlog and record the remote evidence bundle.
+5. Run `quantlab-ml audit-continuity` as a parallel operational follow-up after the rerun succeeds.
 6. Freeze or retire the NumPy reference path once external audit confirms zero active dependency.
 
 ## Update rule

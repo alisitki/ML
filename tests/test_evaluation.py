@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+from pathlib import Path
+import shutil
+
+import pytest
+
 from quantlab_ml.contracts import (
     ActionFeasibilitySurface,
     EvaluationBoundary,
     FeasibilityCell,
 )
+from quantlab_ml.data import LocalFixtureSource
 from quantlab_ml.evaluation import EvaluationEngine
 from quantlab_ml.models import RuntimeDecision
+from quantlab_ml.policies import PolicyRuntimeBridge
 from quantlab_ml.rewards import RewardEngine
+from quantlab_ml.trajectories import TrajectoryBuilder, TrajectoryDirectoryStore
+from quantlab_ml.trajectories.tensor_cache import tensor_cache_directory
 
 
 def test_evaluation_respects_boundary(trajectory_bundle, policy_artifact, evaluation_boundary: EvaluationBoundary):
@@ -43,6 +52,117 @@ def test_evaluation_records_matches_bundle_path(
     assert stream_report.coverage_symbols == bundle_report.coverage_symbols
     assert stream_report.coverage_venues == bundle_report.coverage_venues
     assert stream_report.coverage_streams == bundle_report.coverage_streams
+
+
+def test_evaluation_directory_matches_record_stream_path(
+    fixture_path: Path,
+    tmp_path: Path,
+    dataset_spec,
+    training_bundle,
+    reward_spec,
+    policy_artifact,
+    evaluation_boundary: EvaluationBoundary,
+) -> None:
+    trajectory_spec, action_space, _ = training_bundle
+    events = LocalFixtureSource(fixture_path).load_events(dataset_spec)
+    builder = TrajectoryBuilder(dataset_spec, trajectory_spec, action_space, reward_spec)
+    builder.build_to_directory(events, tmp_path)
+
+    manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
+    cache_engine = EvaluationEngine(evaluation_boundary)
+    record_engine = EvaluationEngine(evaluation_boundary)
+
+    cache_report = cache_engine.evaluate_directory(
+        manifest=manifest,
+        directory=tmp_path,
+        artifact=policy_artifact,
+        split_name="validation",
+    )
+    record_report = record_engine.evaluate_records(
+        manifest.dataset_spec,
+        manifest.reward_spec,
+        TrajectoryDirectoryStore.iter_records(tmp_path, "validation"),
+        policy_artifact,
+    )
+
+    assert cache_report.total_steps == record_report.total_steps
+    assert cache_report.total_net_return == record_report.total_net_return
+    assert cache_report.action_counts == record_report.action_counts
+    assert cache_report.coverage_symbols == record_report.coverage_symbols
+    assert cache_report.coverage_venues == record_report.coverage_venues
+    assert cache_report.coverage_streams == record_report.coverage_streams
+
+
+def test_evaluation_directory_uses_tensor_cache_batch_path(
+    fixture_path: Path,
+    tmp_path: Path,
+    dataset_spec,
+    training_bundle,
+    reward_spec,
+    policy_artifact,
+    evaluation_boundary: EvaluationBoundary,
+    monkeypatch,
+) -> None:
+    trajectory_spec, action_space, _ = training_bundle
+    events = LocalFixtureSource(fixture_path).load_events(dataset_spec)
+    builder = TrajectoryBuilder(dataset_spec, trajectory_spec, action_space, reward_spec)
+    builder.build_to_directory(events, tmp_path)
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("tensor-cache evaluation must not fall back to JSONL iteration")
+
+    def _bridge_boom(self, artifact, observation):
+        raise AssertionError("tensor-cache evaluation must not use PolicyRuntimeBridge.decide()")
+
+    monkeypatch.setattr(TrajectoryDirectoryStore, "iter_records", _boom)
+    monkeypatch.setattr(PolicyRuntimeBridge, "decide", _bridge_boom)
+
+    manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
+    engine = EvaluationEngine(evaluation_boundary)
+    report = engine.evaluate_directory(
+        manifest=manifest,
+        directory=tmp_path,
+        artifact=policy_artifact,
+        split_name="validation",
+    )
+
+    assert report.total_steps > 0
+
+
+def test_evaluation_directory_requires_explicit_jsonl_fallback_when_cache_missing(
+    fixture_path: Path,
+    tmp_path: Path,
+    dataset_spec,
+    training_bundle,
+    reward_spec,
+    policy_artifact,
+    evaluation_boundary: EvaluationBoundary,
+) -> None:
+    trajectory_spec, action_space, _ = training_bundle
+    events = LocalFixtureSource(fixture_path).load_events(dataset_spec)
+    builder = TrajectoryBuilder(dataset_spec, trajectory_spec, action_space, reward_spec)
+    builder.build_to_directory(events, tmp_path)
+    shutil.rmtree(tensor_cache_directory(tmp_path))
+
+    manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
+    engine = EvaluationEngine(evaluation_boundary)
+
+    with pytest.raises(ValueError, match="tensor cache manifest missing"):
+        engine.evaluate_directory(
+            manifest=manifest,
+            directory=tmp_path,
+            artifact=policy_artifact,
+            split_name="validation",
+        )
+
+    report = engine.evaluate_directory(
+        manifest=manifest,
+        directory=tmp_path,
+        artifact=policy_artifact,
+        split_name="validation",
+        allow_jsonl_fallback=True,
+    )
+    assert report.total_steps > 0
 
 
 def test_evaluation_uses_explicit_requested_venue(
