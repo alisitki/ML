@@ -20,6 +20,7 @@ from quantlab_ml.contracts import (
     SplitEvidence,
     TimeRange,
     TrajectoryBundle,
+    TrajectoryManifest,
 )
 from quantlab_ml.selection import CandidateSelector
 
@@ -101,6 +102,67 @@ class LocalRegistryStore:
             result.policy_id,
             result.artifact_id,
             len(bundle.split_artifact.folds),
+            coverage.train_sample_count,
+        )
+        return result
+
+    def register_candidate_from_manifest(
+        self,
+        artifact: PolicyArtifact,
+        manifest: TrajectoryManifest,
+        reward_config_hash: str,
+        training_config_hash: str,
+        *,
+        trajectory_directory: Path | None = None,
+    ) -> RegistryRecord:
+        artifact_path = self.artifacts_dir / f"{artifact.policy_id}.json"
+        coverage = _coverage_from_manifest(manifest, trajectory_directory=trajectory_directory)
+        dump_model(artifact_path, artifact)
+        split_evidence = SplitEvidence(
+            split_version=manifest.split_artifact.split_version,
+            train_window=manifest.dataset_spec.train_range,
+            validation_window=manifest.dataset_spec.validation_range,
+            final_untouched_test_window=manifest.dataset_spec.final_untouched_test_range,
+            purge_width_steps=manifest.split_artifact.purge_width_steps,
+            embargo_width_steps=manifest.split_artifact.embargo_width_steps,
+            walkforward_fold_count=len(manifest.split_artifact.folds),
+        )
+        now = utcnow()
+        record = RegistryRecord(
+            policy_id=artifact.policy_id,
+            artifact_id=artifact.artifact_id,
+            artifact_path=str(artifact_path),
+            status="candidate",
+            policy_family=artifact.policy_family,
+            target_asset=artifact.target_asset,
+            training_snapshot_id=artifact.training_snapshot_id,
+            training_config_hash=training_config_hash,
+            reward_version=artifact.reward_version,
+            evaluation_surface_id=artifact.evaluation_surface_id,
+            search_budget_summary=_search_budget_summary(artifact),
+            artifact_compatibility_tags=list(artifact.runtime_metadata.artifact_compatibility_tags),
+            runtime_compatibility_tags=list(artifact.runtime_metadata.artifact_compatibility_tags),
+            dataset_hash=manifest.dataset_spec.dataset_hash,
+            slice_id=manifest.dataset_spec.slice_id,
+            reward_config_hash=reward_config_hash,
+            parent_policy_id=artifact.runtime_metadata.lineage_pointer.parent_policy_id,
+            lineage_chain=_lineage_chain(artifact),
+            train_window=manifest.dataset_spec.train_range,
+            coverage=coverage,
+            split_evidence=split_evidence,
+            created_at=now,
+            updated_at=now,
+        )
+        dump_model(self.records_dir / f"{record.policy_id}.json", record)
+        self._recompute_index()
+        result = self.get_record(artifact.policy_id)
+        if result is None:
+            raise RuntimeError(f"registry record missing immediately after write for policy {artifact.policy_id}")
+        logger.info(
+            "registry_candidate_registered policy_id=%s artifact_id=%s fold_count=%d train_samples=%d",
+            result.policy_id,
+            result.artifact_id,
+            len(manifest.split_artifact.folds),
             coverage.train_sample_count,
         )
         return result
@@ -469,6 +531,79 @@ def _coverage_from_bundle(bundle: TrajectoryBundle) -> CoverageStats:
             "realized_trade_count": "policy-evidence-derived",
         },
     )
+
+
+def _coverage_from_manifest(
+    manifest: TrajectoryManifest,
+    trajectory_directory: Path | None = None,
+) -> CoverageStats:
+    train_stats = manifest.split_write_stats.get("train")
+    if train_stats is not None:
+        train_steps = train_stats.step_count
+    else:
+        train_steps = _recover_manifest_train_steps(
+            manifest,
+            trajectory_directory=trajectory_directory,
+        )
+    return CoverageStats(
+        train_sample_count=train_steps,
+        eval_sample_count=0,
+        covered_symbols=manifest.dataset_spec.symbols,
+        covered_venues=manifest.dataset_spec.exchanges,
+        covered_streams=manifest.dataset_spec.stream_universe,
+        active_date_range=manifest.dataset_spec.train_range,
+        reward_event_count=0,
+        realized_trade_count=0,
+        field_origins={
+            "train_sample_count": "dataset-surface-derived",
+            "eval_sample_count": "policy-evidence-derived",
+            "covered_symbols": "dataset-surface-derived",
+            "covered_venues": "dataset-surface-derived",
+            "covered_streams": "dataset-surface-derived",
+            "active_date_range": "dataset-surface-derived",
+            "reward_event_count": "policy-evidence-derived",
+            "realized_trade_count": "policy-evidence-derived",
+        },
+    )
+
+
+def _recover_manifest_train_steps(
+    manifest: TrajectoryManifest,
+    *,
+    trajectory_directory: Path | None,
+) -> int:
+    slice_id = manifest.dataset_spec.slice_id
+    dataset_hash = manifest.dataset_spec.dataset_hash
+    if trajectory_directory is None:
+        raise ValueError(
+            "registry manifest coverage requires split_write_stats['train'] or a "
+            "trajectory_directory with retained tensor_cache_manifest.json to recover "
+            f"train_sample_count for slice_id={slice_id} dataset_hash={dataset_hash}"
+        )
+
+    from quantlab_ml.trajectories.tensor_cache import (
+        read_tensor_cache_manifest,
+        tensor_cache_manifest_path,
+    )
+
+    cache_manifest_path = tensor_cache_manifest_path(trajectory_directory)
+    if not cache_manifest_path.exists():
+        raise FileNotFoundError(
+            "registry manifest coverage cannot recover train_sample_count from a legacy "
+            "manifest without split_write_stats['train']: retained tensor cache manifest "
+            f"missing at {cache_manifest_path} for slice_id={slice_id} dataset_hash={dataset_hash}"
+        )
+
+    cache_manifest = read_tensor_cache_manifest(trajectory_directory)
+    train_split = cache_manifest.splits.get("train")
+    if train_split is None:
+        raise ValueError(
+            "registry manifest coverage cannot recover train_sample_count from a legacy "
+            "manifest without split_write_stats['train']: retained tensor cache manifest "
+            f"at {cache_manifest_path} is missing the train split for slice_id={slice_id} "
+            f"dataset_hash={dataset_hash}"
+        )
+    return train_split.row_count
 
 
 def _merge_ranges(left: TimeRange, right: TimeRange) -> TimeRange:

@@ -34,6 +34,7 @@ from quantlab_ml.contracts import (
     TrajectoryBundle,
     TrajectoryManifest,
     TrajectoryRecord,
+    TrajectorySplitStats,
     TrajectorySpec,
     TrajectoryStep,
     VenueExecutionRef,
@@ -237,6 +238,7 @@ class TrajectoryBuilder:
         total_records = 0
         total_steps = 0
         feature_dim = expected_feature_dim(self.observation_schema)
+        split_write_stats: dict[str, TrajectorySplitStats] = {}
         tensor_cache_splits: dict[str, TensorCacheSplitManifest] = {}
         for split_name, split_range in zip(split_names, split_ranges):
             logger.info("building_split split=%s", split_name)
@@ -265,12 +267,19 @@ class TrajectoryBuilder:
                     f"cache_rows={split_cache_manifest.row_count}, split_steps={step_count}"
                 )
             tensor_cache_splits[split_name] = split_cache_manifest
+            split_write_stats[split_name] = TrajectorySplitStats(
+                record_count=rec_count,
+                step_count=step_count,
+            )
             total_records += rec_count
             total_steps += step_count
             gc.collect()
             logger.info(
                 "split_complete split=%s records=%d steps=%d", split_name, rec_count, step_count
             )
+
+        manifest = manifest.model_copy(update={"split_write_stats": split_write_stats})
+        TrajectoryDirectoryStore.write_manifest(output_dir, manifest)
 
         write_tensor_cache_manifest_atomic(
             output_dir,

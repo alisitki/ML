@@ -11,6 +11,8 @@ Usage contract:
 """
 from __future__ import annotations
 
+from pydantic import Field
+
 from quantlab_ml.contracts.common import QuantBaseModel
 from quantlab_ml.contracts.dataset import DatasetSpec
 from quantlab_ml.contracts.learning_surface import (
@@ -22,6 +24,13 @@ from quantlab_ml.contracts.learning_surface import (
 from quantlab_ml.contracts.rewards import RewardEventSpec
 
 TRAJECTORY_STREAMING_FORMAT_VERSION = "trajectories_streaming_v1"
+
+
+class TrajectorySplitStats(QuantBaseModel):
+    """Persisted split counts for retained build/accounting evidence."""
+
+    record_count: int
+    step_count: int
 
 
 class TrajectoryManifest(QuantBaseModel):
@@ -41,3 +50,4 @@ class TrajectoryManifest(QuantBaseModel):
     split_artifact: SplitArtifact
     # Names of splits that were written (in build order)
     split_names: list[str]
+    split_write_stats: dict[str, TrajectorySplitStats] = Field(default_factory=dict)

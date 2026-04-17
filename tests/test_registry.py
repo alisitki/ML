@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from quantlab_ml.common import hash_payload
 from quantlab_ml.contracts import (
     LEGACY_POLICY_ARTIFACT_SCHEMA_VERSION,
@@ -12,8 +14,11 @@ from quantlab_ml.contracts import (
     ReproducibilityMetadata,
     TrajectoryBundle,
 )
+from quantlab_ml.data import LocalFixtureSource
 from quantlab_ml.registry import LocalRegistryStore, audit_registry_continuity
 from quantlab_ml.training import LinearPolicyTrainer
+from quantlab_ml.trajectories import TrajectoryBuilder, TrajectoryDirectoryStore
+from quantlab_ml.trajectories.tensor_cache import tensor_cache_manifest_path
 
 
 def test_scored_candidate_becomes_challenger_until_promotion(
@@ -80,6 +85,103 @@ def test_registry_records_search_linkage_for_multi_candidate_run(
             selected_records.append(record.policy_id)
 
     assert selected_records == [search_result.selected_artifact.policy_id]
+
+
+def test_manifest_registration_uses_retained_train_steps_and_cache_fallback(
+    tmp_path: Path,
+    fixture_path: Path,
+    dataset_spec,
+    training_bundle: tuple,
+    reward_spec,
+) -> None:
+    trajectory_spec, action_space, training_config = training_bundle
+    events = LocalFixtureSource(fixture_path).load_events(dataset_spec)
+    builder = TrajectoryBuilder(dataset_spec, trajectory_spec, action_space, reward_spec)
+    builder.build_to_directory(events, tmp_path)
+
+    manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
+    trainer = LinearPolicyTrainer(training_config)
+    search_result = trainer.train_search_from_directory(manifest, tmp_path)
+
+    manifest_without_stats = manifest.model_copy(update={"split_write_stats": {}})
+    store = LocalRegistryStore(tmp_path / "registry")
+    reward_hash = hash_payload(manifest.reward_spec)
+    for candidate in search_result.candidate_results:
+        store.register_candidate_from_manifest(
+            candidate.artifact,
+            manifest_without_stats,
+            reward_config_hash=reward_hash,
+            training_config_hash=candidate.artifact.training_config_hash,
+            trajectory_directory=tmp_path,
+        )
+
+    record = store.get_record(search_result.selected_artifact.policy_id)
+    assert record is not None
+    assert record.coverage.train_sample_count == manifest.split_write_stats["train"].step_count
+    assert record.coverage.train_sample_count > 0
+    assert record.coverage.field_origins["train_sample_count"] == "dataset-surface-derived"
+
+
+def test_manifest_registration_requires_reliable_train_coverage_inputs_for_legacy_manifests(
+    tmp_path: Path,
+    fixture_path: Path,
+    dataset_spec,
+    training_bundle: tuple,
+    reward_spec,
+) -> None:
+    trajectory_spec, action_space, training_config = training_bundle
+    events = LocalFixtureSource(fixture_path).load_events(dataset_spec)
+    builder = TrajectoryBuilder(dataset_spec, trajectory_spec, action_space, reward_spec)
+    builder.build_to_directory(events, tmp_path)
+
+    manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
+    trainer = LinearPolicyTrainer(training_config)
+    search_result = trainer.train_search_from_directory(manifest, tmp_path)
+    candidate = search_result.selected_artifact
+
+    manifest_without_stats = manifest.model_copy(update={"split_write_stats": {}})
+    store = LocalRegistryStore(tmp_path / "registry")
+    reward_hash = hash_payload(manifest.reward_spec)
+
+    with pytest.raises(ValueError, match="split_write_stats\\['train'\\].*trajectory_directory"):
+        store.register_candidate_from_manifest(
+            candidate,
+            manifest_without_stats,
+            reward_config_hash=reward_hash,
+            training_config_hash=candidate.training_config_hash,
+        )
+
+
+def test_manifest_registration_fails_loudly_when_legacy_fallback_surface_is_missing(
+    tmp_path: Path,
+    fixture_path: Path,
+    dataset_spec,
+    training_bundle: tuple,
+    reward_spec,
+) -> None:
+    trajectory_spec, action_space, training_config = training_bundle
+    events = LocalFixtureSource(fixture_path).load_events(dataset_spec)
+    builder = TrajectoryBuilder(dataset_spec, trajectory_spec, action_space, reward_spec)
+    builder.build_to_directory(events, tmp_path)
+
+    manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
+    trainer = LinearPolicyTrainer(training_config)
+    search_result = trainer.train_search_from_directory(manifest, tmp_path)
+    candidate = search_result.selected_artifact
+
+    manifest_without_stats = manifest.model_copy(update={"split_write_stats": {}})
+    tensor_cache_manifest_path(tmp_path).unlink()
+    store = LocalRegistryStore(tmp_path / "registry")
+    reward_hash = hash_payload(manifest.reward_spec)
+
+    with pytest.raises(FileNotFoundError, match="tensor cache manifest missing"):
+        store.register_candidate_from_manifest(
+            candidate,
+            manifest_without_stats,
+            reward_config_hash=reward_hash,
+            training_config_hash=candidate.training_config_hash,
+            trajectory_directory=tmp_path,
+        )
 
 
 def test_registry_continuity_audit_counts_numpy_and_legacy_compat_dependencies(

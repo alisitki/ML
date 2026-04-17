@@ -342,6 +342,10 @@ Status values:
   - prod `LinearPolicyTrainer.train_search_from_directory()` now uses raw tensor shards for feature stats, batch assembly, and train-time validation; cache-missing directories fail closed unless `allow_jsonl_fallback` is passed explicitly
   - `EvaluationEngine.evaluate_directory()` now uses the same tensor-cache family and batched linear-policy inference; directory evaluate no longer depends on per-step `PolicyRuntimeBridge.decide()`
   - targeted local verification now covers cache output parity, prod fast-path guardrails, train/evaluate fail-closed behavior, and explicit temporary-compat fallback behavior
+- status_axes:
+  - operational_state: done — the retained 2026-04-17 controlled rerun completed `build/train/evaluate/score/export` with exit `0`
+  - acceptance_state: pending — the retained 2026-04-17 GPU samples remain below the runbook `avg_gpu_utilization >= 20` gate even when bounded to exact active windows, so targeted remote resampling is still required
+  - promotion_state: not_started — the retained candidate remains a challenger and final untouched test net return is negative
 - acceptance_criteria:
   - `build-trajectories` writes canonical JSONL plus `tensor_cache_v1` shard sidecars, replay sidecars, and a cache manifest for all 4 prod splits during `build_to_directory`
   - prod `train`, train-time `validation`, and prod directory `evaluate` use the tensor-cache family by default with `tensor_cache_used=true` and `jsonl_fallback_used=false`
@@ -354,7 +358,48 @@ Status values:
   - 8 epochs complete end-to-end in practical wall-time with no silent JSONL fallback
   - local verification remains clean (`ruff`, `mypy`, targeted `pytest`)
 - open_items:
-  - execute the controlled remote rerun and attach the evidence bundle to state/runbook notes
+  - retained evidence inspection is complete: the 2026-04-17 logs and GPU CSVs prove the hot path and timing gates, but exact active-window GPU averages remain below the runbook threshold
+  - capture only the missing remote GPU-utilization proof on the same controlled config, preferring train/evaluate-only resampling if the retained trajectory directory is still available, and then refresh the derived retained-evidence index
+  - keep promotion out of scope until a later economic/paper-sim batch
+
+### QL-022
+- title: Reconcile source-of-truth state with retained QL-021 evidence
+- status: done
+- depends_on: QL-021 retained bundle
+- path_classification: core direction
+- scope: align `PROJECT_STATE`, `BACKLOG`, and retained 2026-04-17 QL-021 evidence so repo-memory, retained artifacts, and current core-path narration describe the same truth
+- completion_notes:
+  - repo-memory now records QL-021 on 3 independent axes: `operational_state`, `acceptance_state`, and `promotion_state`
+  - `outputs/ql021-controlled-remote-rerun-20260417-build-fresh/acceptance_evidence.json` now exists only as a derived retained-evidence index over existing logs, manifests, artifacts, and GPU CSV samples; it is not a second source of truth
+  - proof-gated reconciliation checked QL-010 / QL-011 / QL-012 / QL-013 and found no reopen trigger from current repo truth, so stale summary drift alone no longer reopens them by default
+  - backend/core-path narration and the role of `configs/training/production.yaml` are now aligned with retained run evidence and existing D-011 / D-014 guardrails
+- done_when:
+  - repo-memory and retained evidence tell the same current story for QL-021
+  - QL-021 is not collapsed into one ambiguous status
+  - no unrelated historical QL is reopened without explicit proof
+- non_goals:
+  - no architecture reset
+  - no reward redesign
+  - no runtime-boundary expansion
+  - no search-budget widening
+  - no backend flip as part of reconciliation
+
+### QL-023
+- title: Fix manifest-based registry coverage accounting on the manifest registration path
+- status: done
+- depends_on: QL-022
+- path_classification: core direction
+- scope: derive dataset-surface train coverage from retained split facts when registering directory-path training results, and fail loudly when legacy manifests cannot recover retained train coverage, closing the `train_samples=0` auditability gap without widening registry semantics
+- completion_notes:
+  - streaming manifests now persist split-scoped record and step counts so retained build output carries the train coverage facts needed by registry accounting
+  - manifest registration now derives `train_sample_count` from retained split facts and falls back to the retained tensor-cache manifest only when `trajectory_directory` is supplied and the retained cache evidence is present
+  - legacy manifests without split counts now fail loudly instead of warning and emitting zero train coverage
+  - regression coverage now protects successful fallback, hard-failure missing-fallback paths, non-zero train coverage on non-empty trajectory directories, and dataset-surface provenance for `train_sample_count`
+- done_when:
+  - non-empty prod train directories do not register with zero train coverage
+  - legacy manifests without reliable fallback inputs fail loudly instead of silently coercing zero train coverage
+  - `CoverageStats.field_origins` remain unchanged: dataset-surface-derived fields stay dataset-surface-derived and policy-evidence-derived fields stay policy-evidence-derived
+  - lineage and coverage metadata remain auditable without inventing a new registry provenance system
 
 
 ### QL-100

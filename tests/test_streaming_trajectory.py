@@ -329,6 +329,30 @@ class TestBuildToDirectory:
         }
         assert manifest.format_version == "trajectories_streaming_v1"
 
+    def test_manifest_persists_split_write_stats(
+        self,
+        tmp_path: Path,
+        fixture_path: Path,
+        dataset_spec,
+        training_bundle,
+        reward_spec,
+    ) -> None:
+        """Manifest must retain split-scoped record/step counts for registry accounting."""
+        builder, events = _make_builder(fixture_path, dataset_spec, training_bundle, reward_spec)
+        builder.build_to_directory(events, tmp_path)
+        manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
+
+        assert set(manifest.split_write_stats) == {
+            "development",
+            "train",
+            "validation",
+            "final_untouched_test",
+        }
+        for split_name, split_stats in manifest.split_write_stats.items():
+            records = list(TrajectoryDirectoryStore.iter_records(tmp_path, split_name))
+            assert split_stats.record_count == len(records)
+            assert split_stats.step_count == sum(len(record.steps) for record in records)
+
     def test_build_writes_tensor_cache_manifest_and_aligned_shards(
         self,
         tmp_path: Path,

@@ -193,6 +193,7 @@ The first controlled run should leave behind:
 - `score.log`
 - `export.log`
 - `registry/`
+- optional `acceptance_evidence.json` derived from the retained run files above
 
 Inside `training_summary`, confirm:
 - `training_backend = pytorch`
@@ -220,6 +221,7 @@ Inside the logs, confirm:
 - `jsonl_fallback_used=false`
 - `compiled_policy_mode=tensor_cache_linear_policy_batch`
 - `train_rows_per_sec`, `validation_rows_per_sec`, and `evaluation_rows_per_sec` are present
+- if `acceptance_evidence.json` is present, it must only index the retained files and may not replace them as the source of truth
 
 ## Acceptance criteria
 

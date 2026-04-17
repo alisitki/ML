@@ -17,10 +17,10 @@ This file must stay short and current.
 
 ## Current snapshot
 
-- current_phase: `Phase 5 — QL-021 local implementation landed (2026-04-15). build-trajectories now writes shard-based tensor cache sidecars; prod train, train-time validation, and prod directory evaluate share the same tensor-cache hot path. Controlled remote rerun evidence is still pending.`
-- current_focus: `Run the QL-021 controlled remote rerun and prove that tensor_cache_v1 is the active prod path with materially higher GPU utilization and lower epoch/validation/evaluate wall time.`
-- current_blocker: `remote throughput proof is still missing; local implementation and targeted verification are complete`
-- declared_next_task: `QL-021 — execute the controlled remote rerun against configs/training/production.yaml + configs/data/controlled-remote-day.yaml and collect tensor_cache_used/jsonl_fallback_used, epoch wall time, validation wall time, evaluate wall time, GPU utilization, and OOM-free evidence`
+- current_phase: `Phase 5 — QL-022 truth reconciliation and QL-023 registry accounting hardening completed under scoped verification. QL-021 remains open on acceptance only because the retained 2026-04-17 GPU samples stay below the runbook gate even when bounded to exact active windows.`
+- current_focus: `Close the QL-021 acceptance axis with the minimum targeted remote GPU proof capture on the same controlled config; the retained 2026-04-17 evidence bundle is sufficient for operational truth but not for the >=20 utilization gate.`
+- current_blocker: `QL-021 acceptance is still open because the retained 2026-04-17 GPU samples remain below the runbook >=20 average utilization gate even after trimming to exact active train/evaluate windows, so a targeted remote resampling pass is still required.`
+- declared_next_task: `QL-021 — keep the operational and promotion axes fixed and capture only the missing remote GPU-utilization proof on the same controlled config, preferring train/evaluate-only resampling before resuming QL-016 continuity closeout.`
 - not_now:
   - `live deployment plumbing`
   - `cloud provisioning automation`
@@ -30,46 +30,50 @@ This file must stay short and current.
 ## Active work item
 
 ```yaml
-id: ql-021-sharded-tensor-cache
-title: Implement shard-based raw tensor cache sidecars and shared batched prod evaluation
-status: implemented_locally_pending_remote_verification
-evidence:
-  profiling_run_date: 2026-04-14
-  instance: RTX 3090 / 96 GB RAM / 32 vCPU
-  fold1_epoch_wall_time: 40 min 10 sec
-  batch_wall_time: 8.03 sec/batch
-  step_wall_time: 0.335 sec/example
-  gpu_avg_utilization: 0.45%
-  gpu_max_utilization: 70% (single spike at model init)
-  vmstat_cpu: us=2-3% (1/32 cores), id=96-97%
-  wchan: 0 (pure userspace, not IO-blocked)
-  io_wait: 0%
-  block_read_during_train: ~0 (JSONL in page cache)
-  bottleneck_root: Python GIL single-threaded feature materialization plus repeated JSONL/Pydantic -> numpy -> torch conversion
-  mechanism: feature_dim=680K × 6 arrays/scale × 4 scales -> Python .tolist() + np.asarray() per step and per-step runtime inference on validation/evaluate
-  implemented_fix: build-time tensor_cache_v1 shards + aligned replay sidecars for development/train/validation/final_untouched_test; prod train and prod directory evaluate read cached tensors first
-  local_verification: 44 targeted trajectory/evaluation/CLI tests passed on 2026-04-15
-  remote_acceptance_pending:
-    - epoch_wall_sec < 300
-    - validation_wall_sec < 60
-    - evaluate_wall_sec < 180
-    - avg_gpu_utilization >= 20
-    - tensor_cache_used = true
-    - jsonl_fallback_used = false
+id: ql-021-targeted-acceptance-completion
+title: Close the QL-021 acceptance axis without reopening the architecture batch
+status: in_progress
+path_classification: core direction
+status_axes:
+  operational_state: done
+  acceptance_state: pending_gpu_acceptance_proof
+  promotion_state: not_started
+proof_gated_reopen_check:
+  assumed_closed_pending_reconciliation:
+    - QL-010
+    - QL-011
+    - QL-012
+    - QL-013
+  reopen_triggers_found: []
+retained_evidence:
+  run_id: ql021-controlled-remote-rerun-20260417-build-fresh
+  optional_derived_acceptance_index: outputs/ql021-controlled-remote-rerun-20260417-build-fresh/acceptance_evidence.json
+  build_exit: 0
+  train_exit: 0
+  evaluate_exit: 0
+  score_exit: 0
+  export_exit: 0
+  training_backend: pytorch
+  training_device: cuda
+  tensor_cache_used: true
+  jsonl_fallback_used: false
+  compiled_policy_mode: tensor_cache_linear_policy_batch
+  train_epoch_wall_sec_range: 33.6-56.7
+  validation_wall_sec_range: 7.3-14.4
+  evaluate_wall_sec: 12.4
+  retained_full_search_gpu_avg_utilization: 10.48
+  retained_canonical_refit_epoch_only_gpu_avg_utilization: 12.32
+  retained_final_evaluate_gpu_avg_utilization: 0.0
 ```
 
 ## Current blocker details
 
-**Root cause confirmed by measurement (2026-04-14 profiling run, RTX 3090):**
-- `build-trajectories` exit 0: `total_records=220, total_steps=26360, fold_count=3` ✅
-- `train` started: `training_device=cuda`, `device_name=NVIDIA GeForce RTX 3090` ✅
-- `feature_dim=680,413`, `effective_batch_size=24`, `batches_per_epoch=300`
-- Fold 1 epoch: **40 min 10 sec** = **8.03 sec/batch** = **0.335 sec/example**
-- GPU: **0.45% average** (2020 nvidia-smi samples), 70% only at model init spike
-- vmstat: `us=2-3%, id=96-97%` — 1 Python thread on 1 of 32 CPUs
-- wchan=0 — pure userspace CPU, not blocked in kernel
-- bi≈0, wa=0% — JSONL files in 73 GB page cache, IO not the cause
-- Bottleneck: `observation_feature_vector()` inside `_train_streaming_epoch`, Python GIL list ops
+**Retained QL-021 evidence (2026-04-17):**
+- `build/train/evaluate/score/export` all exited `0`; the hot path is real, not hypothetical.
+- `train.log` shows `training_backend=pytorch`, `training_device=cuda`, `tensor_cache_used=true`, `jsonl_fallback_used=false`; `evaluate.log` shows `compiled_policy_mode=tensor_cache_linear_policy_batch`.
+- The retained controlled run meets the timing gates: final refit epochs `33.6-56.7 sec`, validation `7.3-14.4 sec`, final evaluate `12.4 sec`.
+- The retained bundle is sufficient to prove the hot path and timing gates, but not to close acceptance: exact active-window GPU averages still stay below the runbook gate (`10.48%` across the full search window, `12.32%` across canonical refit epoch-only windows, `0.0%` across final evaluate), so the remaining work is a minimum targeted remote resampling pass rather than another architecture change.
+- Promotion is not started: the retained candidate is still a challenger and `final_untouched_test` total net return is negative (`-1.138819734534162`).
 
 ## Recently completed
 
@@ -135,15 +139,18 @@ evidence:
 - prod directory train now uses tensor-cache shards for train-only feature stats, vectorized batch assembly, and train-time validation; JSONL fallback is explicit temporary compatibility only
 - prod directory evaluate now uses the same tensor-cache family and a shared batched linear-policy evaluator, so final evaluate no longer reparses policy payloads or rebuilds features step-by-step
 - 44 targeted tensor-cache trajectory/evaluation/CLI tests passed locally, covering cache output, prod fast-path guardrails, and explicit JSONL fallback behavior
+- QL-022 completed: repo-memory now distinguishes QL-021 `operational_state`, `acceptance_state`, and `promotion_state` instead of collapsing them into one status, and the 2026-04-17 retained rerun is recorded as operationally done
+- proof-gated reconciliation found no reopen trigger for QL-010 / QL-011 / QL-012 / QL-013 from current repo truth; they remain append-only history rather than being reopened by stale summary text alone
+- `outputs/ql021-controlled-remote-rerun-20260417-build-fresh/acceptance_evidence.json` now acts only as a derived retained-evidence index over existing logs, manifests, artifacts, and GPU CSV samples
+- QL-021 retained-evidence reconciliation completed: the retained 2026-04-17 logs and GPU CSVs are sufficient to prove operational success and timing gates, but not sufficient to satisfy the runbook GPU-utilization gate
+- QL-023 completed under scoped verification: manifest-based registry registration now derives dataset-surface train coverage from retained split facts, falls back to retained tensor-cache evidence only when that recovery surface is actually available, and otherwise fails loudly instead of warning and emitting zero train coverage
 
 ## Immediate next actions
 
-1. **QL-021 remote proof** — rerun the controlled remote chain and confirm `tensor_cache_used=true`, `jsonl_fallback_used=false`, `training_data_flow=tensor_shard_batch`, `validation_data_flow=tensor_shard_evaluation`, and `compiled_policy_mode=tensor_cache_linear_policy_batch`.
-2. Collect throughput evidence from the rerun: `epoch_wall_sec`, `validation_wall_sec`, `evaluate_wall_sec`, `train_rows_per_sec`, `validation_rows_per_sec`, `evaluation_rows_per_sec`, and average GPU utilization.
-3. Verify the acceptance gates on the controlled rerun: `epoch_wall_sec < 300`, `validation_wall_sec < 60`, `evaluate_wall_sec < 180`, `avg_gpu_utilization >= 20`, and no `137`/OOM exit.
-4. If the rerun passes, move QL-021 to done in state/backlog and record the remote evidence bundle.
-5. Run `quantlab-ml audit-continuity` as a parallel operational follow-up after the rerun succeeds.
-6. Freeze or retire the NumPy reference path once external audit confirms zero active dependency.
+1. **QL-021 targeted acceptance completion** — capture only the missing remote GPU-utilization proof on the same controlled config; keep `operational_state=done` and `promotion_state=not_started` fixed while the acceptance axis stays open.
+2. Prefer train/evaluate-only resampling against the retained trajectory directory if it still exists remotely; regenerate the optional derived retained-evidence index (`acceptance_evidence.json`) after the targeted proof lands, and do not rerun the full chain unless the retained trajectory directory is unavailable.
+3. Resume `quantlab-ml audit-continuity --registry-root ...` only after the QL-021 acceptance axis is stable, then decide whether QL-016 can move from continuity tracking to freeze/retire action.
+4. Keep QL-014 later and keep QL-100 / QL-101 parked.
 
 ## Update rule
 

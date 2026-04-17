@@ -99,7 +99,12 @@ def train(
             _write_search_artifacts(output, search_result)
         if registry_root is not None:
             registry = LocalRegistryStore(registry_root)
-            _register_training_candidates_from_manifest(registry, manifest, search_result)
+            _register_training_candidates_from_manifest(
+                registry,
+                manifest,
+                trajectories,
+                search_result,
+            )
     else:
         # FIXTURE / TEST COMPAT PATH: in-memory bundle (legacy JSON file)
         bundle = TrajectoryStore.read(trajectories)
@@ -315,32 +320,21 @@ def _register_training_candidates(
 def _register_training_candidates_from_manifest(
     registry: LocalRegistryStore,
     manifest: "TrajectoryManifest",
+    trajectory_directory: Path,
     search_result: TrainingSearchResult,
 ) -> None:
     """PRODUCTION PATH — register from streaming manifest (no bundle needed)."""
-    from quantlab_ml.contracts import TrajectoryBundle
-
     reward_config_hash = hash_payload(manifest.reward_spec)
-    # Build a minimal stub bundle for registry compat (no step data needed)
-    stub_bundle = TrajectoryBundle(
-        dataset_spec=manifest.dataset_spec,
-        trajectory_spec=manifest.trajectory_spec,
-        action_space=manifest.action_space,
-        reward_spec=manifest.reward_spec,
-        observation_schema=manifest.observation_schema,
-        split_artifact=manifest.split_artifact,
-        splits={"train": [], "validation": [], "final_untouched_test": []},
-        development_records=[],
-    )
     candidates = (
         search_result.candidate_results
         if len(search_result.candidate_results) > 1
         else [search_result.candidate_results[0]]
     )
     for candidate in candidates:
-        registry.register_candidate(
+        registry.register_candidate_from_manifest(
             candidate.artifact,
-            stub_bundle,
+            manifest,
             reward_config_hash=reward_config_hash,
             training_config_hash=candidate.artifact.training_config_hash,
+            trajectory_directory=trajectory_directory,
         )
