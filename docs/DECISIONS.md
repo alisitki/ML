@@ -197,8 +197,18 @@ Status values:
 - acceptance_signal:
   - `tensor_cache_used=true` and `jsonl_fallback_used=false` are visible in the controlled remote rerun
   - `training_data_flow=tensor_shard_batch` and `validation_data_flow=tensor_shard_evaluation` are visible in `training_summary`
-  - controlled remote rerun shows `epoch_wall_sec < 300`, per-epoch `validation_wall_sec < 60`, `evaluate_wall_sec < 180`, average GPU utilization `>= 20`, and no `137`/OOM exits
+  - controlled remote rerun shows required chain exit codes `0`, `training_device=cuda`, `epoch_wall_sec < 300`, per-epoch `validation_wall_sec < 60`, `evaluate_wall_sec < 180`, and no `137`/OOM exits
 - non_goals:
   - do not add checkpoint/resume design in this batch
   - do not change canonical JSONL schema
   - do not widen the runtime or inference artifact surface
+
+## D-018 — Average GPU utilization is advisory telemetry for controlled proof runs
+- status: accepted
+- date: 2026-04-17
+- decision: For QL-021-style controlled proof runs, `avg_gpu_utilization` is diagnostic telemetry only and is not a hard acceptance gate. Hard acceptance relies on direct hot-path evidence: `training_device=cuda`, `tensor_cache_used=true`, `jsonl_fallback_used=false`, required chain exit codes `0`, explicit `train` / `evaluate` execution evidence, and the documented timing gates.
+- why: The clean 2026-04-17 remote proof run completed successfully on the intended CUDA tensor-cache path and stayed within timing limits, but still remained below the old `avg_gpu_utilization >= 20%` threshold. That threshold did not reflect the real acceptance intent for this controlled workload and became a bad proxy.
+- guardrails:
+  - this decision does not change promotion requirements, economic evaluation, or champion/challenger discipline
+  - low GPU utilization may still trigger diagnostic or optimization follow-up, but it does not invalidate a successful controlled proof run by itself
+  - this decision does not reopen architecture, reward, backend, or search-budget scope

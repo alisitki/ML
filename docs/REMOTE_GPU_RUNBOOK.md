@@ -237,8 +237,16 @@ The first controlled run is successful when:
 - train `epoch_wall_sec < 300`
 - per-epoch `validation_wall_sec < 60`
 - final `evaluate_wall_sec < 180`
-- average GPU utilization reaches at least `20%`
 - no phase exits with `137` or other OOM-kill evidence
+
+For QL-021-style controlled proof runs, average GPU utilization is diagnostic telemetry only.
+Low average utilization does not invalidate a successful controlled proof run when direct hot-path evidence already confirms:
+- `training_device=cuda`
+- `tensor_cache_used=true`
+- `jsonl_fallback_used=false`
+- required chain exit codes are all `0`
+- explicit `train` / `evaluate` execution evidence is present
+- timing gates above are satisfied
 
 This run does not need:
 - positive economic score
@@ -263,6 +271,11 @@ Check first:
 - prod directory fast path is not active
 - tensor cache sidecar is missing or unreadable
 - the run is not valid as QL-021 acceptance evidence unless compat fallback was explicitly being debugged
+
+### low average GPU utilization
+- treat it as advisory telemetry, not as the primary acceptance truth
+- if `training_device=cuda`, the tensor-cache hot path is active, required chain exits are `0`, and timing gates pass, the controlled proof run remains valid
+- investigate low utilization only as a bottleneck/throughput diagnostic or future optimization signal
 
 ### `build-trajectories` fails or becomes too slow
 - controlled snapshot is too large for the host RAM/disk

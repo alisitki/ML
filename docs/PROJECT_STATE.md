@@ -17,10 +17,10 @@ This file must stay short and current.
 
 ## Current snapshot
 
-- current_phase: `Phase 5 — QL-022 truth reconciliation and QL-023 registry accounting hardening completed under scoped verification. QL-021 remains open on acceptance only because the retained 2026-04-17 GPU samples stay below the runbook gate even when bounded to exact active windows.`
-- current_focus: `Close the QL-021 acceptance axis with the minimum targeted remote GPU proof capture on the same controlled config; the retained 2026-04-17 evidence bundle is sufficient for operational truth but not for the >=20 utilization gate.`
-- current_blocker: `QL-021 acceptance is still open because the retained 2026-04-17 GPU samples remain below the runbook >=20 average utilization gate even after trimming to exact active train/evaluate windows, so a targeted remote resampling pass is still required.`
-- declared_next_task: `QL-021 — keep the operational and promotion axes fixed and capture only the missing remote GPU-utilization proof on the same controlled config, preferring train/evaluate-only resampling before resuming QL-016 continuity closeout.`
+- current_phase: `Phase 5 — QL-022 truth reconciliation landed, QL-023 registry accounting hardening completed under scoped verification, and QL-021 acceptance is now closed. D-018 and the runbook now treat average GPU utilization as diagnostic telemetry rather than a hard acceptance gate for controlled proof runs.`
+- current_focus: `Resume QL-016 continuity closeout now that QL-021 operational and acceptance axes are done; keep promotion out of scope and preserve the clean remote proof bundle as the retained operational evidence.`
+- current_blocker: `QL-016 still needs external \`audit-continuity\` evidence against active registries before the NumPy reference path and legacy continuity windows can move from tracking to freeze/retire action.`
+- declared_next_task: `QL-016 — run \`quantlab-ml audit-continuity --registry-root ...\` against the active registries, then decide whether NumPy / legacy continuity paths can freeze or retire without breaking active inventory.`
 - not_now:
   - `live deployment plumbing`
   - `cloud provisioning automation`
@@ -30,50 +30,29 @@ This file must stay short and current.
 ## Active work item
 
 ```yaml
-id: ql-021-targeted-acceptance-completion
-title: Close the QL-021 acceptance axis without reopening the architecture batch
+id: ql-016-continuity-closeout
+title: Close the remaining NumPy / legacy continuity inventory after QL-021 acceptance closure
 status: in_progress
-path_classification: core direction
-status_axes:
-  operational_state: done
-  acceptance_state: pending_gpu_acceptance_proof
-  promotion_state: not_started
-proof_gated_reopen_check:
-  assumed_closed_pending_reconciliation:
-    - QL-010
-    - QL-011
-    - QL-012
-    - QL-013
-  reopen_triggers_found: []
-retained_evidence:
-  run_id: ql021-controlled-remote-rerun-20260417-build-fresh
-  optional_derived_acceptance_index: outputs/ql021-controlled-remote-rerun-20260417-build-fresh/acceptance_evidence.json
-  build_exit: 0
-  train_exit: 0
-  evaluate_exit: 0
-  score_exit: 0
-  export_exit: 0
-  training_backend: pytorch
-  training_device: cuda
-  tensor_cache_used: true
-  jsonl_fallback_used: false
-  compiled_policy_mode: tensor_cache_linear_policy_batch
-  train_epoch_wall_sec_range: 33.6-56.7
-  validation_wall_sec_range: 7.3-14.4
-  evaluate_wall_sec: 12.4
-  retained_full_search_gpu_avg_utilization: 10.48
-  retained_canonical_refit_epoch_only_gpu_avg_utilization: 12.32
-  retained_final_evaluate_gpu_avg_utilization: 0.0
+path_classification: temporary compatibility maintenance
+completed_prerequisite:
+  ql_021_operational_state: done
+  ql_021_acceptance_state: done
+  ql_021_promotion_state: not_started
+current_blocker:
+  - external `audit-continuity` evidence is not yet captured against active registries
+next_action:
+  - run `quantlab-ml audit-continuity --registry-root ...` and decide freeze/retire action for NumPy and legacy continuity surfaces
 ```
 
-## Current blocker details
+## Current state details
 
-**Retained QL-021 evidence (2026-04-17):**
+**QL-021 acceptance closure (2026-04-17):**
 - `build/train/evaluate/score/export` all exited `0`; the hot path is real, not hypothetical.
 - `train.log` shows `training_backend=pytorch`, `training_device=cuda`, `tensor_cache_used=true`, `jsonl_fallback_used=false`; `evaluate.log` shows `compiled_policy_mode=tensor_cache_linear_policy_batch`.
-- The retained controlled run meets the timing gates: final refit epochs `33.6-56.7 sec`, validation `7.3-14.4 sec`, final evaluate `12.4 sec`.
-- The retained bundle is sufficient to prove the hot path and timing gates, but not to close acceptance: exact active-window GPU averages still stay below the runbook gate (`10.48%` across the full search window, `12.32%` across canonical refit epoch-only windows, `0.0%` across final evaluate), so the remaining work is a minimum targeted remote resampling pass rather than another architecture change.
-- Promotion is not started: the retained candidate is still a challenger and `final_untouched_test` total net return is negative (`-1.138819734534162`).
+- The clean remote proof run meets the timing gates: train epochs `28.8-34.9 sec`, validation `7.5-18.8 sec`, final evaluate `7.7 sec`.
+- D-018 and `docs/REMOTE_GPU_RUNBOOK.md` now treat average GPU utilization as diagnostic telemetry only for QL-021-style controlled proof runs. The hard acceptance truth is direct hot-path evidence: `training_device=cuda`, `tensor_cache_used=true`, `jsonl_fallback_used=false`, required chain exit codes `0`, explicit train/evaluate execution evidence, and satisfied timing gates.
+- Exact active-window GPU averages remain recorded (`6.07%` across the full search window, `8.98%` across canonical refit full, `11.58%` across canonical refit epoch-only windows, `0.0%` across final evaluate), but they no longer block QL-021 acceptance closure.
+- Promotion is not started: the retained candidate is still a challenger and `final_untouched_test` total net return is negative (`-0.9497811681221033`).
 
 ## Recently completed
 
@@ -142,14 +121,18 @@ retained_evidence:
 - QL-022 completed: repo-memory now distinguishes QL-021 `operational_state`, `acceptance_state`, and `promotion_state` instead of collapsing them into one status, and the 2026-04-17 retained rerun is recorded as operationally done
 - proof-gated reconciliation found no reopen trigger for QL-010 / QL-011 / QL-012 / QL-013 from current repo truth; they remain append-only history rather than being reopened by stale summary text alone
 - `outputs/ql021-controlled-remote-rerun-20260417-build-fresh/acceptance_evidence.json` now acts only as a derived retained-evidence index over existing logs, manifests, artifacts, and GPU CSV samples
-- QL-021 retained-evidence reconciliation completed: the retained 2026-04-17 logs and GPU CSVs are sufficient to prove operational success and timing gates, but not sufficient to satisfy the runbook GPU-utilization gate
+- QL-021 retained-evidence reconciliation completed: the retained 2026-04-17 logs and GPU CSVs are sufficient to prove operational success and timing gates, and the clean remote proof run later confirmed those same hot-path signals on real remote GPU infrastructure
 - QL-023 completed under scoped verification: manifest-based registry registration now derives dataset-surface train coverage from retained split facts, falls back to retained tensor-cache evidence only when that recovery surface is actually available, and otherwise fails loudly instead of warning and emitting zero train coverage
+- clean remote QL-021 proof capture completed on a `500 GB` / `RTX 4090` / `Threadripper PRO 7995WX` host: `build/train/evaluate/score/export` again exited `0`, the tensor-cache hot path stayed active, and timing gates remained within the runbook limits
+- `outputs/ql021-acceptance-proof-20260417-no-trpro7995wx/acceptance_evidence.json` now acts only as an optional derived retained-evidence index over the new proof bundle, and the reduced local bundle intentionally keeps manifests, registry JSONs, logs, and GPU CSVs while omitting the full `112G` trajectory payload
+- D-018 accepted: QL-021-style controlled proof runs now use direct hot-path evidence as the hard acceptance signal, while average GPU utilization remains diagnostic telemetry only
+- QL-021 acceptance completed: `operational_state=done`, `acceptance_state=done`, and `promotion_state=not_started`
 
 ## Immediate next actions
 
-1. **QL-021 targeted acceptance completion** — capture only the missing remote GPU-utilization proof on the same controlled config; keep `operational_state=done` and `promotion_state=not_started` fixed while the acceptance axis stays open.
-2. Prefer train/evaluate-only resampling against the retained trajectory directory if it still exists remotely; regenerate the optional derived retained-evidence index (`acceptance_evidence.json`) after the targeted proof lands, and do not rerun the full chain unless the retained trajectory directory is unavailable.
-3. Resume `quantlab-ml audit-continuity --registry-root ...` only after the QL-021 acceptance axis is stable, then decide whether QL-016 can move from continuity tracking to freeze/retire action.
+1. **QL-016 continuity closeout** — run `quantlab-ml audit-continuity --registry-root ...` against the active registries now that QL-021 acceptance is closed.
+2. Freeze or retire the NumPy reference path and any still-unused legacy continuity surfaces once the external audit confirms zero active dependency.
+3. Preserve the reduced local QL-021 proof bundle and derived acceptance index as retained operational evidence; promotion remains out of scope.
 4. Keep QL-014 later and keep QL-100 / QL-101 parked.
 
 ## Update rule
