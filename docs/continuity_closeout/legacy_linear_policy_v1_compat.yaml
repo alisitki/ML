@@ -1,0 +1,13 @@
+window_id: legacy_linear_policy_v1_compat
+scope_kind: external_retained_evidence
+authority_status: unconfirmed
+latest_audit_scope_verdict: blocked
+blocking_reasons:
+  - authoritative_scope_not_confirmed
+next_required_evidence:
+  - Confirm the authoritative active registry root or provide a relocation-safe retained bundle.
+  - Run the authority-aware continuity audit on that confirmed scope.
+  - Revisit the legacy compat window only after authoritative evidence is attached.
+last_reviewed: 2026-04-18
+decision_status: pending_authoritative_evidence
+decision: null

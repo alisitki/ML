@@ -43,8 +43,9 @@ QuantLab is `offline operational but not professionally closed`.
 Why:
 
 - current HEAD contains a real offline engine with trajectory build, train, evaluate, score, export, and registry flows
-- retained QL-021 proof bundles under `outputs/` show controlled remote-GPU hot-path evidence
-- offline closure is still incomplete because continuity retirement depends on auditable registry scope, relocation-safe retained artifact handling, and broader evidence packaging discipline
+- current HEAD contains authority-aware continuity audit semantics plus repo-tracked closeout records for the remaining continuity windows
+- current HEAD does not include repo-tracked QL-021 retained bundles under `outputs/`; any such bundle is external retained evidence until its provenance and authority are confirmed
+- offline closure is still incomplete because continuity retirement depends on authoritative evidence, relocation-safe retained artifact handling, and broader evidence packaging discipline
 
 ---
 
@@ -55,7 +56,7 @@ Why:
 - walk-forward training and evaluation discipline
 - artifact export and registry discipline
 - runtime-facing contracts and thin-executor boundary definitions
-- retained controlled-proof surfaces plus governance and runbook discipline
+- governance, runbook, and repo-tracked closeout-record discipline around retained proof surfaces
 
 ---
 
@@ -76,7 +77,8 @@ These missing layers are planned later-phase work, not current defects by defaul
 ## Current focus
 
 - keep repo-truth docs aligned with current HEAD rather than planned target-state architecture
-- harden `quantlab-ml audit-continuity` so zero-record and unreadable-retained-artifact cases become explicit blocked results
+- keep `quantlab-ml audit-continuity` authority-aware so inspected-scope truth does not read as authoritative closeout truth
+- keep repo-tracked continuity closeout records explicit and pending until authoritative evidence is attached
 - define explicit offline-closure criteria and continuity-audit procedure
 - leave evidence-dependent items visible instead of writing optimistic closure language
 
@@ -109,6 +111,7 @@ The following remain visible but are not the current main focus:
 
 ## Current interpretation notes
 
-- The retained QL-021 bundles in `outputs/` are real controlled-proof evidence for the offline hot path. They do not, by themselves, prove authoritative continuity closure or live readiness.
+- Current HEAD does not include repo-tracked QL-021 bundles under `outputs/`. If external retained QL-021 bundles exist, they are external retained evidence rather than current-head repo-tracked proof until provenance and authority are attached explicitly.
+- The repo-tracked continuity closeout records are pre-decision records. They do not, by themselves, prove authoritative continuity closure or live readiness.
 - Runtime and executor contracts exist as governance and artifact surfaces. They are not the same thing as a live selector daemon plus executor loop.
 - Commercialization gates are defined, but no gate above the offline side is currently operationally evidenced in this repository.

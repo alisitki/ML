@@ -9,7 +9,7 @@ The repository materially implements the offline-first foundation-heavy half of 
 - canonical market-data, observation, reward, split, artifact, registry, and execution-intent contracts for the declared market scope
 - trajectory building plus offline training, evaluation, scoring, and policy export flows
 - registry lineage, promotion discipline, and continuity-audit tooling for temporary compatibility windows
-- governance docs, runbooks, and retained proof surfaces for controlled offline work
+- governance docs, runbooks, and repo-tracked truth surfaces for controlled offline work
 
 This is not a notebook sandbox, but it is also not yet a live-operating trading system.
 
@@ -18,7 +18,9 @@ This is not a notebook sandbox, but it is also not yet a live-operating trading 
 QuantLab is currently `offline operational but not professionally closed`.
 
 - The offline engine is real on current HEAD: `build-trajectories`, `train`, `evaluate`, `score`, and `export-policy` exist and are test-covered.
-- Offline closure is still incomplete because continuity retirement depends on auditable registry truth, relocation-safe retained artifacts, and explicit evidence-based closure criteria.
+- Current HEAD also carries repo-tracked continuity closeout records and an authority-aware continuity audit surface, but that is not the same thing as authoritative closeout evidence.
+- Current HEAD does not include repo-tracked QL-021 retained bundles under `outputs/`; any such bundle must be treated as external retained evidence until its provenance and authority are confirmed.
+- Offline closure is still incomplete because continuity retirement depends on authoritative evidence, relocation-safe retained artifacts, and explicit evidence-based closure criteria.
 - Until those blockers are cleared or explicitly frozen, live/runtime buildout is a planned next phase, not the current main focus.
 
 ## Not yet implemented as current repo reality
@@ -38,8 +40,9 @@ Those are target-state layers, not current capabilities.
 ## Current focus before live/runtime work
 
 - keep repo-truth docs aligned with current HEAD rather than planned architecture
-- harden `audit-continuity` so empty or unreadable registry scopes do not look like safe retirement
-- define explicit offline-closure criteria and evidence gaps before Phase 2 becomes the main execution track
+- keep `audit-continuity` authority-aware so inspected-scope truth is not mistaken for authoritative closeout truth
+- keep repo-tracked closeout records explicit and pending until authoritative evidence is attached
+- define explicit offline-closure evidence gaps before Phase 2 becomes the main execution track
 
 ## Next build phase
 
@@ -86,6 +89,8 @@ CLI surfaces:
 - `quantlab-ml inspect-s3-compact --env-file .env`
 - `quantlab-ml audit-continuity --registry-root outputs/registry`
 
+`outputs/` is a local ignored workspace path in this repo. An audit run under `outputs/` is neither a repo-tracked artifact nor authoritative evidence by itself.
+
 `audit-continuity` is scope-limited: zero active records, unreadable retained artifact paths, or unknown authoritative registry scope are not retirement proof.
 
 ## Read first
@@ -99,6 +104,7 @@ CLI surfaces:
 - `docs/PROJECT_STATE.md`
 - `docs/OFFLINE_CLOSURE_CRITERIA.md`
 - `docs/CONTINUITY_AUDIT_RUNBOOK.md`
+- `docs/CONTINUITY_CLOSEOUT_RECORDS.md`
 
 ## Canonical technical docs
 

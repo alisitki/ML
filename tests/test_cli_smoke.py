@@ -347,8 +347,12 @@ def test_cli_audit_continuity_reports_core_backend_status(
 
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
     assert audit["record_count"] == 1
+    assert audit["inspected_evidence_kind"] == "external_retained_evidence"
+    assert audit["authority_status"] == "unconfirmed"
     assert audit["active_training_backend_counts"] == {"pytorch": 1}
     assert audit["active_numpy_training_backend_count"] == 0
+    assert audit["closeout_decision_allowed"] is False
+    assert audit["closeout_blockers"] == ["authoritative_scope_not_confirmed"]
     assert audit["audit_scope_verdict"] == "clear_in_inspected_scope"
     assert audit["blocking_reasons"] == []
     assert audit["ready_to_close_numpy_continuity_window"] is True
@@ -375,6 +379,13 @@ def test_cli_audit_continuity_blocks_empty_registry_scope(tmp_path: Path) -> Non
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
     assert audit["record_count"] == 0
     assert audit["active_record_count"] == 0
+    assert audit["inspected_evidence_kind"] == "external_retained_evidence"
+    assert audit["authority_status"] == "unconfirmed"
+    assert audit["closeout_decision_allowed"] is False
+    assert audit["closeout_blockers"] == [
+        "no_active_records_in_registry_scope",
+        "authoritative_scope_not_confirmed",
+    ]
     assert audit["audit_scope_verdict"] == "blocked"
     assert audit["blocking_reasons"] == ["no_active_records_in_registry_scope"]
     assert audit["ready_to_close_numpy_continuity_window"] is False

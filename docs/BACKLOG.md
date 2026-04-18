@@ -29,9 +29,10 @@ Status values:
 - why_open:
   - current HEAD is stronger on offline substance than on closure honesty
   - state, roadmap, backlog, and runbooks must keep current capability separate from target-state architecture
+  - repo-tracked artifact, external retained evidence, and authoritative evidence must not read like the same thing
 - done_when:
   - `README.md`, `PROJECT_STATE.md`, `ROADMAP.md`, `BACKLOG.md`, and `DOCS_INDEX.md` agree
-  - offline closure criteria and continuity audit method are explicit
+  - offline closure criteria, continuity audit method, and closeout record format are explicit
   - live/runtime work remains visible without reading as the current main focus
 
 ---
@@ -45,16 +46,18 @@ Status values:
 - title: Close the remaining NumPy / legacy continuity inventory
 - why_open:
   - PyTorch is the active core-training path, but final retirement or freeze of continuity windows depends on authoritative registry truth
-  - retained remote bundles can contain copied registry JSON with non-local artifact paths, which is not retirement-grade evidence by itself
+  - the authority-aware audit surface exists, but authoritative evidence for the active registry scope is still missing
+  - external retained bundles can contain copied registry JSON with non-local artifact paths, which is not retirement-grade evidence by itself
 - next_action:
   - identify the authoritative registry root(s) or a relocation-safe retained bundle
-  - run `quantlab-ml audit-continuity --registry-root ...`
-  - use the runbook decision table to choose `RETIRE`, `FREEZE`, or `KEEP-TEMPORARY-WITH-EXPLICIT-SCOPE`
+  - rerun `quantlab-ml audit-continuity --registry-root ...` with explicit evidence classification when needed
+  - update the repo-tracked closeout records only after the authoritative scope is confirmed
 - evidence_needed:
   - authoritative registry root confirmation
   - readable retained artifact paths for every active record in scope
 - done_when:
-  - zero active dependency is proven on the authoritative scope, or the remaining dependency is explicitly frozen with written scope
+  - authoritative evidence is confirmed for the active scope
+  - zero active dependency is proven on that scope, or the remaining dependency is explicitly frozen with written scope
 
 ### QL-004
 
@@ -63,13 +66,15 @@ Status values:
 - title: Close the remaining observation-schema continuity debt
 - why_open:
   - the temporary legacy compat window still exists for deterministic legacy `linear-policy-v1` artifacts
-  - whether it can be retired depends on the same continuity audit truth as QL-016
+  - whether it can be retired depends on the same authoritative continuity truth as QL-016
+  - the repo-tracked closeout record should stay `pending_authoritative_evidence` until that truth exists
 - next_action:
-  - use the continuity audit outcome to decide whether the window should be retired or frozen
+  - keep the closeout record pending until QL-016 confirms authoritative evidence
+  - only then decide whether the window should be retired, frozen, or kept temporary with explicit scope
 - evidence_needed:
   - authoritative continuity audit result
 - done_when:
-  - the compat window is retired or explicitly frozen with no ambiguity about its role
+  - the compat-window closeout record moves from `pending_authoritative_evidence` to `decided`
 
 ### QL-031
 
@@ -79,6 +84,7 @@ Status values:
 - why_open:
   - current HEAD contains real controlled-proof evidence, but that is not the same thing as professional offline closure
   - broader multi-window and champion/challenger evidence remains incomplete
+  - this remains outside the minimum closure-truth batch because current HEAD only has `comparison_report_id` placeholder linkage, not a narrow comparison-report artifact surface
 - evidence_needed:
   - multi-window or multi-slice offline evaluation packs
   - current-head champion/challenger comparison surfaces

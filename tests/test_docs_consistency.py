@@ -30,6 +30,7 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     ).read_text(encoding="utf-8")
     offline_closure = (repo_root / "docs" / "OFFLINE_CLOSURE_CRITERIA.md").read_text(encoding="utf-8")
     continuity_runbook = (repo_root / "docs" / "CONTINUITY_AUDIT_RUNBOOK.md").read_text(encoding="utf-8")
+    closeout_records = (repo_root / "docs" / "CONTINUITY_CLOSEOUT_RECORDS.md").read_text(encoding="utf-8")
     remote_gpu_runbook = (repo_root / "docs" / "REMOTE_GPU_RUNBOOK.md").read_text(encoding="utf-8")
     market_data_contract = (repo_root / "docs" / "CANONICAL_MARKET_DATA_CONTRACT.md").read_text(
         encoding="utf-8"
@@ -49,6 +50,7 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "docs/POLICY_ARTIFACT_SCHEMA.md" in readme
     assert "docs/EXECUTION_INTENT_SCHEMA.md" in readme
     assert "docs/REMOTE_GPU_RUNBOOK.md" in readme
+    assert "docs/CONTINUITY_CLOSEOUT_RECORDS.md" in readme
     assert "## Current implemented scope" in readme
     assert "## Current closure verdict" in readme
     assert "## Not yet implemented as current repo reality" in readme
@@ -81,18 +83,32 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "## Authority map" in docs_index
     assert "docs/OFFLINE_CLOSURE_CRITERIA.md" in docs_index
     assert "docs/CONTINUITY_AUDIT_RUNBOOK.md" in docs_index
+    assert "docs/CONTINUITY_CLOSEOUT_RECORDS.md" in docs_index
 
     assert "PASS" in offline_closure
     assert "PARTIAL" in offline_closure
     assert "FAIL" in offline_closure
     assert "artifact / registry / compatibility truth" in offline_closure
+    assert "repo-tracked artifact" in offline_closure.lower()
+    assert "external retained evidence" in offline_closure.lower()
+    assert "authoritative evidence" in offline_closure.lower()
 
     assert "RETIRE" in continuity_runbook
     assert "FREEZE" in continuity_runbook
     assert "KEEP-TEMPORARY-WITH-EXPLICIT-SCOPE" in continuity_runbook
+    assert "closeout_decision_allowed" in continuity_runbook
     assert "zero active records" in continuity_runbook.lower()
     assert "authoritative registry root is unknown" in continuity_runbook.lower()
     assert "broken or non-relocatable retained artifact paths" in continuity_runbook.lower()
+    assert "repo-tracked artifact" in continuity_runbook.lower()
+    assert "external retained evidence" in continuity_runbook.lower()
+    assert "authoritative evidence" in continuity_runbook.lower()
+
+    assert "decision_status" in closeout_records
+    assert "pending_authoritative_evidence" in closeout_records
+    assert "repo-tracked artifact" in closeout_records.lower()
+    assert "external retained evidence" in closeout_records.lower()
+    assert "authoritative evidence" in closeout_records.lower()
 
     assert "retained evidence" in remote_gpu_runbook.lower()
     assert "audit-continuity" in remote_gpu_runbook

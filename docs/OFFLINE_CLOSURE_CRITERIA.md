@@ -17,6 +17,12 @@ This document defines what "offline professionally closed" means for QuantLab.
 
 QuantLab is not offline professionally closed just because the training CLI runs or because a single controlled proof bundle exists. Closure requires explicit evidence across the offline system, not optimistic wording.
 
+Keep these distinct:
+
+- `repo-tracked artifact`
+- `external retained evidence`
+- `authoritative evidence`
+
 ---
 
 ## Verdict rule
@@ -68,7 +74,7 @@ Required evidence:
 
 ### 4. artifact / registry / compatibility truth
 
-- `PASS`: active registries are auditable, compatibility windows are either retired or explicitly frozen, and retained artifact paths are readable from the inspected bundle or authoritative root
+- `PASS`: active registries are auditable, compatibility windows are either retired or explicitly frozen, and authoritative evidence exists for the closeout scope
 - `PARTIAL`: registry and compatibility discipline exist, but authoritative continuity truth or relocation-safe retained artifacts are still incomplete
 - `FAIL`: active continuity windows read like safe retirement by mistake, or registry truth cannot be audited safely
 
@@ -79,13 +85,13 @@ Required evidence:
 
 ### 5. Reproducibility and operational proof
 
-- `PASS`: retained evidence bundles are readable, materially complete for their claimed purpose, and tied to current-head semantics
+- `PASS`: repo-tracked artifacts or explicitly referenced external retained evidence are readable, materially complete for their claimed purpose, and tied to current-head semantics
 - `PARTIAL`: retained proof exists, but some bundles are reduced, scope-limited, or not sufficient for closure-grade decisions
-- `FAIL`: proof claims rely on missing files, broken artifact paths, or unverifiable narrative only
+- `FAIL`: proof claims rely on missing repo-tracked artifacts, broken external retained evidence, or unverifiable narrative only
 
 Required evidence:
 
-- retained logs, manifests, registry records, and artifacts for claimed proof surfaces
+- repo-tracked artifacts or explicitly referenced external retained evidence for claimed proof surfaces
 - honest limits on what each retained bundle can and cannot prove
 
 ### 6. Docs and phase honesty

@@ -207,9 +207,24 @@ def record_paper_sim(
 def audit_continuity(
     registry_root: Path = typer.Option(..., help="Registry root."),
     output: Path | None = typer.Option(None, help="Optional JSON output path."),
+    inspected_evidence_kind: str = typer.Option(
+        "external-retained-evidence",
+        help=(
+            "How to classify the inspected scope: "
+            "repo-tracked-artifact, external-retained-evidence, or authoritative-evidence."
+        ),
+    ),
+    authority_status: str | None = typer.Option(
+        None,
+        help="Optional authority status: confirmed, unconfirmed, or unknown.",
+    ),
 ) -> None:
     registry = LocalRegistryStore(registry_root)
-    summary = audit_registry_continuity(registry)
+    summary = audit_registry_continuity(
+        registry,
+        inspected_evidence_kind=inspected_evidence_kind,
+        authority_status=authority_status,
+    )
     if output is not None:
         dump_json_data(output, summary)
         typer.echo(f"wrote continuity audit to {output}")

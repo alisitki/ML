@@ -17,6 +17,12 @@ This runbook defines the procedure for auditing temporary continuity windows suc
 
 The audit output is scope-limited. It can tell you what is true in the inspected registry scope. It does not, by itself, prove that the inspected scope is authoritative.
 
+Use these terms explicitly:
+
+- `repo-tracked artifact`: a versioned file on current `HEAD`
+- `external retained evidence`: non-tracked or ignored retained material, such as a copied run bundle under `outputs/`
+- `authoritative evidence`: evidence whose active registry scope has been confirmed for closeout decisions
+
 ---
 
 ## Inputs
@@ -37,11 +43,24 @@ Command:
 quantlab-ml audit-continuity --registry-root <registry-root>
 ```
 
+Optional authority metadata:
+
+```bash
+quantlab-ml audit-continuity \
+  --registry-root <registry-root> \
+  --inspected-evidence-kind external-retained-evidence \
+  --authority-status unknown
+```
+
 ---
 
 ## Output fields to read first
 
 - `audit_scope_verdict`
+- `inspected_evidence_kind`
+- `authority_status`
+- `closeout_decision_allowed`
+- `closeout_blockers`
 - `blocking_reasons`
 - `artifact_load_failures`
 - `active_training_backend_counts`
@@ -49,7 +68,9 @@ quantlab-ml audit-continuity --registry-root <registry-root>
 - `ready_to_close_numpy_continuity_window`
 - `ready_to_retire_legacy_compat_window`
 
-Interpret the booleans only after confirming the scope verdict is not `blocked`.
+Interpret the readiness booleans only after confirming `closeout_decision_allowed=true`.
+
+If `closeout_decision_allowed=false`, the audit may still be useful for inspected-scope truth, but it is not sufficient for a real closeout decision.
 
 ---
 
@@ -60,6 +81,14 @@ Interpret the booleans only after confirming the scope verdict is not `blocked`.
 - `clear_in_inspected_scope`: active records were readable and the inspected scope shows no remaining dependency for the audited windows
 
 `clear_in_inspected_scope` is still not global retirement proof unless the inspected root is confirmed to be authoritative.
+
+---
+
+## Evidence-kind and authority interpretation
+
+- `repo_tracked_artifact` typically means the inspected files are versioned on current `HEAD`, but that still does not prove they are the authoritative active scope.
+- `external_retained_evidence` means the inspected files live outside the repo-tracked surface. A clean result here is still not authoritative by default.
+- `authoritative_evidence` means the inspected scope has already been confirmed as the active closeout surface. Only this class may default to `authority_status=confirmed`.
 
 ---
 

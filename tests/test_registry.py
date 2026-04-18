@@ -220,10 +220,14 @@ def test_registry_continuity_audit_counts_numpy_and_legacy_compat_dependencies(
     summary = audit_registry_continuity(store)
 
     assert summary["record_count"] == 2
+    assert summary["inspected_evidence_kind"] == "external_retained_evidence"
+    assert summary["authority_status"] == "unconfirmed"
     assert summary["active_record_count"] == 2
     assert summary["active_training_backend_counts"] == {"numpy": 2}
     assert summary["active_numpy_training_backend_count"] == 2
     assert summary["active_legacy_compat_artifact_count"] == 1
+    assert summary["closeout_decision_allowed"] is False
+    assert summary["closeout_blockers"] == ["authoritative_scope_not_confirmed"]
     assert summary["ready_to_close_numpy_continuity_window"] is False
     assert summary["ready_to_retire_legacy_compat_window"] is False
     assert summary["blocking_reasons"] == []
@@ -236,8 +240,15 @@ def test_registry_continuity_audit_blocks_zero_record_scope(tmp_path: Path) -> N
     summary = audit_registry_continuity(store)
 
     assert summary["record_count"] == 0
+    assert summary["inspected_evidence_kind"] == "external_retained_evidence"
+    assert summary["authority_status"] == "unconfirmed"
     assert summary["active_record_count"] == 0
     assert summary["readable_active_artifact_count"] == 0
+    assert summary["closeout_decision_allowed"] is False
+    assert summary["closeout_blockers"] == [
+        "no_active_records_in_registry_scope",
+        "authoritative_scope_not_confirmed",
+    ]
     assert summary["blocking_reasons"] == ["no_active_records_in_registry_scope"]
     assert summary["audit_scope_verdict"] == "blocked"
     assert summary["ready_to_close_numpy_continuity_window"] is False
@@ -269,11 +280,19 @@ def test_registry_continuity_audit_uses_registry_local_artifact_fallback(
         ),
     )
 
-    summary = audit_registry_continuity(store)
+    summary = audit_registry_continuity(
+        store,
+        inspected_evidence_kind="external_retained_evidence",
+        authority_status="unconfirmed",
+    )
 
     assert summary["artifact_load_failures"] == []
+    assert summary["inspected_evidence_kind"] == "external_retained_evidence"
+    assert summary["authority_status"] == "unconfirmed"
     assert summary["registry_local_fallback_policy_ids"] == [policy_artifact.policy_id]
     assert summary["readable_active_artifact_count"] == 1
+    assert summary["closeout_decision_allowed"] is False
+    assert summary["closeout_blockers"] == ["authoritative_scope_not_confirmed"]
     assert summary["audit_scope_verdict"] == "clear_in_inspected_scope"
     assert summary["ready_to_close_numpy_continuity_window"] is True
     assert summary["ready_to_retire_legacy_compat_window"] is True
@@ -301,6 +320,13 @@ def test_registry_continuity_audit_blocks_when_artifact_paths_are_unreadable(
     summary = audit_registry_continuity(store)
 
     assert summary["readable_active_artifact_count"] == 0
+    assert summary["inspected_evidence_kind"] == "external_retained_evidence"
+    assert summary["authority_status"] == "unconfirmed"
+    assert summary["closeout_decision_allowed"] is False
+    assert summary["closeout_blockers"] == [
+        "unreadable_active_artifact_paths",
+        "authoritative_scope_not_confirmed",
+    ]
     assert summary["blocking_reasons"] == ["unreadable_active_artifact_paths"]
     assert summary["audit_scope_verdict"] == "blocked"
     assert summary["ready_to_close_numpy_continuity_window"] is False
@@ -316,6 +342,65 @@ def test_registry_continuity_audit_blocks_when_artifact_paths_are_unreadable(
             ),
         }
     ]
+
+
+def test_registry_continuity_audit_keeps_clean_repo_tracked_scope_pending_when_authority_is_unknown(
+    tmp_path: Path,
+    trajectory_bundle: TrajectoryBundle,
+    policy_artifact: PolicyArtifact,
+    training_bundle: tuple,
+) -> None:
+    _, _, training_config = training_bundle
+    store = LocalRegistryStore(tmp_path / "registry")
+    store.register_candidate(
+        policy_artifact,
+        trajectory_bundle,
+        reward_config_hash=hash_payload(trajectory_bundle.reward_spec),
+        training_config_hash=hash_payload(training_config),
+    )
+
+    summary = audit_registry_continuity(
+        store,
+        inspected_evidence_kind="repo_tracked_artifact",
+        authority_status="unknown",
+    )
+
+    assert summary["audit_scope_verdict"] == "clear_in_inspected_scope"
+    assert summary["inspected_evidence_kind"] == "repo_tracked_artifact"
+    assert summary["authority_status"] == "unknown"
+    assert summary["closeout_decision_allowed"] is False
+    assert summary["closeout_blockers"] == ["authoritative_scope_not_confirmed"]
+    assert summary["ready_to_close_numpy_continuity_window"] is True
+    assert summary["ready_to_retire_legacy_compat_window"] is True
+
+
+def test_registry_continuity_audit_allows_closeout_only_for_confirmed_authoritative_evidence(
+    tmp_path: Path,
+    trajectory_bundle: TrajectoryBundle,
+    policy_artifact: PolicyArtifact,
+    training_bundle: tuple,
+) -> None:
+    _, _, training_config = training_bundle
+    store = LocalRegistryStore(tmp_path / "registry")
+    store.register_candidate(
+        policy_artifact,
+        trajectory_bundle,
+        reward_config_hash=hash_payload(trajectory_bundle.reward_spec),
+        training_config_hash=hash_payload(training_config),
+    )
+
+    summary = audit_registry_continuity(
+        store,
+        inspected_evidence_kind="authoritative_evidence",
+    )
+
+    assert summary["audit_scope_verdict"] == "clear_in_inspected_scope"
+    assert summary["inspected_evidence_kind"] == "authoritative_evidence"
+    assert summary["authority_status"] == "confirmed"
+    assert summary["closeout_decision_allowed"] is True
+    assert summary["closeout_blockers"] == []
+    assert summary["ready_to_close_numpy_continuity_window"] is True
+    assert summary["ready_to_retire_legacy_compat_window"] is True
 
 
 def test_unscored_candidate_does_not_become_champion(

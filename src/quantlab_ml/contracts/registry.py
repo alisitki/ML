@@ -1,11 +1,21 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import Field, model_validator
 
 from quantlab_ml.contracts.common import QuantBaseModel, TimeRange
+
+ContinuityInspectedEvidenceKind = Literal[
+    "repo_tracked_artifact",
+    "external_retained_evidence",
+    "authoritative_evidence",
+]
+ContinuityAuthorityStatus = Literal["confirmed", "unconfirmed", "unknown"]
+ContinuityAuditScopeVerdict = Literal["blocked", "active_dependency_present", "clear_in_inspected_scope"]
+ContinuityCloseoutDecision = Literal["RETIRE", "FREEZE", "KEEP-TEMPORARY-WITH-EXPLICIT-SCOPE"]
+ContinuityCloseoutDecisionStatus = Literal["pending_authoritative_evidence", "decided"]
 
 
 class SearchBudgetSummary(QuantBaseModel):
@@ -64,6 +74,64 @@ class ReproducibilityMetadata(QuantBaseModel):
     seed: int
     runtime_stack: dict[str, str] = Field(default_factory=dict)
     reproducible_within_tolerance: bool
+
+
+class ContinuityAuditSummary(QuantBaseModel):
+    registry_root: str
+    inspected_evidence_kind: ContinuityInspectedEvidenceKind
+    authority_status: ContinuityAuthorityStatus
+    closeout_decision_allowed: bool
+    closeout_blockers: list[str] = Field(default_factory=list)
+    record_count: int
+    active_record_count: int
+    readable_active_artifact_count: int
+    active_status_counts: dict[str, int] = Field(default_factory=dict)
+    active_training_backend_counts: dict[str, int] = Field(default_factory=dict)
+    active_training_backend_policy_ids: dict[str, list[str]] = Field(default_factory=dict)
+    active_numpy_training_backend_count: int
+    active_numpy_training_backend_policy_ids: list[str] = Field(default_factory=list)
+    active_legacy_compat_artifact_count: int
+    active_legacy_compat_policy_ids: list[str] = Field(default_factory=list)
+    active_deprecated_momentum_artifact_count: int
+    active_deprecated_momentum_policy_ids: list[str] = Field(default_factory=list)
+    registry_local_fallback_policy_ids: list[str] = Field(default_factory=list)
+    artifact_load_failures: list[dict[str, str]] = Field(default_factory=list)
+    blocking_reasons: list[str] = Field(default_factory=list)
+    audit_scope_verdict: ContinuityAuditScopeVerdict
+    ready_to_close_numpy_continuity_window: bool
+    ready_to_retire_legacy_compat_window: bool
+
+    @model_validator(mode="after")
+    def validate_summary(self) -> "ContinuityAuditSummary":
+        if self.inspected_evidence_kind == "authoritative_evidence" and self.authority_status != "confirmed":
+            raise ValueError("authoritative_evidence requires authority_status=confirmed")
+        if self.closeout_decision_allowed and self.authority_status != "confirmed":
+            raise ValueError("closeout_decision_allowed requires authority_status=confirmed")
+        return self
+
+
+class ContinuityCloseoutRecord(QuantBaseModel):
+    window_id: str
+    scope_kind: ContinuityInspectedEvidenceKind
+    authority_status: ContinuityAuthorityStatus
+    latest_audit_scope_verdict: ContinuityAuditScopeVerdict
+    blocking_reasons: list[str] = Field(default_factory=list)
+    next_required_evidence: list[str] = Field(default_factory=list)
+    last_reviewed: date
+    decision_status: ContinuityCloseoutDecisionStatus
+    decision: ContinuityCloseoutDecision | None = None
+
+    @model_validator(mode="after")
+    def validate_decision_state(self) -> "ContinuityCloseoutRecord":
+        if self.decision_status == "pending_authoritative_evidence":
+            if self.decision is not None:
+                raise ValueError("pending_authoritative_evidence records must not carry a decision")
+            return self
+        if self.decision is None:
+            raise ValueError("decided records must carry a decision")
+        if self.authority_status != "confirmed":
+            raise ValueError("decided records require confirmed authority status")
+        return self
 
 
 class PaperSimEvidenceRecord(QuantBaseModel):
