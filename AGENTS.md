@@ -126,7 +126,7 @@ Do not optimize the system around laptop convenience or weak compatibility expec
 
 Before any non-trivial change, read in this order:
 
-1. `readme.md`
+1. `README.md`
 2. `docs/DOCS_INDEX.md`
 3. `docs/PRODUCT_THESIS.md`
 4. `docs/MARKET_SCOPE.md`

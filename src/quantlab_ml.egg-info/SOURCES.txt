@@ -1,5 +1,5 @@
 pyproject.toml
-readme.md
+README.md
 src/quantlab_ml/__init__.py
 src/quantlab_ml/__main__.py
 src/quantlab_ml/common.py

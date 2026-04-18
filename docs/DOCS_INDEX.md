@@ -16,13 +16,13 @@ superseded_by: []
 - Current phase truth: `docs/PROJECT_STATE.md`
 - Next-phase build plan: `docs/ROADMAP.md` and `docs/BACKLOG.md`
 - Agent operating rules: `AGENTS.md`
-- Repository entry surface: `readme.md`
+- Repository entry surface: `README.md`
 
 ---
 
 ## Reading order
 
-1. `readme.md`
+1. `README.md`
 2. `AGENTS.md`
 3. `docs/PRODUCT_THESIS.md`
 4. `docs/MARKET_SCOPE.md`

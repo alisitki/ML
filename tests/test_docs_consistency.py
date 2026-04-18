@@ -20,7 +20,7 @@ LEGACY_REFERENCES = LEGACY_DOCS + tuple(_legacy_name(parts) for parts in LEGACY_
 
 
 def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
-    readme = (repo_root / "readme.md").read_text(encoding="utf-8")
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
     project_state = (repo_root / "docs" / "PROJECT_STATE.md").read_text(encoding="utf-8")
     roadmap = (repo_root / "docs" / "ROADMAP.md").read_text(encoding="utf-8")
     runtime_model = (repo_root / "docs" / "ONLINE_RUNTIME_MODEL.md").read_text(encoding="utf-8")
@@ -80,7 +80,7 @@ def test_legacy_docs_are_deleted_and_unreferenced(repo_root: Path) -> None:
 
     surviving_docs = [
         repo_root / "AGENTS.md",
-        repo_root / "readme.md",
+        repo_root / "README.md",
         *sorted((repo_root / "docs").glob("*.md")),
     ]
 
