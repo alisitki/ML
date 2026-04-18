@@ -349,7 +349,36 @@ def test_cli_audit_continuity_reports_core_backend_status(
     assert audit["record_count"] == 1
     assert audit["active_training_backend_counts"] == {"pytorch": 1}
     assert audit["active_numpy_training_backend_count"] == 0
+    assert audit["audit_scope_verdict"] == "clear_in_inspected_scope"
+    assert audit["blocking_reasons"] == []
     assert audit["ready_to_close_numpy_continuity_window"] is True
+    assert audit["ready_to_retire_legacy_compat_window"] is True
+
+
+def test_cli_audit_continuity_blocks_empty_registry_scope(tmp_path: Path) -> None:
+    runner = CliRunner()
+    registry_root = tmp_path / "registry"
+    audit_path = tmp_path / "outputs" / "continuity-audit.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "audit-continuity",
+            "--registry-root",
+            str(registry_root),
+            "--output",
+            str(audit_path),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert audit["record_count"] == 0
+    assert audit["active_record_count"] == 0
+    assert audit["audit_scope_verdict"] == "blocked"
+    assert audit["blocking_reasons"] == ["no_active_records_in_registry_scope"]
+    assert audit["ready_to_close_numpy_continuity_window"] is False
+    assert audit["ready_to_retire_legacy_compat_window"] is False
 
 
 def test_cli_evaluate_directory_uses_tensor_cache_api(

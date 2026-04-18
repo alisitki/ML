@@ -1,17 +1,25 @@
 # QuantLab ML
 
-QuantLab ML targets an end-to-end multi-exchange futures ML trading system for futures markets. The destination is a system that ingests websocket market data, builds exchange-aware canonical state, trains and evaluates policies offline, runs runtime inference, and hands controlled execution intent to a thin executor on the path toward live capital deployment.
+QuantLab ML targets an end-to-end multi-exchange futures ML trading system for futures markets. The target system ingests websocket market data, builds exchange-aware canonical state, trains and evaluates policies offline, runs runtime inference, and hands controlled execution intent to a thin executor on the path toward live capital deployment.
 
 ## Current implemented scope
 
-The repository materially implements the foundation-heavy half of that system today:
+The repository materially implements the offline-first foundation-heavy half of that target today:
 
-- canonical market-data, observation, reward, split, artifact, and registry contracts for the declared market scope
-- trajectory building and offline training/evaluation flows
-- runtime-facing inference-artifact export and execution-intent contracts
-- governance, runbooks, and evidence discipline around reproducible offline work
+- canonical market-data, observation, reward, split, artifact, registry, and execution-intent contracts for the declared market scope
+- trajectory building plus offline training, evaluation, scoring, and policy export flows
+- registry lineage, promotion discipline, and continuity-audit tooling for temporary compatibility windows
+- governance docs, runbooks, and retained proof surfaces for controlled offline work
 
-This is not just a notebook sandbox, but it is also not yet a full live-operating trading system.
+This is not a notebook sandbox, but it is also not yet a live-operating trading system.
+
+## Current closure verdict
+
+QuantLab is currently `offline operational but not professionally closed`.
+
+- The offline engine is real on current HEAD: `build-trajectories`, `train`, `evaluate`, `score`, and `export-policy` exist and are test-covered.
+- Offline closure is still incomplete because continuity retirement depends on auditable registry truth, relocation-safe retained artifacts, and explicit evidence-based closure criteria.
+- Until those blockers are cleared or explicitly frozen, live/runtime buildout is a planned next phase, not the current main focus.
 
 ## Not yet implemented as current repo reality
 
@@ -25,15 +33,17 @@ The repository does not yet materially implement all of:
 - a shadow/paper operating loop
 - system-generated commercialization evidence across live-facing gates
 
-Those are valid next-phase targets, not current capabilities.
+Those are target-state layers, not current capabilities.
 
-## Why this phase matters
+## Current focus before live/runtime work
 
-A live ML trading system is only commercially credible if canonical semantics, offline evaluation discipline, artifact lineage, and runtime boundaries are correct before live plumbing is added. QuantLab's current phase matters because it hardens the part of the stack that makes later live behavior interpretable, comparable, and governable.
+- keep repo-truth docs aligned with current HEAD rather than planned architecture
+- harden `audit-continuity` so empty or unreadable registry scopes do not look like safe retirement
+- define explicit offline-closure criteria and evidence gaps before Phase 2 becomes the main execution track
 
 ## Next build phase
 
-The next major build phase is the live-operating half:
+The planned next major build phase remains the live-operating half, but it should not become the main focus until the current offline-closure blockers are explicit:
 
 - websocket ingestion
 - online state / feature service
@@ -48,6 +58,9 @@ The next major build phase is the live-operating half:
 ```text
 implemented today:
   canonical contracts -> trajectories -> offline training/evaluation -> artifacts/registry -> exported inference artifacts and execution-intent contracts
+
+current main focus:
+  truthful offline-closure hardening -> continuity audit semantics -> evidence / state honesty
 
 planned next:
   websocket ingestion -> online state -> runtime selector daemon -> thin executor -> shadow/paper evidence -> commercialization gates
@@ -73,6 +86,8 @@ CLI surfaces:
 - `quantlab-ml inspect-s3-compact --env-file .env`
 - `quantlab-ml audit-continuity --registry-root outputs/registry`
 
+`audit-continuity` is scope-limited: zero active records, unreadable retained artifact paths, or unknown authoritative registry scope are not retirement proof.
+
 ## Read first
 
 - `AGENTS.md`
@@ -82,6 +97,8 @@ CLI surfaces:
 - `docs/ONLINE_RUNTIME_MODEL.md`
 - `docs/COMMERCIALIZATION_GATES.md`
 - `docs/PROJECT_STATE.md`
+- `docs/OFFLINE_CLOSURE_CRITERIA.md`
+- `docs/CONTINUITY_AUDIT_RUNBOOK.md`
 
 ## Canonical technical docs
 

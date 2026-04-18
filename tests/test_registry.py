@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from quantlab_ml.common import hash_payload
+from quantlab_ml.common import dump_model, hash_payload
 from quantlab_ml.contracts import (
     LEGACY_POLICY_ARTIFACT_SCHEMA_VERSION,
     PaperSimEvidenceRecord,
@@ -226,6 +226,96 @@ def test_registry_continuity_audit_counts_numpy_and_legacy_compat_dependencies(
     assert summary["active_legacy_compat_artifact_count"] == 1
     assert summary["ready_to_close_numpy_continuity_window"] is False
     assert summary["ready_to_retire_legacy_compat_window"] is False
+    assert summary["blocking_reasons"] == []
+    assert summary["audit_scope_verdict"] == "active_dependency_present"
+
+
+def test_registry_continuity_audit_blocks_zero_record_scope(tmp_path: Path) -> None:
+    store = LocalRegistryStore(tmp_path / "registry")
+
+    summary = audit_registry_continuity(store)
+
+    assert summary["record_count"] == 0
+    assert summary["active_record_count"] == 0
+    assert summary["readable_active_artifact_count"] == 0
+    assert summary["blocking_reasons"] == ["no_active_records_in_registry_scope"]
+    assert summary["audit_scope_verdict"] == "blocked"
+    assert summary["ready_to_close_numpy_continuity_window"] is False
+    assert summary["ready_to_retire_legacy_compat_window"] is False
+
+
+def test_registry_continuity_audit_uses_registry_local_artifact_fallback(
+    tmp_path: Path,
+    trajectory_bundle: TrajectoryBundle,
+    policy_artifact: PolicyArtifact,
+    training_bundle: tuple,
+) -> None:
+    _, _, training_config = training_bundle
+    store = LocalRegistryStore(tmp_path / "registry")
+    reward_hash = hash_payload(trajectory_bundle.reward_spec)
+    training_hash = hash_payload(training_config)
+    store.register_candidate(
+        policy_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    record = store.get_record(policy_artifact.policy_id)
+    assert record is not None
+    dump_model(
+        store.records_dir / f"{policy_artifact.policy_id}.json",
+        record.model_copy(
+            update={"artifact_path": f"/root/runs/frozen-bundle/registry/artifacts/{policy_artifact.policy_id}.json"}
+        ),
+    )
+
+    summary = audit_registry_continuity(store)
+
+    assert summary["artifact_load_failures"] == []
+    assert summary["registry_local_fallback_policy_ids"] == [policy_artifact.policy_id]
+    assert summary["readable_active_artifact_count"] == 1
+    assert summary["audit_scope_verdict"] == "clear_in_inspected_scope"
+    assert summary["ready_to_close_numpy_continuity_window"] is True
+    assert summary["ready_to_retire_legacy_compat_window"] is True
+
+
+def test_registry_continuity_audit_blocks_when_artifact_paths_are_unreadable(
+    tmp_path: Path,
+    trajectory_bundle: TrajectoryBundle,
+    policy_artifact: PolicyArtifact,
+    training_bundle: tuple,
+) -> None:
+    _, _, training_config = training_bundle
+    store = LocalRegistryStore(tmp_path / "registry")
+    reward_hash = hash_payload(trajectory_bundle.reward_spec)
+    training_hash = hash_payload(training_config)
+    store.register_candidate(
+        policy_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    artifact_path = store.artifacts_dir / f"{policy_artifact.policy_id}.json"
+    artifact_path.unlink()
+
+    summary = audit_registry_continuity(store)
+
+    assert summary["readable_active_artifact_count"] == 0
+    assert summary["blocking_reasons"] == ["unreadable_active_artifact_paths"]
+    assert summary["audit_scope_verdict"] == "blocked"
+    assert summary["ready_to_close_numpy_continuity_window"] is False
+    assert summary["ready_to_retire_legacy_compat_window"] is False
+    assert summary["artifact_load_failures"] == [
+        {
+            "policy_id": policy_artifact.policy_id,
+            "recorded_artifact_path": str(artifact_path),
+            "resolution_attempts": str(artifact_path),
+            "reason": (
+                "artifact path is unreadable from the inspected registry root; "
+                "use the authoritative registry root or provide a relocation-safe retained bundle"
+            ),
+        }
+    ]
 
 
 def test_unscored_candidate_does_not_become_champion(

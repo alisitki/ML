@@ -9,6 +9,8 @@ This document defines the hard boundary between:
 
 This boundary is mandatory.
 
+It is also a target-boundary document. It defines what runtime and executor are allowed to be when they exist; it does not claim that the current repo already implements the live-operating loop.
+
 Allowed implementation families inside this boundary do not define the current default or active development priority by themselves.
 
 ## 1. Fixed runtime architecture

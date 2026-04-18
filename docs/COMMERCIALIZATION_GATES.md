@@ -36,6 +36,8 @@ Current repo truth must always separate:
 
 No gate above Gate 1 is currently operationally evidenced in this repository.
 
+Offline closure still matters before later gates become the main focus. The offline closure criteria in `docs/OFFLINE_CLOSURE_CRITERIA.md` must not remain materially `PARTIAL` or `FAIL` in critical areas while Gate 2+ work is described as if it can proceed unconditionally.
+
 ---
 
 ## Target gate meanings
@@ -124,6 +126,7 @@ In particular:
 - parity success is not shadow success
 - shadow success is not pilot success
 - pilot success is not scale readiness
+- defined later gates do not waive unresolved offline closure blockers
 
 Defined is not evidenced.
 

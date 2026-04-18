@@ -12,11 +12,26 @@ superseded_by: []
 
 ## Start here
 
-- Long-term intent: `docs/PRODUCT_THESIS.md`
-- Current phase truth: `docs/PROJECT_STATE.md`
-- Next-phase build plan: `docs/ROADMAP.md` and `docs/BACKLOG.md`
-- Agent operating rules: `AGENTS.md`
 - Repository entry surface: `README.md`
+- Agent operating rules: `AGENTS.md`
+- Long-term intent: `docs/PRODUCT_THESIS.md`
+- Current repo truth: `docs/PROJECT_STATE.md`
+- Phase order and gates: `docs/ROADMAP.md`
+- Active queue: `docs/BACKLOG.md`
+
+---
+
+## Authority map
+
+- current repo state -> `docs/PROJECT_STATE.md`
+- phase gates and phase order -> `docs/ROADMAP.md`
+- execution queue / outstanding work -> `docs/BACKLOG.md`
+- offline closure definition -> `docs/OFFLINE_CLOSURE_CRITERIA.md`
+- continuity audit method -> `docs/CONTINUITY_AUDIT_RUNBOOK.md`
+- target live-path architecture -> `docs/ONLINE_RUNTIME_MODEL.md`
+- executor / runtime boundary -> `docs/RUNTIME_BOUNDARY.md`
+
+If two docs seem to disagree, the more specific authority above wins unless a newer canonical doc explicitly supersedes it.
 
 ---
 
@@ -33,9 +48,11 @@ superseded_by: []
 9. `docs/PROJECT_STATE.md`
 10. `docs/ROADMAP.md`
 11. `docs/BACKLOG.md`
-12. `docs/DECISIONS.md`
-13. relevant canonical contracts
-14. relevant runbooks
+12. `docs/OFFLINE_CLOSURE_CRITERIA.md`
+13. `docs/CONTINUITY_AUDIT_RUNBOOK.md`
+14. `docs/DECISIONS.md`
+15. relevant canonical contracts
+16. relevant runbooks
 
 ---
 
@@ -63,10 +80,12 @@ superseded_by: []
 
 ## Operational docs
 
-- `docs/PROJECT_STATE.md` for the current phase and active focus
-- `docs/ROADMAP.md` for phase order and next build phase
-- `docs/BACKLOG.md` for open work grouped by current phase, next phase, and later commercialization
-- `docs/DECISIONS.md` for accepted architecture decisions and their rationale
+- `docs/PROJECT_STATE.md`
+- `docs/ROADMAP.md`
+- `docs/BACKLOG.md`
+- `docs/OFFLINE_CLOSURE_CRITERIA.md`
+- `docs/CONTINUITY_AUDIT_RUNBOOK.md`
+- `docs/DECISIONS.md`
 
 ---
 
@@ -74,6 +93,7 @@ superseded_by: []
 
 - `docs/EVALUATION_RUNBOOK.md`
 - `docs/REMOTE_GPU_RUNBOOK.md`
+- `docs/CONTINUITY_AUDIT_RUNBOOK.md`
 
 ---
 
@@ -86,8 +106,3 @@ Primary location:
 ```text
 docs/history/2026Q2/
 ```
-
-Examples:
-
-- `docs/history/2026Q2/REMEDIATION_BATCH_1.md`
-- `docs/history/2026Q2/REMEDIATION_BATCH_2.md`

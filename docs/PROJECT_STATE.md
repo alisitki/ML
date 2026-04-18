@@ -2,15 +2,14 @@
 
 ## Purpose
 
-This is the short, current truth file for QuantLab.
+This is the short source of truth for what current HEAD actually is.
 
 Use it to answer:
 
-- what the project ultimately aims to become
-- what the repository materially implements today
-- what is missing today
-- what is being hardened now
-- what should be built next
+- what QuantLab ultimately aims to become
+- what the repo materially implements today
+- whether the offline side is professionally closed
+- what is blocking the repo before live/runtime work becomes the main focus
 
 Detailed historical narrative belongs in `docs/DECISIONS.md` and `docs/history/`.
 
@@ -31,9 +30,21 @@ QuantLab aims to become an end-to-end multi-exchange futures ML trading system:
 
 ## Current phase
 
-QuantLab is in late Phase 1 hardening: the canonical and offline foundation is materially implemented and is the strongest part of the repository.
+QuantLab is in late Phase 1 hardening.
 
-The repo is not yet a full live-operating trading system. Phase 2 live-path buildout is the next major phase, not current implemented reality.
+The repo materially implements the canonical and offline foundation. It does not yet materially implement the live-operating half. Phase 2 remains planned next-phase work, not current implemented reality and not the main focus while offline closure blockers remain open.
+
+---
+
+## Current verdict
+
+QuantLab is `offline operational but not professionally closed`.
+
+Why:
+
+- current HEAD contains a real offline engine with trajectory build, train, evaluate, score, export, and registry flows
+- retained QL-021 proof bundles under `outputs/` show controlled remote-GPU hot-path evidence
+- offline closure is still incomplete because continuity retirement depends on auditable registry scope, relocation-safe retained artifact handling, and broader evidence packaging discipline
 
 ---
 
@@ -44,7 +55,7 @@ The repo is not yet a full live-operating trading system. Phase 2 live-path buil
 - walk-forward training and evaluation discipline
 - artifact export and registry discipline
 - runtime-facing contracts and thin-executor boundary definitions
-- governance, runbook, and repo-memory discipline
+- retained controlled-proof surfaces plus governance and runbook discipline
 
 ---
 
@@ -56,34 +67,48 @@ The repo is not yet a full live-operating trading system. Phase 2 live-path buil
 - selector runtime daemon
 - thin executor integration and live control loop
 - shadow/paper operating loop
-- system-generated commercialization evidence
+- system-generated commercialization evidence above the offline gate
+
+These missing layers are planned later-phase work, not current defects by default.
 
 ---
 
-## Active focus
+## Current focus
 
-- close QL-016 by auditing authoritative registries and retiring or freezing temporary NumPy continuity paths when safe
-- keep current-phase truth surfaces honest so later live-path phases are not described as already implemented
-- keep promotion and live-capital claims out of scope until live-path evidence exists
+- keep repo-truth docs aligned with current HEAD rather than planned target-state architecture
+- harden `quantlab-ml audit-continuity` so zero-record and unreadable-retained-artifact cases become explicit blocked results
+- define explicit offline-closure criteria and continuity-audit procedure
+- leave evidence-dependent items visible instead of writing optimistic closure language
 
 ---
 
-## Next phase after active focus
+## Blocked before live-path focus
 
-Phase 2 - runtime/live parity foundation:
+- authoritative registry root discovery for current active continuity truth
+- closure-grade continuity decision on NumPy and legacy compat windows
+- relocation-safe retained evidence pack discipline for copied remote runs
+- broader multi-window and champion/challenger offline evidence that goes beyond a single controlled proof bundle
 
-- websocket ingestion for the declared market scope
-- online state / feature service with explicit unsupported/missing/stale semantics
-- replay-vs-live parity and recovery tooling
-- degraded-input and stale-state behavior
+Until those are explicit, Phase 2 is still planned next work but not the main execution focus.
+
+---
+
+## Not started / not main focus yet
+
+The following remain visible but are not the current main focus:
+
+- websocket ingestion services
+- online feature/state service
+- replay-vs-live parity harnesses over live-style inputs
 - selector runtime
-- shadow/paper loop
-- thin executor integration and live controls
+- thin executor operating loop
+- shadow/paper operation
+- live-path observability and recovery evidence
 
 ---
 
 ## Current interpretation notes
 
-- QL-021 and related remote-GPU work prove the offline hot path on controlled proof runs. They do not prove live-path operation.
+- The retained QL-021 bundles in `outputs/` are real controlled-proof evidence for the offline hot path. They do not, by themselves, prove authoritative continuity closure or live readiness.
 - Runtime and executor contracts exist as governance and artifact surfaces. They are not the same thing as a live selector daemon plus executor loop.
-- Commercialization gates are defined, but they are not yet fully evidenced beyond the offline side of the system.
+- Commercialization gates are defined, but no gate above the offline side is currently operationally evidenced in this repository.

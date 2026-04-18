@@ -16,6 +16,8 @@ This document defines QuantLab's target live-path architecture and the condition
 
 It also states, explicitly, which runtime-related surfaces exist today and which do not.
 
+This is a target-state architecture document. It does not override `docs/PROJECT_STATE.md`, `docs/OFFLINE_CLOSURE_CRITERIA.md`, or the current offline-hardening focus.
+
 ---
 
 ## Target runtime architecture
@@ -63,6 +65,8 @@ The repository does not yet materially implement all of:
 - runtime observability and recovery evidence for the full live path
 
 Until those exist, the runtime architecture remains a target design plus partial groundwork.
+
+Phase 2 remains planned next work, but it should not become the main focus while offline closure still has blocked or ambiguous evidence.
 
 ---
 

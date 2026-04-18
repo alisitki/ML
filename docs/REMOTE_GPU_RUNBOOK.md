@@ -30,6 +30,19 @@ This runbook does not cover:
 - checkpoint/resume design
 - external `audit-continuity` closure against active runtime registries
 
+## Retained evidence honesty
+
+This runbook defines how a controlled remote-GPU run should be executed and what evidence should be retained.
+
+It does not, by itself, prove that any previously retained bundle in the repo is closure-grade for continuity retirement.
+
+In particular:
+
+- retained evidence must remain readable from the local bundle
+- `acceptance_evidence.json` is an index, not the source of truth
+- copied registry JSON that still points at unreadable `/root/runs/...` paths is not continuity-retirement proof by itself
+- continuity closeout still depends on `docs/CONTINUITY_AUDIT_RUNBOOK.md`
+
 ## Controlled first-run posture
 
 Path classification:

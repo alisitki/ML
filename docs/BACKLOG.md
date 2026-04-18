@@ -2,15 +2,14 @@
 
 ## Purpose
 
-This file tracks open work in a phase-aware way.
+This file is the current execution queue.
 
-The backlog is organized into:
+Use these labels to read ordering quickly:
 
-- current-phase hardening
-- next-phase live-path buildout
-- later commercialization work
-
-Detailed history for completed foundation work belongs in `docs/DECISIONS.md`, `docs/PROJECT_STATE.md`, and git history rather than in a long mixed-status ledger here.
+- `DOCS_TRUTH`
+- `OFFLINE_HARDENING`
+- `OFFLINE_EXPANSION`
+- `LIVE_ENABLEMENT`
 
 Status values:
 
@@ -20,174 +19,165 @@ Status values:
 
 ---
 
-## Current-phase hardening
-
-### QL-016
-
-- phase_bucket: `current-phase hardening`
-- title: Close the remaining NumPy / legacy continuity inventory
-- status: `blocked`
-- why_open:
-  - PyTorch is the active core-training path, but final freeze/retirement of NumPy continuity depends on an authoritative registry audit
-  - the reduced local QL-021 proof bundle is not a closure-grade audit source because copied registry records still reference remote `/root/runs/...` artifact paths
-- next_action:
-  - obtain the authoritative active registry root(s) or a relocation-safe audit bundle
-  - run `quantlab-ml audit-continuity --registry-root ...`
-  - freeze or retire the temporary continuity paths if zero active dependency is confirmed
-- done_when:
-  - external continuity audit no longer shows NumPy as an active core-training dependency
-  - the temporary continuity path no longer reads like an open-ended default
-
-### QL-004
-
-- phase_bucket: `current-phase hardening`
-- title: Close the remaining observation-schema continuity debt
-- status: `in_progress`
-- why_open:
-  - the temporary legacy compat window still exists for deterministic legacy `linear-policy-v1` artifacts
-  - current-phase hardening should narrow or retire continuity tools once active dependency is disproven
-- next_action:
-  - use the continuity audit outcome to decide whether the remaining legacy compat window can be frozen or removed
-  - keep derived-surface and runtime-contract semantics explicit until the window closes
-- done_when:
-  - the remaining compat window is either retired or explicitly frozen with no ambiguity about its role
-  - observation/runtime contract boundaries remain test-covered
+## DOCS_TRUTH
 
 ### QL-014
 
-- phase_bucket: `current-phase hardening`
-- title: Apply interpretation guardrails across task intake and naming
-- status: `todo`
+- label: `DOCS_TRUTH`
+- status: `in_progress`
+- title: Keep repo-truth surfaces phase-honest
 - why_open:
-  - current-phase truth can still blur allowed, temporary, optional, and default paths if naming or intake discipline drifts
-- next_action:
-  - require task intake to use phase classification consistently
-  - clean up misleading continuity-oriented naming only through explicit compatibility changes
+  - current HEAD is stronger on offline substance than on closure honesty
+  - state, roadmap, backlog, and runbooks must keep current capability separate from target-state architecture
 - done_when:
-  - new work is less likely to mistake continuity or later-phase surfaces for the default path
-  - task intake consistently records phase-aware classification
+  - `README.md`, `PROJECT_STATE.md`, `ROADMAP.md`, `BACKLOG.md`, and `DOCS_INDEX.md` agree
+  - offline closure criteria and continuity audit method are explicit
+  - live/runtime work remains visible without reading as the current main focus
 
 ---
 
-## Next-phase live-path buildout
+## OFFLINE_HARDENING
+
+### QL-016
+
+- label: `OFFLINE_HARDENING`
+- status: `blocked`
+- title: Close the remaining NumPy / legacy continuity inventory
+- why_open:
+  - PyTorch is the active core-training path, but final retirement or freeze of continuity windows depends on authoritative registry truth
+  - retained remote bundles can contain copied registry JSON with non-local artifact paths, which is not retirement-grade evidence by itself
+- next_action:
+  - identify the authoritative registry root(s) or a relocation-safe retained bundle
+  - run `quantlab-ml audit-continuity --registry-root ...`
+  - use the runbook decision table to choose `RETIRE`, `FREEZE`, or `KEEP-TEMPORARY-WITH-EXPLICIT-SCOPE`
+- evidence_needed:
+  - authoritative registry root confirmation
+  - readable retained artifact paths for every active record in scope
+- done_when:
+  - zero active dependency is proven on the authoritative scope, or the remaining dependency is explicitly frozen with written scope
+
+### QL-004
+
+- label: `OFFLINE_HARDENING`
+- status: `blocked`
+- title: Close the remaining observation-schema continuity debt
+- why_open:
+  - the temporary legacy compat window still exists for deterministic legacy `linear-policy-v1` artifacts
+  - whether it can be retired depends on the same continuity audit truth as QL-016
+- next_action:
+  - use the continuity audit outcome to decide whether the window should be retired or frozen
+- evidence_needed:
+  - authoritative continuity audit result
+- done_when:
+  - the compat window is retired or explicitly frozen with no ambiguity about its role
+
+### QL-031
+
+- label: `OFFLINE_HARDENING`
+- status: `blocked`
+- title: Broaden offline closure evidence beyond the single controlled proof surface
+- why_open:
+  - current HEAD contains real controlled-proof evidence, but that is not the same thing as professional offline closure
+  - broader multi-window and champion/challenger evidence remains incomplete
+- evidence_needed:
+  - multi-window or multi-slice offline evaluation packs
+  - current-head champion/challenger comparison surfaces
+- done_when:
+  - offline closure criteria move from `PARTIAL` to `PASS` on evidence areas that are currently unproven
+
+---
+
+## OFFLINE_EXPANSION
+
+### QL-032
+
+- label: `OFFLINE_EXPANSION`
+- status: `blocked`
+- title: Check whether checkpoint/resume is a genuinely small follow-on hardening task
+- why_open:
+  - interruption tolerance matters for larger retained offline runs
+  - current batch should not half-build checkpointing without a clean seam
+- next_action:
+  - only implement if a narrow, testable path is already near completion
+  - otherwise leave it explicitly blocked with acceptance criteria
+- done_when:
+  - checkpoint/resume is either implemented cleanly with tests or intentionally deferred with clear scope
+
+### QL-033
+
+- label: `OFFLINE_EXPANSION`
+- status: `blocked`
+- title: Expand research/evidence surface without weakening closure discipline
+- why_open:
+  - search, architecture, and evaluation expansion are valid later offline work
+  - they should not be used to paper over unresolved continuity or truth gaps
+- evidence_needed:
+  - explicit acceptance criteria per expansion item
+- done_when:
+  - expansion work is scoped as additive offline research rather than fake closure
+
+---
+
+## LIVE_ENABLEMENT
+
+These items stay visible, but they are later-phase work.
 
 ### QL-024
 
-- phase_bucket: `next-phase live-path buildout`
-- title: Build websocket ingestion and canonical event normalization services
+- label: `LIVE_ENABLEMENT`
 - status: `todo`
-- why_now:
-  - the repo defines live-path semantics, but it does not yet materially implement live ingestion across the declared market scope
-- done_when:
-  - websocket ingestion exists for the active exchanges and symbols
-  - venue-specific parsing and canonical normalization are explicit and testable
-  - unsupported/missing/stale semantics remain intact on the live path
+- title: Build websocket ingestion and canonical event normalization services
 
 ### QL-025
 
-- phase_bucket: `next-phase live-path buildout`
-- title: Build the online state / feature service
+- label: `LIVE_ENABLEMENT`
 - status: `todo`
-- why_now:
-  - runtime inference cannot be credible until live state and feature semantics exist as a declared service rather than as documentation only
-- done_when:
-  - online state updates are explicit
-  - freshness, stale-state, deduplication, and idempotency rules are implemented
-  - unsupported vs missing vs stale semantics remain distinct
+- title: Build the online state / feature service
 
 ### QL-026
 
-- phase_bucket: `next-phase live-path buildout`
-- title: Implement replay-vs-live parity, degraded-input, and recovery tooling
+- label: `LIVE_ENABLEMENT`
 - status: `todo`
-- why_now:
-  - the future live path needs evidence that runtime state matches replay semantics and behaves safely under reconnect or degraded input
-- done_when:
-  - replay-vs-live parity checks exist
-  - stale-state and partial-input behavior are explicit
-  - reconnect and recovery behavior is testable
+- title: Implement replay-vs-live parity, degraded-input, and recovery tooling
 
 ### QL-027
 
-- phase_bucket: `next-phase live-path buildout`
-- title: Stand up the selector runtime daemon
+- label: `LIVE_ENABLEMENT`
 - status: `todo`
-- why_now:
-  - exported inference artifacts and execution-intent schemas exist, but there is no long-running runtime that consumes live state and produces decisions
-- done_when:
-  - selector runtime consumes declared inference artifacts and declared online state only
-  - runtime decisions are traceable
-  - no strategy logic is pushed into the executor
+- title: Stand up the selector runtime daemon
 
 ### QL-028
 
-- phase_bucket: `next-phase live-path buildout`
-- title: Integrate the thin executor and live controls
+- label: `LIVE_ENABLEMENT`
 - status: `todo`
-- why_now:
-  - live operation requires explicit feasibility, venue/risk controls, and kill-switch behavior without widening the executor boundary
-- done_when:
-  - selector-to-executor handoff is explicit
-  - feasibility and safety checks are enforced
-  - executor remains thin and reconstructable
+- title: Integrate the thin executor and live controls
 
 ### QL-029
 
-- phase_bucket: `next-phase live-path buildout`
-- title: Build the shadow/paper operating loop
+- label: `LIVE_ENABLEMENT`
 - status: `todo`
-- why_now:
-  - QuantLab needs a live-style operating loop before any pilot or commercialization claim is credible
-- done_when:
-  - shadow/paper operation exists
-  - decision traces are reconstructable end to end
-  - runtime, controls, and execution evidence can be reviewed together
-
----
-
-## Later commercialization work
+- title: Build the shadow/paper operating loop
 
 ### QL-030
 
-- phase_bucket: `later commercialization work`
-- title: Automate commercialization-gate evidence and reporting
+- label: `LIVE_ENABLEMENT`
 - status: `todo`
-- why_later:
-  - gate definitions exist now, but systematic gate evidence should follow the live-path buildout rather than substitute for it
-- done_when:
-  - gate evidence is generated from actual system runs
-  - readiness reporting separates defined gates from evidenced gates automatically
+- title: Automate commercialization-gate evidence and reporting
 
 ### QL-100
 
-- phase_bucket: `later commercialization work`
-- title: ONNX / TensorRT runtime acceleration exploration
+- label: `LIVE_ENABLEMENT`
 - status: `todo`
-- why_later:
-  - acceleration is not the next bottleneck until runtime selector maturity exists
-- done_when:
-  - selector runtime is stable
-  - deployment artifact path exists
+- title: ONNX / TensorRT runtime acceleration exploration
 
 ### QL-101
 
-- phase_bucket: `later commercialization work`
-- title: Reward v2 path-aware redesign
+- label: `LIVE_ENABLEMENT`
 - status: `todo`
-- why_later:
-  - reward_v1 must stay stable while the live-operating half is being built
-- done_when:
-  - reward_v1 is stable and versioned
-  - later commercialization evidence justifies a richer reward redesign
+- title: Reward v2 path-aware redesign
 
 ---
 
-## Completed foundation milestones
+## Ordering note
 
-The strongest completed work to date is the canonical and offline foundation:
-
-- QL-001 through QL-003 aligned split and reward semantics with the declared contracts
-- QL-005 through QL-006 established artifact, registry, and promotion discipline
-- QL-008 through QL-023 built the current offline training, evaluation, streaming, tensor-cache, and state-reconciliation foundation
-
-That foundation is the reason Phase 2 live-path buildout is now the right next step.
+Live enablement is the next planned build direction, but it is not the current main focus while `DOCS_TRUTH` and `OFFLINE_HARDENING` items remain blocked or ambiguous.

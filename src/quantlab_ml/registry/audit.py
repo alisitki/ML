@@ -5,6 +5,7 @@ from pathlib import Path
 
 from quantlab_ml.common import load_model
 from quantlab_ml.contracts import LEGACY_POLICY_ARTIFACT_SCHEMA_VERSION, PolicyArtifact
+from quantlab_ml.contracts.registry import RegistryRecord
 from quantlab_ml.registry.store import LocalRegistryStore
 
 _ACTIVE_STATUSES = {"candidate", "challenger", "champion"}
@@ -18,9 +19,40 @@ def audit_registry_continuity(registry: LocalRegistryStore) -> dict[str, object]
     active_training_backend_policy_ids: dict[str, list[str]] = defaultdict(list)
     legacy_compat_policy_ids: list[str] = []
     deprecated_momentum_policy_ids: list[str] = []
+    artifact_load_failures: list[dict[str, str]] = []
+    registry_local_fallback_policy_ids: list[str] = []
+    readable_active_artifact_count = 0
 
     for record in active_records:
-        artifact = load_model(Path(record.artifact_path), PolicyArtifact)
+        artifact_path, resolution_mode, resolution_attempts = _resolve_artifact_path(record, registry)
+        if artifact_path is None:
+            artifact_load_failures.append(
+                {
+                    "policy_id": record.policy_id,
+                    "recorded_artifact_path": record.artifact_path,
+                    "resolution_attempts": ", ".join(resolution_attempts),
+                    "reason": (
+                        "artifact path is unreadable from the inspected registry root; "
+                        "use the authoritative registry root or provide a relocation-safe retained bundle"
+                    ),
+                }
+            )
+            continue
+        if resolution_mode == "registry_local_fallback":
+            registry_local_fallback_policy_ids.append(record.policy_id)
+        try:
+            artifact = load_model(artifact_path, PolicyArtifact)
+        except Exception as exc:
+            artifact_load_failures.append(
+                {
+                    "policy_id": record.policy_id,
+                    "recorded_artifact_path": record.artifact_path,
+                    "resolution_attempts": ", ".join(resolution_attempts),
+                    "reason": f"{exc.__class__.__name__}: {exc}",
+                }
+            )
+            continue
+        readable_active_artifact_count += 1
         training_backend = str(artifact.training_summary.get("training_backend") or "unknown")
         active_training_backend_counts[training_backend] += 1
         active_training_backend_policy_ids[training_backend].append(record.policy_id)
@@ -39,15 +71,32 @@ def audit_registry_continuity(registry: LocalRegistryStore) -> dict[str, object]
     }
     legacy_compat_policy_ids = sorted(legacy_compat_policy_ids)
     deprecated_momentum_policy_ids = sorted(deprecated_momentum_policy_ids)
+    blocking_reasons = []
+    if not active_records:
+        blocking_reasons.append("no_active_records_in_registry_scope")
+    if artifact_load_failures:
+        blocking_reasons.append("unreadable_active_artifact_paths")
     ready_to_close_numpy_continuity_window = (
-        bool(active_records)
+        not blocking_reasons
+        and bool(active_records)
         and active_training_backend_counts.get("numpy", 0) == 0
         and set(active_training_backend_counts).issubset({"pytorch"})
     )
+    ready_to_retire_legacy_compat_window = (
+        not blocking_reasons and bool(active_records) and len(legacy_compat_policy_ids) == 0
+    )
+    audit_scope_verdict = _audit_scope_verdict(
+        blocking_reasons=blocking_reasons,
+        numpy_dependency_count=active_training_backend_counts.get("numpy", 0),
+        legacy_dependency_count=len(legacy_compat_policy_ids),
+        deprecated_momentum_dependency_count=len(deprecated_momentum_policy_ids),
+    )
 
     return {
+        "registry_root": str(registry.root),
         "record_count": len(records),
         "active_record_count": len(active_records),
+        "readable_active_artifact_count": readable_active_artifact_count,
         "active_status_counts": dict(sorted(active_status_counts.items())),
         "active_training_backend_counts": backend_counts,
         "active_training_backend_policy_ids": backend_policy_ids,
@@ -57,6 +106,41 @@ def audit_registry_continuity(registry: LocalRegistryStore) -> dict[str, object]
         "active_legacy_compat_policy_ids": legacy_compat_policy_ids,
         "active_deprecated_momentum_artifact_count": len(deprecated_momentum_policy_ids),
         "active_deprecated_momentum_policy_ids": deprecated_momentum_policy_ids,
+        "registry_local_fallback_policy_ids": sorted(registry_local_fallback_policy_ids),
+        "artifact_load_failures": artifact_load_failures,
+        "blocking_reasons": blocking_reasons,
+        "audit_scope_verdict": audit_scope_verdict,
         "ready_to_close_numpy_continuity_window": ready_to_close_numpy_continuity_window,
-        "ready_to_retire_legacy_compat_window": len(legacy_compat_policy_ids) == 0,
+        "ready_to_retire_legacy_compat_window": ready_to_retire_legacy_compat_window,
     }
+
+
+def _resolve_artifact_path(
+    record: RegistryRecord,
+    registry: LocalRegistryStore,
+) -> tuple[Path | None, str, list[str]]:
+    recorded_path = Path(record.artifact_path)
+    registry_local_path = registry.artifacts_dir / f"{record.policy_id}.json"
+    resolution_attempts = [str(recorded_path)]
+
+    if recorded_path.exists():
+        return recorded_path, "recorded_path", resolution_attempts
+    if registry_local_path != recorded_path:
+        resolution_attempts.append(str(registry_local_path))
+    if registry_local_path.exists():
+        return registry_local_path, "registry_local_fallback", resolution_attempts
+    return None, "unreadable", resolution_attempts
+
+
+def _audit_scope_verdict(
+    *,
+    blocking_reasons: list[str],
+    numpy_dependency_count: int,
+    legacy_dependency_count: int,
+    deprecated_momentum_dependency_count: int,
+) -> str:
+    if blocking_reasons:
+        return "blocked"
+    if numpy_dependency_count or legacy_dependency_count or deprecated_momentum_dependency_count:
+        return "active_dependency_present"
+    return "clear_in_inspected_scope"
