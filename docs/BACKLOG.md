@@ -47,13 +47,14 @@ Status values:
 - why_open:
   - PyTorch is the active core-training path, but final retirement or freeze of continuity windows depends on authoritative registry truth
   - the authority-aware audit surface exists, but authoritative evidence for the active registry scope is still missing
-  - external retained bundles can contain copied registry JSON with non-local artifact paths, which is not retirement-grade evidence by itself
+  - the default configured `outputs/registry` root is not present on current HEAD, so active authority cannot be proven from repo-tracked state alone
+  - one relocation-safe retained bundle is now `clear_in_inspected_scope`, but that remains external retained evidence until an explicit authority decision is attached
 - next_action:
-  - identify the authoritative registry root(s) or a relocation-safe retained bundle
-  - rerun `quantlab-ml audit-continuity --registry-root ...` with explicit evidence classification when needed
-  - update the repo-tracked closeout records only after the authoritative scope is confirmed
+  - decide whether the inspected relocation-safe retained bundle is the authoritative closeout surface or identify a different active registry root
+  - rerun `quantlab-ml audit-continuity --registry-root ...` with `authoritative-evidence` only after that authority decision exists
+  - update the repo-tracked closeout records only after the authoritative scope is explicit
 - evidence_needed:
-  - authoritative registry root confirmation
+  - explicit authority decision for the inspected relocation-safe retained bundle or authoritative registry root confirmation
   - readable retained artifact paths for every active record in scope
 - done_when:
   - authoritative evidence is confirmed for the active scope
@@ -66,10 +67,10 @@ Status values:
 - title: Close the remaining observation-schema continuity debt
 - why_open:
   - the temporary legacy compat window still exists for deterministic legacy `linear-policy-v1` artifacts
-  - whether it can be retired depends on the same authoritative continuity truth as QL-016
+  - the latest inspected retained scope is `clear_in_inspected_scope`, but whether the window can be retired still depends on the same authoritative continuity truth as QL-016
   - the repo-tracked closeout record should stay `pending_authoritative_evidence` until that truth exists
 - next_action:
-  - keep the closeout record pending until QL-016 confirms authoritative evidence
+  - keep the closeout record pending until QL-016 confirms authoritative evidence for the active scope
   - only then decide whether the window should be retired, frozen, or kept temporary with explicit scope
 - evidence_needed:
   - authoritative continuity audit result
@@ -79,15 +80,16 @@ Status values:
 ### QL-031
 
 - label: `OFFLINE_HARDENING`
-- status: `blocked`
+- status: `in_progress`
 - title: Broaden offline closure evidence beyond the single controlled proof surface
 - why_open:
-  - current HEAD contains real controlled-proof evidence, but that is not the same thing as professional offline closure
-  - broader multi-window and champion/challenger evidence remains incomplete
-  - this remains outside the minimum closure-truth batch because current HEAD only has `comparison_report_id` placeholder linkage, not a narrow comparison-report artifact surface
+  - current HEAD now has a repo-tracked minimum evidence pack that indexes one inspected-scope continuity audit and one same-surface current-head retained-run comparison
+  - current HEAD still contains only narrow same-surface proof; broader multi-window or multi-slice evidence remains incomplete
+  - `comparison_report_id`, paper/sim linkage, and champion-backed comparison surfaces remain missing on the retained proof surfaces currently available
 - evidence_needed:
   - multi-window or multi-slice offline evaluation packs
   - current-head champion/challenger comparison surfaces
+  - comparison-report and paper/sim linkage for any surface that is used to argue promotion readiness
 - done_when:
   - offline closure criteria move from `PARTIAL` to `PASS` on evidence areas that are currently unproven
 

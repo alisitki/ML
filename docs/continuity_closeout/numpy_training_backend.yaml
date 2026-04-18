@@ -1,12 +1,13 @@
 window_id: numpy_training_backend
 scope_kind: external_retained_evidence
 authority_status: unconfirmed
-latest_audit_scope_verdict: blocked
+latest_audit_scope_verdict: clear_in_inspected_scope
 blocking_reasons:
   - authoritative_scope_not_confirmed
+  - configured_active_registry_root_missing_from_current_head
 next_required_evidence:
-  - Confirm the authoritative active registry root or provide a relocation-safe retained bundle.
-  - Run the authority-aware continuity audit on that confirmed scope.
+  - Confirm whether the active continuity closeout surface is a non-repo-tracked `outputs/registry` root outside current HEAD or explicitly designate a relocation-safe retained bundle as authoritative.
+  - If the inspected retained bundle becomes authoritative, rerun the authority-aware continuity audit on that scope with `authoritative-evidence`.
   - Revisit the NumPy continuity window only after authoritative evidence is attached.
 last_reviewed: 2026-04-18
 decision_status: pending_authoritative_evidence

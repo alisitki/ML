@@ -44,6 +44,7 @@ Why:
 
 - current HEAD contains a real offline engine with trajectory build, train, evaluate, score, export, and registry flows
 - current HEAD contains authority-aware continuity audit semantics plus repo-tracked closeout records for the remaining continuity windows
+- current HEAD now also carries a repo-tracked minimum offline-closure evidence pack that indexes one inspected-scope continuity audit and one same-surface current-head retained-run comparison
 - current HEAD does not include repo-tracked QL-021 retained bundles under `outputs/`; any such bundle is external retained evidence until its provenance and authority are confirmed
 - offline closure is still incomplete because continuity retirement depends on authoritative evidence, relocation-safe retained artifact handling, and broader evidence packaging discipline
 
@@ -87,9 +88,9 @@ These missing layers are planned later-phase work, not current defects by defaul
 ## Blocked before live-path focus
 
 - authoritative registry root discovery for current active continuity truth
-- closure-grade continuity decision on NumPy and legacy compat windows
-- relocation-safe retained evidence pack discipline for copied remote runs
-- broader multi-window and champion/challenger offline evidence that goes beyond a single controlled proof bundle
+- closure-grade continuity decision on NumPy and legacy compat windows remains pending even though one relocation-safe retained bundle is now clear in inspected scope
+- the default configured `outputs/registry` root is not present on current HEAD, so authority cannot be proven from repo-tracked state alone
+- broader multi-window and champion/challenger offline evidence remains partial; the current minimum evidence pack is still narrow and same-surface only
 
 Until those are explicit, Phase 2 is still planned next work but not the main execution focus.
 
@@ -111,7 +112,10 @@ The following remain visible but are not the current main focus:
 
 ## Current interpretation notes
 
+- The default configured registry root lives under ignored `outputs/registry` and is not repo-tracked on current HEAD.
 - Current HEAD does not include repo-tracked QL-021 bundles under `outputs/`. If external retained QL-021 bundles exist, they are external retained evidence rather than current-head repo-tracked proof until provenance and authority are attached explicitly.
+- A relocation-safe external retained bundle may prove `clear_in_inspected_scope` via registry-local fallback, but that still does not make it authoritative evidence.
 - The repo-tracked continuity closeout records are pre-decision records. They do not, by themselves, prove authoritative continuity closure or live readiness.
+- The repo-tracked minimum offline-closure evidence pack remains evidence of progress, not evidence that multi-window closure or champion/challenger proof is complete.
 - Runtime and executor contracts exist as governance and artifact surfaces. They are not the same thing as a live selector daemon plus executor loop.
 - Commercialization gates are defined, but no gate above the offline side is currently operationally evidenced in this repository.

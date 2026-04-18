@@ -32,6 +32,9 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     continuity_runbook = (repo_root / "docs" / "CONTINUITY_AUDIT_RUNBOOK.md").read_text(encoding="utf-8")
     closeout_records = (repo_root / "docs" / "CONTINUITY_CLOSEOUT_RECORDS.md").read_text(encoding="utf-8")
     remote_gpu_runbook = (repo_root / "docs" / "REMOTE_GPU_RUNBOOK.md").read_text(encoding="utf-8")
+    minimum_evidence_pack = (
+        repo_root / "docs" / "history" / "2026Q2" / "OFFLINE_CLOSURE_MINIMUM_EVIDENCE_PACK.md"
+    ).read_text(encoding="utf-8")
     market_data_contract = (repo_root / "docs" / "CANONICAL_MARKET_DATA_CONTRACT.md").read_text(
         encoding="utf-8"
     )
@@ -65,6 +68,8 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "## Current focus" in project_state
     assert "## Blocked before live-path focus" in project_state
     assert "## Not started / not main focus yet" in project_state
+    assert "minimum offline-closure evidence pack" in project_state.lower()
+    assert "outputs/registry" in project_state
 
     assert "## Target runtime architecture" in runtime_model
     assert "## Current implemented runtime-related surface" in runtime_model
@@ -112,6 +117,11 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
 
     assert "retained evidence" in remote_gpu_runbook.lower()
     assert "audit-continuity" in remote_gpu_runbook
+
+    assert "Sprint closeout sentence" in minimum_evidence_pack
+    assert "clear_in_inspected_scope" in minimum_evidence_pack
+    assert "comparison_report_id" in minimum_evidence_pack
+    assert "multi-window or multi-slice" in minimum_evidence_pack
 
     assert "fields` as the primary field carrier" in market_data_contract
     assert "compacted/_state.json" in market_data_contract

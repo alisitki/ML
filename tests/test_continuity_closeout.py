@@ -56,5 +56,9 @@ def test_repo_tracked_closeout_records_remain_pending_until_authoritative_eviden
 
         assert record.decision_status == "pending_authoritative_evidence"
         assert record.decision is None
-        assert record.blocking_reasons == ["authoritative_scope_not_confirmed"]
+        assert record.latest_audit_scope_verdict == "clear_in_inspected_scope"
+        assert record.scope_kind == "external_retained_evidence"
+        assert record.authority_status == "unconfirmed"
+        assert "authoritative_scope_not_confirmed" in record.blocking_reasons
+        assert "configured_active_registry_root_missing_from_current_head" in record.blocking_reasons
         assert record.next_required_evidence
