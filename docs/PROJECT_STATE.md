@@ -19,8 +19,8 @@ This file must stay short and current.
 
 - current_phase: `Phase 5 — QL-022 truth reconciliation landed, QL-023 registry accounting hardening completed under scoped verification, and QL-021 acceptance is now closed. D-018 and the runbook now treat average GPU utilization as diagnostic telemetry rather than a hard acceptance gate for controlled proof runs.`
 - current_focus: `Resume QL-016 continuity closeout now that QL-021 operational and acceptance axes are done; keep promotion out of scope and preserve the clean remote proof bundle as the retained operational evidence.`
-- current_blocker: `QL-016 still needs external \`audit-continuity\` evidence against active registries before the NumPy reference path and legacy continuity windows can move from tracking to freeze/retire action.`
-- declared_next_task: `QL-016 — run \`quantlab-ml audit-continuity --registry-root ...\` against the active registries, then decide whether NumPy / legacy continuity paths can freeze or retire without breaking active inventory.`
+- current_blocker: `QL-016 still needs authoritative external \`audit-continuity\` evidence against the active registries. The only local registry copy in this workspace is the reduced QL-021 proof bundle, and its registry records still point at remote \`/root/runs/...\` artifact paths, so the retained copy is not directly auditable as a closure source.`
+- declared_next_task: `QL-016 — obtain access to the authoritative active registry root(s) or a relocation-safe audit bundle, run \`quantlab-ml audit-continuity --registry-root ...\`, then decide whether NumPy / legacy continuity paths can freeze or retire without breaking active inventory.`
 - not_now:
   - `live deployment plumbing`
   - `cloud provisioning automation`
@@ -39,9 +39,9 @@ completed_prerequisite:
   ql_021_acceptance_state: done
   ql_021_promotion_state: not_started
 current_blocker:
-  - external `audit-continuity` evidence is not yet captured against active registries
+  - authoritative active registry root(s) are not available in this workspace, and the reduced local QL-021 proof bundle keeps remote `/root/runs/...` artifact paths so `audit-continuity` cannot consume it directly
 next_action:
-  - run `quantlab-ml audit-continuity --registry-root ...` and decide freeze/retire action for NumPy and legacy continuity surfaces
+  - obtain the authoritative active registry root(s) or a relocation-safe audit bundle, then run `quantlab-ml audit-continuity --registry-root ...` and decide freeze/retire action for NumPy and legacy continuity surfaces
 ```
 
 ## Current state details
@@ -53,6 +53,11 @@ next_action:
 - D-018 and `docs/REMOTE_GPU_RUNBOOK.md` now treat average GPU utilization as diagnostic telemetry only for QL-021-style controlled proof runs. The hard acceptance truth is direct hot-path evidence: `training_device=cuda`, `tensor_cache_used=true`, `jsonl_fallback_used=false`, required chain exit codes `0`, explicit train/evaluate execution evidence, and satisfied timing gates.
 - Exact active-window GPU averages remain recorded (`6.07%` across the full search window, `8.98%` across canonical refit full, `11.58%` across canonical refit epoch-only windows, `0.0%` across final evaluate), but they no longer block QL-021 acceptance closure.
 - Promotion is not started: the retained candidate is still a challenger and `final_untouched_test` total net return is negative (`-0.9497811681221033`).
+
+**QL-016 continuity audit attempt (2026-04-17):**
+- The only registry surface currently present in this workspace is `outputs/ql021-acceptance-proof-20260417-no-trpro7995wx/registry`, which is a reduced retained proof copy rather than a declared authoritative active registry root.
+- Running `quantlab-ml audit-continuity --registry-root outputs/ql021-acceptance-proof-20260417-no-trpro7995wx/registry` fails because the copied registry record still references remote-origin artifact paths under `/root/runs/ql021-acceptance-proof-20260417-no-trpro7995wx/...`.
+- The retained proof copy still provides local evidence that its single active challenger was exported from the PyTorch/CUDA tensor-cache hot path with strict compat tags, but that is not sufficient to close QL-016 without the authoritative active registry audit.
 
 ## Recently completed
 
@@ -130,7 +135,7 @@ next_action:
 
 ## Immediate next actions
 
-1. **QL-016 continuity closeout** — run `quantlab-ml audit-continuity --registry-root ...` against the active registries now that QL-021 acceptance is closed.
+1. **QL-016 continuity closeout** — obtain the authoritative active registry root(s) or a relocation-safe audit bundle, then run `quantlab-ml audit-continuity --registry-root ...`.
 2. Freeze or retire the NumPy reference path and any still-unused legacy continuity surfaces once the external audit confirms zero active dependency.
 3. Preserve the reduced local QL-021 proof bundle and derived acceptance index as retained operational evidence; promotion remains out of scope.
 4. Keep QL-014 later and keep QL-100 / QL-101 parked.

@@ -258,6 +258,7 @@ Status values:
   - PyTorch training metadata now records the effective training device, CUDA availability, and device name so a remote GPU run can prove that it actually executed on CUDA rather than merely importing PyTorch
 - open_items:
   - run `quantlab-ml audit-continuity --registry-root ...` against active registries before treating the NumPy freeze/deprecation path as closed
+  - the reduced local QL-021 proof bundle is not a closure-grade audit source by itself because its copied registry records still reference remote `/root/runs/...` artifact paths; QL-016 needs the authoritative active registry root(s) or a relocation-safe audit bundle
   - freeze or retire the NumPy reference path once the external audit confirms zero active dependency
 - done_when:
   - PyTorch is the only active core-training backend
