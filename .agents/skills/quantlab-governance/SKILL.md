@@ -1,106 +1,166 @@
 ---
 name: quantlab-governance
-description: Use this skill whenever the task touches learning surface design, reward logic, evaluation, split policy, leakage risk, registry, champion/challenger, policy artifacts, runtime inference architecture, selector boundary, or deployment discipline in the QuantLab ML repo.
+description: Use this skill whenever a task can affect market-scope truth, exchange-aware canonicalization, online feature state, offline/online parity, runtime inference safety, evaluation integrity, or live execution behavior in the QuantLab multi-exchange futures ML system.
 ---
 
 # QuantLab Governance Skill
 
-Apply these rules before proposing code or architecture changes.
+Use this skill before proposing changes in any governance-sensitive area.
 
-## 1. Protect system identity
+## Activate this skill when
 
-QuantLab is an ML-first policy discovery engine.
+Activate when the task touches:
 
-Fixed architecture:
-- offline training
-- runtime selector / inference
-- thin executor
+- exchanges, symbols, or stream-family scope,
+- canonical event parsing or normalization,
+- unsupported/missing/stale semantics,
+- online feature/state construction,
+- replay or state rebuild logic,
+- reward or evaluation logic,
+- policy artifacts or registry lineage,
+- runtime inference behavior,
+- live execution handoff, order safety, or kill-switch behavior,
+- recovery, reconnect, or observability on the live path.
 
-Do not collapse these layers.
-Do not move policy intelligence into the executor.
+If the task can change what the model sees, what the model means, or what live trading does, activate this skill.
 
-## 2. Preserve learning-surface truth
+---
 
-Do not allow core contracts to silently reintroduce:
-- exchange averaging
-- symbol averaging
-- stream scalar collapse
-- hidden reductions that destroy lead-lag or cross-exchange structure
+## Required checks
 
-Compatibility reductions may exist only in explicit compatibility modules.
+### 1. Market-scope integrity
 
-## 3. Treat evaluation as a safety system
+Check whether the task preserves the declared market scope:
 
-Always check:
-- split discipline
-- leakage risk
-- overlap risk
-- final untouched test discipline
-- search-budget transparency
-- champion / challenger compatibility
-- artifact completeness
+- 3 venues
+- 10 symbols
+- 5 canonical stream families
+- sparse venue availability
 
-If a change weakens any of these, call it out explicitly.
+Block or flag any task that silently widens or distorts the market scope.
 
-## 4. Reward discipline
+### 2. Canonical surface integrity
 
-The governing objective is always:
+Check whether the task preserves:
 
-net profit
-- risk penalty
-- unnecessary trading penalty
+- exchange identity
+- symbol identity
+- stream-family identity
+- explicit unsupported vs missing vs stale semantics
+- event meaning across offline and online paths
 
-Fees, funding, slippage, and realistic execution assumptions are mandatory.
+Block the task if unsupported inputs can be confused with zeros, nulls, or stale values.
 
-If reward drifts toward prediction-only scoring, call that out as a design failure.
+### 3. Offline/online parity
 
-## 5. Split discipline
-
-Default split:
-- custom walk-forward
-
-If horizons or information sets overlap:
-- purge + embargo required
-
-Random split is forbidden.
-
-## 6. Leakage discipline
-
-Assume leakage risk until disproven.
+Assume parity risk until disproven.
 
 Check:
-- train-only fit for all learned transforms
-- no future-aware masks
-- no target leakage in rewards
-- no future-aware feasibility logic
-- no final test reuse for tuning or champion choice
 
-## 7. Registry / selection discipline
+- identical feature semantics between replay and runtime,
+- same treatment of missing/stale/unsupported inputs,
+- same aggregation or state update rules,
+- same normalization assumptions when relevant,
+- replay equivalence or state rebuild evidence.
 
-Registry is mandatory.
-Champion / challenger is mandatory.
+Any live-path change without parity evidence is a blocker.
 
-Reject designs that:
-- allow unscored champions
-- ignore search budget
-- rely only on one pretty backtest
-- hide the number of tried variants
+### 4. Time-ordering and recovery discipline
 
-## 8. Runtime discipline
+Check:
 
-Runtime uses inference artifacts only.
-No silent live learning.
+- event-time ordering policy,
+- out-of-order handling,
+- deduplication,
+- idempotency,
+- reconnect behavior,
+- recovery or warm-start behavior,
+- stale-state policy.
 
-PyTorch is the training stack.
-ONNX and TensorRT may be used only for runtime inference acceleration.
+If the task changes runtime state without explicit recovery semantics, flag it.
 
-## 9. What to produce in answers
+### 5. Evaluation integrity
 
-When working on governance-sensitive changes, report:
-- constitutional or contract rule affected
-- exact risk
-- code or config location
-- blocker vs non-blocker
-- what test should prove the fix
+Check:
 
-Prefer short, concrete findings over vague approval.
+- leakage discipline,
+- walk-forward integrity,
+- purge/embargo correctness,
+- untouched test protection,
+- search-budget transparency,
+- reward parity between training and evaluation.
+
+Any weakening is a blocker unless the task exists to repair it.
+
+### 6. Runtime and execution safety
+
+Check:
+
+- runtime consumes declared inputs only,
+- executor remains thin,
+- no hidden strategy logic is added downstream,
+- live safety actions are explicit,
+- venue-specific costs and feasibility remain explicit where needed.
+
+If stale or partial inputs can silently produce live actions, treat as blocker or high-risk finding.
+
+### 7. Commercial relevance
+
+State the primary business effect:
+
+- `expected_edge`
+- `parity_integrity`
+- `capital_protection`
+- `latency_freshness_safety`
+- `research_throughput`
+- `continuity_debt_retirement`
+- `docs_hygiene_only`
+
+If a task expands complexity but does not plausibly improve edge, parity, safety, or throughput, downgrade priority.
+
+---
+
+## Blocker conditions
+
+Classify as blocker if the task would:
+
+- weaken parity between offline and runtime,
+- allow unsupported streams to masquerade as real values,
+- allow stale state to drive live action without explicit policy,
+- blur the inference/executor boundary,
+- change evaluation truth without versioned explanation,
+- remove venue identity where economics still depend on venue,
+- create live behavior that cannot be reconstructed from artifacts and logs.
+
+---
+
+## Required answer format
+
+When active, answer in this structure:
+
+1. `task_classification`
+   - layer
+   - business effect
+   - execution mode
+   - risk focus
+
+2. `rules_touched`
+   - relevant documents and contracts
+
+3. `findings`
+   - blocker vs non-blocker
+   - exact failure mode
+   - parity / safety / economic consequence
+
+4. `required_evidence`
+   - tests
+   - replay checks
+   - runtime checks
+   - what is still unproven
+
+5. `recommendation`
+   - proceed / proceed with guardrails / do not proceed yet
+   - smallest safe next step
+
+Be concrete.  
+Do not give generic approval language.

@@ -1,42 +1,60 @@
 # Report Template
 
-Use this structure for meaningful Codex completion reports.
+## 1. Summary of change
 
-## 1. What changed
+Describe what changed.
 
-Describe the actual changes made.
+## 2. Why it changed
 
-## 2. Why
+Explain the primary business or safety effect:
+- expected edge
+- parity integrity
+- capital protection
+- latency/freshness safety
+- research throughput
+- docs hygiene only
 
-Explain why the change was needed.
+## 3. Rule or contract served
 
-## 3. Rule served
-
-State which constitutional or contract rule the change serves.
+State the governing docs served by the change.
 
 ## 4. Files changed
 
-List the files changed.
+List files changed.
 
-## 5. Tests run
+## 5. Tests and verification
 
 List:
-- test commands run
-- relevant results
+- commands run
+- important results
 - what was not tested
+- whether evidence is smoke, continuity, real-training, or runtime-live-path
 
 ## 6. Remaining risks
 
-Call out:
+State:
 - blockers
 - non-blockers
 - unverified assumptions
-- possible follow-up risks
+- follow-up risks
 
-## 7. Next recommended task
+## 7. Docs and state updates
+
+State whether the following were updated:
+- `PROJECT_STATE.md`
+- `BACKLOG.md`
+- `DECISIONS.md`
+- canonical docs
+- runbooks
+
+## 8. Commercial / live-trading interpretation
+
+State plainly:
+- whether this improves edge discovery,
+- whether this improves offline/online parity,
+- whether this reduces live-trading risk,
+- whether promotion or live readiness changed.
+
+## 9. Next recommended task
 
 Propose the next task and why it should come next.
-
-## 8. State update reminder
-
-Say whether `PROJECT_STATE.md` and `BACKLOG.md` were updated.

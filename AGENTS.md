@@ -1,233 +1,277 @@
 # AGENTS.md
 
-## Repository purpose
+## Mission
 
-This repository is the QuantLab ML policy-discovery repository.
+QuantLab is a multi-exchange futures ML trading system.
 
-Its purpose is to:
-- build learning surfaces from raw multi-exchange collector streams,
-- define reward and evaluation surfaces,
-- train offline policy-learning systems,
-- evaluate policies on time-ordered out-of-sample surfaces,
-- produce and store policy artifacts,
-- support a separate runtime selector / inference layer.
+It ingests high-volume websocket market data, builds canonical exchange-aware state, trains and evaluates policies offline, runs ML inference at runtime, and hands controlled trade intent to a live executor.
 
-This repository is **not** the live executor.
+The commercial objective is simple:
 
-The live system is intentionally split into:
-1. offline training
-2. runtime selector / inference
-3. thin executor
+> produce live-deployable, post-cost-positive trading decisions from multi-exchange futures data without breaking parity, traceability, or risk controls.
 
-The executor must remain thin and only handle:
-- feasibility checks,
-- capital allocation,
-- order execution.
+This repository is not only a research scaffold.  
+It is the system that must make research, runtime, and execution cohere.
 
-## Canonical sources
+---
 
-This file is the operational entrypoint, not the only source of truth.
+## Market scope
 
-Canonical documents:
-- `docs/QUANTLAB_CONSTITUTION.md`
-- `docs/PROMOTION_GATE.md`
-- `docs/CANONICAL_MARKET_DATA_CONTRACT.md`
-- `docs/OBSERVATION_SCHEMA.md`
-- `docs/ACTION_SPACE.md`
-- `docs/REWARD_SPEC.md`
-- `docs/REWARD_SPEC_V1.md`
-- `docs/POLICY_ARTIFACT_SCHEMA.md`
-- `docs/RUNTIME_BOUNDARY.md`
-- `docs/EXECUTION_INTENT_SCHEMA.md`
-- `docs/SPLIT_POLICY.md`
-- `docs/SPLIT_POLICY_V1.md`
-- `docs/REGISTRY_SCHEMA.md`
-- `docs/ROADMAP.md`
-- `docs/PROJECT_STATE.md`
-- `docs/BACKLOG.md`
-- `docs/DECISIONS.md`
-- `docs/EVALUATION_RUNBOOK.md`
-- `docs/TASK_TEMPLATE.md`
-- `docs/REPORT_TEMPLATE.md`
+The default market scope is defined in `docs/MARKET_SCOPE.md`.
 
-If this file conflicts with those documents, those documents win.
+Current scope:
 
-## Interpretation precedence
+- exchanges: Binance, Bybit, OKX
+- instrument type: futures / perpetual-style derivatives
+- symbols:
+  - BTCUSDT
+  - ETHUSDT
+  - BNBUSDT
+  - SOLUSDT
+  - XRPUSDT
+  - LINKUSDT
+  - ADAUSDT
+  - AVAXUSDT
+  - LTCUSDT
+  - MATICUSDT
+- canonical stream families:
+  - trade
+  - bbo
+  - mark_price
+  - funding
+  - open_interest
 
-When repo text leaves room for interpretation, use this precedence order:
+Availability is sparse by venue.  
+Sparse availability is part of the contract, not an implementation accident.
 
-1. Constitution
-2. Canonical contracts
-3. Decisions
-4. Project state / backlog
-5. Temporary compatibility / implementation convenience
+Do not widen the universe by default.
 
-Interpretation guardrails:
-- Allowed does not mean default.
-- Temporary does not mean strategic direction.
-- Optional experiment paths must not be expanded as if they were the core architecture.
-- Compatibility paths are tolerated only to preserve continuity, not to attract new development.
-- When a temporary path conflicts with the core direction, the core direction wins.
+---
 
-## Project-state reading order
+## Fixed system boundary
 
-Before proposing or changing code, read in this order:
+The system boundary is:
 
-1. `docs/PROJECT_STATE.md`
-2. `docs/ROADMAP.md`
-3. `docs/BACKLOG.md`
-4. `docs/DECISIONS.md`
-5. relevant canonical contract docs
+1. websocket ingestion
+2. canonical event normalization
+3. online feature/state construction
+4. offline training and evaluation
+5. runtime inference
+6. risk-gated execution intent
+7. thin live executor
 
-If `docs/PROJECT_STATE.md` declares an active next task, do not invent a different priority unless you explicitly justify the deviation.
+The executor remains thin.
 
-Before implementing any meaningful task, explicitly classify the path as one of:
-- core direction
-- optional experiment
-- temporary compatibility maintenance
-- forbidden-as-default area
+Allowed executor responsibilities:
 
-After any meaningful task:
-- update `docs/PROJECT_STATE.md`
-- update `docs/BACKLOG.md` if task state changed
-- update `docs/DECISIONS.md` if a real architectural decision was made
-- update canonical docs if semantics changed
+- feasibility checks
+- venue/risk constraints
+- order submission and lifecycle handling
+- kill-switch and safety enforcement
 
-## Fixed system identity
+Forbidden executor responsibilities:
 
-QuantLab is an ML-first policy discovery engine.
+- hidden strategy selection
+- hidden alpha logic
+- hidden portfolio intelligence that bypasses upstream policy logic
 
-The model learns from raw collector streams and may produce many single-asset policies.
-Cross-symbol context is allowed and encouraged, but action ownership always belongs to one target-asset policy.
+---
 
-Policies may include:
-- entry
-- exit
-- hold horizon
-- size
-- leverage / margin
-- venue choice
-- no-trade behavior
+## Primary engineering objective
 
-Human-readable rules are not required.
+When choosing between valid options, prefer the one that most directly improves one or more of:
 
-## Non-negotiable rules
+1. post-cost live trading quality,
+2. offline/online parity,
+3. capital protection,
+4. feature freshness and runtime safety,
+5. research throughput on meaningful data volume,
+6. retirement of temporary continuity debt.
 
-- Never use random split.
-- Default split policy is custom walk-forward.
-- If label horizons or information sets overlap, purge + embargo is mandatory.
-- Leakage tolerance is zero.
-- Any learned transform must fit on train only.
-- Final untouched test set must never be reused for tuning, model selection, or champion decisions.
-- Search budget transparency is mandatory.
-- A single attractive backtest is never enough for promotion.
-- Champion / challenger regime is mandatory.
-- Registry is mandatory.
-- Runtime uses inference artifacts only.
-- Live learning is forbidden in the initial operating model.
+Do not optimize the system around laptop convenience or weak compatibility expectations if that harms the live trading objective.
 
-## Learning-surface rules
+---
 
-Do not destroy the edge through simplification.
+## Required read order
 
-The core learning surface must preserve:
-- time
-- symbol
-- exchange
-- stream
-- field-level raw information
-- contract-availability vs missing vs stale vs padding semantics
+Before any non-trivial change, read in this order:
 
-Do not reintroduce in core contracts:
-- exchange averaging
-- symbol averaging
-- stream single-scalar collapse
-- hidden reductions that destroy cross-exchange or cross-symbol structure
+1. `docs/PRODUCT_THESIS.md`
+2. `docs/MARKET_SCOPE.md`
+3. `docs/ONLINE_RUNTIME_MODEL.md`
+4. `docs/COMMERCIALIZATION_GATES.md`
+5. `docs/QUANTLAB_CONSTITUTION.md`
+6. `docs/PROJECT_STATE.md`
+7. `docs/ROADMAP.md`
+8. `docs/BACKLOG.md`
+9. relevant canonical contracts
+10. relevant runbooks
 
-Compatibility reductions may exist only in explicit compatibility modules.
+If active state and requested work conflict, justify the deviation explicitly.
 
-## Reward rules
+---
 
-The governing objective is:
+## Required task classification
 
-net profit
-- risk penalty
-- unnecessary trading penalty
+For every meaningful task, classify all four fields.
 
-Fees, funding, slippage, and realistic execution assumptions are mandatory.
+### 1. Layer
 
-Do not drift toward prediction-only scoring.
+Choose one primary layer:
 
-## Runtime / deployment rules
+- `data_plane`
+- `canonicalization`
+- `online_feature_state`
+- `offline_training`
+- `evaluation`
+- `runtime_inference`
+- `executor_risk`
+- `observability_recovery`
+- `docs_governance`
 
-- PyTorch is the default training stack.
-- Meaningful training defaults to GPU execution when available.
-- Remote rented GPU compute is the preferred execution target for real training when available.
-- Local CPU / laptop runs are for smoke, debugging, tiny baseline continuity, or short validation only.
-- ONNX and TensorRT are allowed only for runtime inference acceleration.
-- Runtime inference acceleration choices do not define the training execution target.
-- Do not move training logic into runtime.
-- Do not move hidden strategy logic into executor.
-- Training artifact and deployment artifact are separate.
+### 2. Business effect
+
+Choose one primary effect:
+
+- `expected_edge`
+- `parity_integrity`
+- `capital_protection`
+- `latency_freshness_safety`
+- `research_throughput`
+- `continuity_debt_retirement`
+- `docs_hygiene_only`
+
+### 3. Execution mode
+
+Choose one:
+
+- `smoke_debug`
+- `continuity_baseline`
+- `shadow_paper`
+- `real_training`
+- `live_path_change`
+
+### 4. Risk focus
+
+Choose all relevant:
+
+- `unsupported_stream_misuse`
+- `missing_vs_stale_confusion`
+- `replay_mismatch`
+- `leakage`
+- `reward_drift`
+- `runtime_feature_drift`
+- `venue_semantic_drift`
+- `execution_drift`
+- `recovery_corruption`
+
+---
+
+## Non-negotiable system rules
+
+### Canonical surface rules
+
+- Canonical stream families remain explicit.
+- Sparse venue availability is explicit.
+- Unsupported is not zero.
+- Missing is not unsupported.
+- Stale is not missing.
+- Padding is not a real observation.
+- Venue identity must remain recoverable unless a higher-order document explicitly allows a reduction.
+
+### Offline/online parity rules
+
+- Feature semantics must match between offline replay and runtime state construction.
+- The same canonical interpretation rules must apply in both paths.
+- Runtime shortcuts that change feature meaning are forbidden.
+- Any intentional divergence must be versioned, documented, and tested.
+
+### Time and ordering rules
+
+- Event-time and processing-time must not be silently conflated.
+- Out-of-order handling rules must be explicit.
+- Reconnect and recovery behavior must be explicit.
+- Deduplication and idempotency rules must be explicit.
+- State rebuild or replay equivalence must be testable.
+
+### Evaluation rules
+
+- Random split is forbidden.
+- Walk-forward remains the default.
+- Purge/embargo remain mandatory when overlap exists.
+- Final untouched test is not a tuning surface.
+- A single attractive slice is never enough.
+- Search-budget transparency is mandatory.
+
+### Runtime and live-trading rules
+
+- Runtime consumes declared inference artifacts and declared online state only.
+- Executor must not invent strategy logic.
+- Venue-specific costs, funding, and feasibility must remain explicit when relevant.
+- Safety behavior on stale or partial state must be explicit.
+- No hidden fallback that silently changes decision meaning.
+
+### Commercial rules
+
+- “Code runs” is not “ready for money.”
+- “Backtest improved” is not “ready for money.”
+- “Shadow looked fine” is not “ready to scale.”
+- Changes on the live path must improve either edge, parity, safety, or capital protection.
+
+---
+
+## Forbidden moves
+
+Forbidden unless a higher-order canonical document changes the rule:
+
+- encoding unsupported venue streams as zeros,
+- silently merging venue semantics,
+- changing runtime feature math without parity tests,
+- replaying data with different semantics than runtime,
+- moving alpha logic into the executor,
+- weakening split discipline to speed up experiments,
+- claiming live readiness from smoke or continuity evidence,
+- widening the universe without a commercial reason,
+- optimizing the primary path around local-laptop constraints,
+- silently degrading on stale state without explicit policy.
+
+---
 
 ## Required behavior from Codex
 
-When making changes:
-- preserve constitutional rules,
-- preserve contract semantics,
-- call out leakage risk explicitly,
-- call out backtest-overfitting risk explicitly,
-- when proposing or planning real training runs on meaningful data volume, default to remote GPU execution rather than local laptop execution unless the task is explicitly smoke/debug-sized,
-- update tests for every behavior change,
-- update docs when semantics change,
-- do not declare success based only on fixture smoke tests,
-- do not silently widen scope,
-- do not ignore the declared active next task without justification.
+For every non-trivial task, Codex must:
 
-## Commands
+1. classify the task,
+2. identify the exact layer touched,
+3. name the governing documents,
+4. state whether offline/online parity is affected,
+5. state whether live-path safety is affected,
+6. state whether venue-specific semantics are affected,
+7. choose the smallest safe implementation path,
+8. add or update tests for every changed behavior,
+9. update docs when semantics change,
+10. update state docs when active status changes.
 
-Use these commands by default unless the task explicitly says otherwise.
+If the change touches runtime or execution behavior, Codex must also state:
 
-### Full test suite
+- what happens on stale state,
+- what happens on unsupported inputs,
+- what happens on reconnect/recovery,
+- what evidence proves parity is still intact.
 
-```bash
-pytest
-```
+---
 
-### Targeted tests
+## Definition of done
 
-```bash
-pytest -q tests/
-```
+A meaningful task is done only when all are true:
 
-### Lint
+- the layer and business effect are explicit,
+- parity impact is explicit,
+- live-path safety impact is explicit,
+- relevant tests exist,
+- remaining risks are named,
+- docs are updated if semantics changed,
+- state docs are updated if project status changed,
+- next recommended task is clear.
 
-```bash
-ruff check .
-```
-
-### Type check
-
-```bash
-mypy src
-```
-
-### Notes on commands
-
-- Do not assume fixture-only success means production readiness.
-- Do not assume a single backtest means economic validity.
-- Do not assume a passing smoke test means reward or split correctness.
-- Do not assume compatibility adapters define the core architecture.
-- Do not assume an allowed path is a default path.
-- Do not assume a temporary continuity path defines long-term direction.
-
-## Required output for meaningful changes
-
-For any non-trivial task, report:
-- what changed
-- why it changed
-- which constitutional or contract rule it serves
-- what tests were added or updated
-- what remains unverified
-- which risks still remain
-- what the next recommended task is
+If any of these is missing, the task is incomplete.
