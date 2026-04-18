@@ -1,7 +1,7 @@
 ---
 status: canonical
 owner: quantlab
-last_reviewed: 2026-04-17
+last_reviewed: 2026-04-18
 read_when:
   - before_runtime_or_data-plane_changes
 supersedes: []
@@ -12,15 +12,15 @@ superseded_by: []
 
 ## Purpose
 
-This document defines the live-path operating model from websocket events to runtime inference and controlled execution.
+This document defines QuantLab's target live-path architecture and the conditions required for offline/online parity.
 
-Its core purpose is to preserve offline/online parity while supporting bounded-latency live trading.
+It also states, explicitly, which runtime-related surfaces exist today and which do not.
 
 ---
 
-## Live-path stages
+## Target runtime architecture
 
-The live path is:
+The target live path is:
 
 1. websocket ingestion
 2. venue-specific parsing
@@ -32,58 +32,88 @@ The live path is:
 8. thin executor order handling
 9. observability and recovery
 
-Each stage must have explicit semantics.
+Each stage must have explicit semantics before QuantLab can claim live-operating capability.
 
 ---
 
-## Offline/online parity rule
+## Current implemented runtime-related surface
 
-The live path and offline replay must agree on:
+Today the repository materially provides runtime-adjacent groundwork, not a full live runtime:
 
-- canonical event meaning,
-- supported vs unsupported treatment,
-- missing and stale handling,
-- state update rules,
-- feature computation rules,
-- normalization semantics where applicable,
-- action-space interpretation where applicable.
+- policy artifacts can be exported into inference artifacts
+- runtime and executor boundaries are documented
+- execution intent has an explicit schema
+- runtime compatibility checks reject incompatible artifacts and observation layouts
+- offline evaluation, scoring, export, registry, and continuity-audit flows exist
 
-If they differ, the live system is not commercially trustworthy.
+This is necessary groundwork for the live path, but it is not the same thing as a long-running runtime service that consumes live websocket state and drives an executor.
 
 ---
 
-## Online state requirements
+## Missing components before QuantLab has a live-operating runtime
 
-The online state layer must define:
+The repository does not yet materially implement all of:
 
-- event ordering policy,
-- out-of-order handling,
-- deduplication policy,
-- idempotency policy,
-- freshness policy,
-- stale-state policy,
-- reconnect behavior,
-- warm-start or cold-start behavior,
-- replay equivalence expectations.
+- production websocket ingestion across the active venue scope
+- long-running venue parser and canonical event normalizer services
+- an online state / feature service with explicit freshness management
+- replay-vs-live parity tooling over live-style inputs
+- a selector runtime daemon consuming declared online state
+- executor integration on a shadow/paper or live control loop
+- runtime observability and recovery evidence for the full live path
 
-No runtime feature layer is acceptable if these are implicit only.
+Until those exist, the runtime architecture remains a target design plus partial groundwork.
 
 ---
 
-## Safety rule for degraded inputs
+## Target parity requirements
 
-When inputs are stale, partial, or unavailable, the system must follow an explicit policy.
+When the live path is implemented, offline replay and runtime must agree on:
+
+- canonical event meaning
+- supported vs unsupported treatment
+- missing and stale handling
+- state update rules
+- feature computation rules
+- normalization semantics where applicable
+- action-space interpretation where applicable
+
+QuantLab does not yet have end-to-end live evidence for this. The rule is still mandatory.
+
+---
+
+## Target online state requirements
+
+The future online state layer must define:
+
+- event ordering policy
+- out-of-order handling
+- deduplication policy
+- idempotency policy
+- freshness policy
+- stale-state policy
+- reconnect behavior
+- warm-start or cold-start behavior
+- replay equivalence expectations
+
+These are target implementation requirements, not claims that the current repo already proves them in operation.
+
+---
+
+## Target safety rule for degraded inputs
+
+When inputs are stale, partial, or unavailable, the future live system must follow an explicit policy.
 
 Allowed patterns may include:
 
-- no-trade / hold,
-- restricted-action mode,
-- kill-switch / hard stop,
-- fallback only if feature semantics remain valid and documented.
+- no-trade / hold
+- restricted-action mode
+- kill-switch / hard stop
+- fallback only if feature semantics remain valid and documented
 
 Forbidden pattern:
 
-- silently producing normal-confidence live actions from degraded state without an explicit design and evidence.
+- silently producing normal-confidence live actions from degraded state without an explicit design and evidence
 
 ---
 
@@ -93,60 +123,52 @@ The executor remains thin.
 
 It may perform:
 
-- feasibility checks,
-- venue/risk validation,
-- order submission,
-- lifecycle handling,
-- emergency safety actions.
+- feasibility checks
+- venue/risk validation
+- order submission
+- lifecycle handling
+- emergency safety actions
 
 It may not perform:
 
-- hidden alpha generation,
-- hidden policy ranking,
-- hidden strategy selection that bypasses runtime inference.
+- hidden alpha generation
+- hidden policy ranking
+- hidden strategy selection that bypasses runtime inference
+
+This boundary is fixed even while the live-operating half is still being built.
 
 ---
 
-## Recovery and observability
+## Recovery and observability target
 
-The live path must make it possible to reconstruct:
+The future live path must make it possible to reconstruct:
 
-- what inputs were seen,
-- what canonical state existed,
-- what features were computed,
-- what inference was produced,
-- what safety checks were applied,
-- what order action was taken.
+- what inputs were seen
+- what canonical state existed
+- what features were computed
+- what inference was produced
+- what safety checks were applied
+- what order action was taken
 
 A live action that cannot be reconstructed is a control failure.
 
----
-
-## Performance rule
-
-The system must optimize for bounded live latency and predictable freshness, not just raw throughput.
-
-Do not introduce heavy live-path computation unless it is justified by clear edge or safety benefits.
-
-Latency and freshness budgets must be explicit, measured, and versioned once benchmarks are available.
+The current repo defines this requirement but does not yet provide full live-path evidence for it.
 
 ---
 
-## Promotion rule for live-path changes
+## Next implementation steps
 
-A live-path change is not acceptable merely because unit tests pass.
+The next build phase for the runtime half is:
 
-For meaningful live-path changes, evidence should include as appropriate:
-
-- replay parity checks,
-- shadow or paper validation,
-- stale-input behavior checks,
-- recovery or reconnect checks,
-- venue-specific correctness checks,
-- artifact and logging traceability checks.
+1. websocket ingestion for the declared market scope
+2. online state / feature service with explicit unsupported/missing/stale semantics
+3. replay-vs-live parity and recovery tooling
+4. degraded-input and stale-state behavior checks
+5. selector runtime daemon
+6. shadow/paper loop with thin executor integration and reconstructable traces
 
 ---
 
 ## Default decision rule
 
-If a change improves offline metrics but weakens live-path parity, freshness, recovery, or reconstruction, reject or redesign the change.
+If a change improves offline metrics but weakens future live-path parity, freshness, recovery, or reconstruction, reject or redesign the change.

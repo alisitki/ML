@@ -1,53 +1,79 @@
 # QuantLab ML
 
-QuantLab ML is a multi-exchange ML trading system for futures markets.
+QuantLab ML targets an end-to-end multi-exchange futures ML trading system for futures markets. The destination is a system that ingests websocket market data, builds exchange-aware canonical state, trains and evaluates policies offline, runs runtime inference, and hands controlled execution intent to a thin executor on the path toward live capital deployment.
 
-Current intended market scope:
+## Current implemented scope
 
-- venues: Binance, Bybit, OKX
-- symbols: BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, LINKUSDT, ADAUSDT, AVAXUSDT, LTCUSDT, MATICUSDT
-- canonical stream families: trade, bbo, mark_price, funding, open_interest
-- venue-specific asymmetry:
-  - Binance: trade, bbo, mark_price, funding
-  - Bybit: trade, bbo, mark_price, funding, open_interest
-  - OKX: trade, bbo, mark_price, funding, open_interest
+The repository materially implements the foundation-heavy half of that system today:
 
-The system exists to convert high-volume websocket market events into:
+- canonical market-data, observation, reward, split, artifact, and registry contracts for the declared market scope
+- trajectory building and offline training/evaluation flows
+- runtime-facing inference-artifact export and execution-intent contracts
+- governance, runbooks, and evidence discipline around reproducible offline work
 
-1. canonical market state
-2. offline training and evaluation surfaces
-3. runtime ML inference
-4. live execution intent for a thin executor
+This is not just a notebook sandbox, but it is also not yet a full live-operating trading system.
 
-This repository is not a broker/exchange connectivity product by itself.
-It owns the research, artifact, runtime-inference, and execution-intent side of the stack.
-The executor remains thin and is responsible for feasibility checks, capital controls, order submission, and order lifecycle handling.
+## Not yet implemented as current repo reality
 
-## Core boundary
+The repository does not yet materially implement all of:
+
+- production websocket ingestion across the active venue scope
+- a long-running online state / feature service
+- replay-vs-live parity proof on live feeds
+- a selector runtime daemon consuming live state
+- thin executor integration and live control loops
+- a shadow/paper operating loop
+- system-generated commercialization evidence across live-facing gates
+
+Those are valid next-phase targets, not current capabilities.
+
+## Why this phase matters
+
+A live ML trading system is only commercially credible if canonical semantics, offline evaluation discipline, artifact lineage, and runtime boundaries are correct before live plumbing is added. QuantLab's current phase matters because it hardens the part of the stack that makes later live behavior interpretable, comparable, and governable.
+
+## Next build phase
+
+The next major build phase is the live-operating half:
+
+- websocket ingestion
+- online state / feature service
+- replay-vs-live parity tooling
+- degraded-input, stale-state, and recovery behavior
+- selector runtime
+- shadow/paper loop
+- thin executor integration and live controls
+
+## Current repository boundary
 
 ```text
-websocket events
-  -> canonicalization
-  -> observation / state surfaces
-  -> offline ML training and evaluation
-  -> policy artifacts and registry
-  -> runtime inference
-  -> execution intent
-  -> thin live executor
+implemented today:
+  canonical contracts -> trajectories -> offline training/evaluation -> artifacts/registry -> exported inference artifacts and execution-intent contracts
+
+planned next:
+  websocket ingestion -> online state -> runtime selector daemon -> thin executor -> shadow/paper evidence -> commercialization gates
 ```
 
-## System rules
+## Operational entry points
 
-- Time-ordered evaluation only.
-- Random split is forbidden.
-- Leakage tolerance is zero.
-- Offline and online feature semantics must stay aligned.
-- Unsupported stream coordinates are not the same as missing or stale values.
-- Runtime uses inference artifacts only.
-- The executor must not become the hidden strategy brain.
-- Live promotion follows: offline evaluation -> paper/sim -> live candidate.
+Data and training configs:
 
-## Read this first
+- `configs/data/default.yaml`
+- `configs/data/fixture.yaml`
+- `configs/data/s3-current.yaml`
+- `configs/data/controlled-remote-day.yaml`
+- `configs/training/production.yaml`
+
+CLI surfaces:
+
+- `quantlab-ml build-trajectories`
+- `quantlab-ml train`
+- `quantlab-ml evaluate`
+- `quantlab-ml score`
+- `quantlab-ml export-policy`
+- `quantlab-ml inspect-s3-compact --env-file .env`
+- `quantlab-ml audit-continuity --registry-root outputs/registry`
+
+## Read first
 
 - `AGENTS.md`
 - `docs/DOCS_INDEX.md`
@@ -59,18 +85,10 @@ websocket events
 
 ## Canonical technical docs
 
-- `docs/QUANTLAB_CONSTITUTION.md`
-- `docs/RUNTIME_BOUNDARY.md`
 - `docs/CANONICAL_MARKET_DATA_CONTRACT.md`
 - `docs/OBSERVATION_SCHEMA.md`
-- `docs/ACTION_SPACE.md`
-- `docs/REWARD_SPEC.md`
-- `docs/REWARD_SPEC_V1.md`
-- `docs/SPLIT_POLICY.md`
-- `docs/SPLIT_POLICY_V1.md`
 - `docs/POLICY_ARTIFACT_SCHEMA.md`
-- `docs/REGISTRY_SCHEMA.md`
 - `docs/EXECUTION_INTENT_SCHEMA.md`
-- `docs/PROMOTION_GATE.md`
-- `docs/EVALUATION_RUNBOOK.md`
+- `docs/QUANTLAB_CONSTITUTION.md`
+- `docs/RUNTIME_BOUNDARY.md`
 - `docs/REMOTE_GPU_RUNBOOK.md`

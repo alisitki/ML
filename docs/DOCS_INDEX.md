@@ -10,37 +10,34 @@ superseded_by: []
 
 # Docs Index
 
-## Classes
+## Start here
 
-### Canonical
-Defines enduring rules and interfaces. If code conflicts with these, code is wrong.
+- Long-term intent: `docs/PRODUCT_THESIS.md`
+- Current phase truth: `docs/PROJECT_STATE.md`
+- Next-phase build plan: `docs/ROADMAP.md` and `docs/BACKLOG.md`
+- Agent operating rules: `AGENTS.md`
+- Repository entry surface: `readme.md`
 
-### Operational
-Defines current state and near-term priority.
-
-### Runbook
-Defines executable procedures.
-
-### Template
-Defines required structure for agent tasks and reports.
-
-### Historical
-Records audits, remediations, and past investigations. Historical docs do not override canonical or operational docs.
+---
 
 ## Reading order
 
-1. `docs/PRODUCT_THESIS.md`
-2. `docs/MARKET_SCOPE.md`
-3. `docs/ONLINE_RUNTIME_MODEL.md`
-4. `docs/COMMERCIALIZATION_GATES.md`
-5. `docs/QUANTLAB_CONSTITUTION.md`
-6. `docs/RUNTIME_BOUNDARY.md`
-7. `docs/PROJECT_STATE.md`
-8. `docs/ROADMAP.md`
-9. `docs/BACKLOG.md`
-10. `docs/DECISIONS.md`
-11. relevant canonical contracts
-12. relevant runbooks
+1. `readme.md`
+2. `AGENTS.md`
+3. `docs/PRODUCT_THESIS.md`
+4. `docs/MARKET_SCOPE.md`
+5. `docs/ONLINE_RUNTIME_MODEL.md`
+6. `docs/COMMERCIALIZATION_GATES.md`
+7. `docs/QUANTLAB_CONSTITUTION.md`
+8. `docs/RUNTIME_BOUNDARY.md`
+9. `docs/PROJECT_STATE.md`
+10. `docs/ROADMAP.md`
+11. `docs/BACKLOG.md`
+12. `docs/DECISIONS.md`
+13. relevant canonical contracts
+14. relevant runbooks
+
+---
 
 ## Canonical docs
 
@@ -62,33 +59,35 @@ Records audits, remediations, and past investigations. Historical docs do not ov
 - `docs/EXECUTION_INTENT_SCHEMA.md`
 - `docs/PROMOTION_GATE.md`
 
+---
+
+## Operational docs
+
+- `docs/PROJECT_STATE.md` for the current phase and active focus
+- `docs/ROADMAP.md` for phase order and next build phase
+- `docs/BACKLOG.md` for open work grouped by current phase, next phase, and later commercialization
+- `docs/DECISIONS.md` for accepted architecture decisions and their rationale
+
+---
+
 ## Runbooks
 
 - `docs/EVALUATION_RUNBOOK.md`
 - `docs/REMOTE_GPU_RUNBOOK.md`
 
-## Operational docs
+---
 
-- `docs/PROJECT_STATE.md`
-- `docs/ROADMAP.md`
-- `docs/BACKLOG.md`
-- `docs/DECISIONS.md`
+## Historical material
 
-## Templates
+Historical docs do not override canonical or operational docs.
 
-- `docs/TASK_TEMPLATE.md`
-- `docs/REPORT_TEMPLATE.md`
-
-## Historical docs
-
-Move audits and remediation notes under:
+Primary location:
 
 ```text
 docs/history/2026Q2/
 ```
 
-Recommended historical files:
+Examples:
 
-- `PROD_HIDDEN_BLOCKER_AUDIT.md`
-- `REMEDIATION_BATCH_1.md`
-- `REMEDIATION_BATCH_2.md`
+- `docs/history/2026Q2/REMEDIATION_BATCH_1.md`
+- `docs/history/2026Q2/REMEDIATION_BATCH_2.md`

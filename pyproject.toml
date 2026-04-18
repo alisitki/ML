@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "quantlab-ml"
 version = "0.1.0"
-description = "Offline policy-discovery scaffold for QuantLab market data."
+description = "Phase-aware multi-exchange futures ML trading system foundation with strong offline and artifact discipline."
 readme = "readme.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [

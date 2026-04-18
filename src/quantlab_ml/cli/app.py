@@ -26,7 +26,9 @@ from quantlab_ml.scoring import PolicyScorer
 from quantlab_ml.training import LinearPolicyTrainer, TrainingConfig, TrainingSearchResult
 from quantlab_ml.trajectories import TrajectoryBuilder, TrajectoryDirectoryStore, TrajectoryStore
 
-app = typer.Typer(help="QuantLab ML scaffold CLI.")
+app = typer.Typer(
+    help="QuantLab ML CLI for canonical data, offline training/evaluation, and runtime artifact workflows."
+)
 
 
 @app.callback()

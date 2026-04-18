@@ -1,7 +1,7 @@
 ---
 status: canonical
 owner: quantlab
-last_reviewed: 2026-04-17
+last_reviewed: 2026-04-18
 read_when:
   - before_non_trivial_code_changes
   - before_reprioritization
@@ -11,67 +11,63 @@ superseded_by: []
 
 # Product Thesis
 
-## Purpose
+## Business destination
 
-QuantLab exists to turn high-volume multi-exchange futures market data into live-deployable ML trading decisions.
+QuantLab's destination is an end-to-end multi-exchange futures ML trading system that turns high-volume websocket market data into post-cost-positive, controllable, and traceable live trading decisions.
 
-The business objective is not to maximize experiment count.  
-The business objective is to produce post-cost-positive, controllable, and traceable live trading behavior.
+The target system:
 
----
+1. ingests websocket market data
+2. normalizes exchange-aware canonical events and state
+3. trains and evaluates policies offline
+4. runs runtime inference
+5. hands controlled intent to a thin executor
+6. advances through commercialization gates toward live capital deployment
 
-## What QuantLab is
-
-QuantLab is:
-
-- a multi-exchange futures market-data system,
-- an offline training and evaluation system,
-- an online inference and decision system,
-- a controlled live-execution handoff system.
-
-It is a full research-to-live pipeline, not just a notebook or model zoo.
-
----
-
-## What QuantLab is not
-
-QuantLab is not:
-
-- a generic backtester,
-- a retail signal service,
-- a purely offline research sandbox,
-- a live executor with hidden strategy logic,
-- a compatibility museum for every past path.
-
----
-
-## Primary commercial model
-
-The primary commercial model is:
+The primary commercial model remains:
 
 > internal proprietary live trading driven by exchange-aware ML policies
 
-This means the highest priorities are:
+---
 
-- economically meaningful edge,
-- offline/online parity,
-- runtime safety,
-- capital protection,
-- scalable research throughput.
+## Current repo scope
+
+The repository materially implements the foundation that makes that destination credible:
+
+- canonical market-data, observation, reward, split, artifact, registry, and execution-intent contracts
+- offline trajectory building
+- offline training and evaluation
+- artifact export and registry discipline
+- runtime and executor boundary definitions
+- governance, runbooks, and repo-memory discipline
+
+The repository does not yet materially implement the full live-operating half:
+
+- production websocket ingestion services
+- long-running online state / feature services
+- replay-vs-live parity proof on live feeds
+- a selector runtime daemon
+- thin executor integration
+- a shadow/paper operating loop
+- system-generated commercialization evidence
+
+QuantLab should therefore be described as a phase-aware trading-system foundation with real offline substance, not as a completed live trading stack and not as a throwaway offline scaffold.
 
 ---
 
-## Value creation rule
+## Why the current phase matters commercially
 
-A change creates real value only if it improves at least one of:
+The current phase is commercially valid because later live deployment is only trustworthy if the upstream system is disciplined first.
 
-1. live post-cost decision quality,
-2. parity between offline evidence and runtime behavior,
-3. safety under stale, partial, or recovery conditions,
-4. capital protection and control quality,
-5. research throughput on meaningful data scale.
+Current work matters when it strengthens:
 
-Changes that mainly improve convenience without helping these are lower priority.
+1. canonical semantics and venue-aware truth
+2. leakage-safe offline evaluation
+3. artifact lineage and reproducibility
+4. runtime boundary clarity
+5. future offline/online parity
+
+Missing later-phase capabilities are not defects by default. They become defects when the repo claims them as current implemented reality or when current-phase work blocks the next phase.
 
 ---
 
@@ -79,16 +75,16 @@ Changes that mainly improve convenience without helping these are lower priority
 
 In this system, model quality alone is not enough.
 
-Real edge requires:
+Real commercial trust requires:
 
-- trustworthy canonical data,
-- correct feature semantics,
-- valid evaluation,
-- live-path parity,
-- safe execution,
-- reconstructable operational traces.
+- trustworthy canonical data semantics
+- correct feature meaning
+- valid evaluation
+- explicit runtime boundaries
+- safe execution handoff
+- reconstructable evidence
 
-If any of these fail, commercial trust fails.
+If any of these fail, live deployment confidence is fake.
 
 ---
 
@@ -96,16 +92,16 @@ If any of these fail, commercial trust fails.
 
 Never trade away:
 
-- leakage discipline,
-- venue identity where it matters economically,
-- parity between offline and live meaning,
-- explicit degraded-state handling,
-- thin executor boundary,
-- traceability of live decisions,
-- promotion discipline.
+- leakage discipline
+- venue identity where it matters economically
+- parity between offline and live meaning
+- explicit degraded-state handling
+- thin executor boundary
+- traceability of decisions
+- promotion discipline
 
 ---
 
 ## Decision rule
 
-If a proposed task does not plausibly improve edge, parity, safety, capital protection, or throughput, it is probably not core work now.
+If a proposed task does not plausibly improve edge, parity, safety, capital protection, research throughput, or current-phase clarity, it is probably not core work now.

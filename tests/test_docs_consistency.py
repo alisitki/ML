@@ -21,6 +21,12 @@ LEGACY_REFERENCES = LEGACY_DOCS + tuple(_legacy_name(parts) for parts in LEGACY_
 
 def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     readme = (repo_root / "readme.md").read_text(encoding="utf-8")
+    project_state = (repo_root / "docs" / "PROJECT_STATE.md").read_text(encoding="utf-8")
+    roadmap = (repo_root / "docs" / "ROADMAP.md").read_text(encoding="utf-8")
+    runtime_model = (repo_root / "docs" / "ONLINE_RUNTIME_MODEL.md").read_text(encoding="utf-8")
+    commercialization_gates = (
+        repo_root / "docs" / "COMMERCIALIZATION_GATES.md"
+    ).read_text(encoding="utf-8")
     market_data_contract = (repo_root / "docs" / "CANONICAL_MARKET_DATA_CONTRACT.md").read_text(
         encoding="utf-8"
     )
@@ -39,6 +45,25 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "docs/POLICY_ARTIFACT_SCHEMA.md" in readme
     assert "docs/EXECUTION_INTENT_SCHEMA.md" in readme
     assert "docs/REMOTE_GPU_RUNBOOK.md" in readme
+    assert "## Current implemented scope" in readme
+    assert "## Not yet implemented as current repo reality" in readme
+    assert "## Next build phase" in readme
+    assert "Current repository boundary" in readme
+
+    assert "## Current phase" in project_state
+    assert "## Current implemented strengths" in project_state
+    assert "## Current missing layers" in project_state
+    assert "## Next phase after active focus" in project_state
+
+    assert "## Target runtime architecture" in runtime_model
+    assert "## Current implemented runtime-related surface" in runtime_model
+    assert "## Missing components before QuantLab has a live-operating runtime" in runtime_model
+    assert "## Next implementation steps" in runtime_model
+
+    assert "## Target gates vs. current evidence" in commercialization_gates
+    assert "| Gate | Target meaning | Current status | Missing evidence |" in commercialization_gates
+
+    assert "## Phase 2 - Runtime/live parity foundation" in roadmap
 
     assert "fields` as the primary field carrier" in market_data_contract
     assert "compacted/_state.json" in market_data_contract

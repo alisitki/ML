@@ -77,7 +77,7 @@ Status values:
 ## D-011 — Temporary NumPy trainer does not supersede the PyTorch target
 - status: accepted
 - date: 2026-04-12
-- decision: The active core Phase 5 trainer now uses a PyTorch-backed linear policy trainer while preserving the existing `linear-policy-v1` runtime adapter and `LinearPolicyParameters` payload surface. The NumPy trainer remains only as a narrow reference/continuity backend until external continuity audit confirms that freeze/deprecation is safe.
+- decision: The active core training path now uses a PyTorch-backed linear policy trainer while preserving the existing `linear-policy-v1` runtime adapter and `LinearPolicyParameters` payload surface. The NumPy trainer remains only as a narrow reference/continuity backend until external continuity audit confirms that freeze/deprecation is safe.
 - why: D-010 requires PyTorch as the training stack, but the repo also needed minimal-breakage migration. Keeping fold-aware candidate selection, train-only normalization, canonical refit, validation-only epoch selection, artifact export, and runtime loading unchanged lets the core training path converge onto PyTorch without widening the runtime or executor boundary. Retaining a narrow NumPy reference backend preserves parity evidence and a controlled continuity escape hatch while active registries are audited.
 - guardrails:
   - PyTorch is the only active core-training backend.

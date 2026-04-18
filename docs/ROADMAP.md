@@ -2,120 +2,130 @@
 
 ## Purpose
 
-This document defines the high-level phase order for QuantLab.
+This document defines the major build phases for QuantLab.
 
 It answers:
-- where the project is going
-- which phase comes before which
-- what each phase is trying to prove
 
-This is not the live state file.
-Use `docs/PROJECT_STATE.md` for current status.
+- what the destination is
+- which phase the repo is actually in
+- what comes next
+- what later phases depend on
 
-## Phase 0 — Governance and V1 spec freeze
+Use `docs/PROJECT_STATE.md` for the short current snapshot.
 
-Goal:
-- freeze constitutional rules
-- freeze canonical contracts
-- freeze v1 reward and split rules
-- install repo memory and operating flow
+---
 
-Exit criteria:
-- governance docs committed
-- operational state docs committed
-- AGENTS reading order committed
+## Current position
 
-## Phase 1 — Surface and reward alignment
+QuantLab is finishing Phase 1 hardening.
 
-Goal:
-- align code with canonical observation schema
-- align code with reward_v1
-- align code with split_v1
-- remove semantic drift between docs and implementation
+Phase 2 is the next major build phase.
+Phases 3 through 5 remain target-state plan, not current capability claims.
 
-Exit criteria:
-- observation construction passes schema audit
-- reward implementation matches `reward_v1`
-- split builder matches `split_v1_walkforward`
-- tests cover leakage-sensitive semantics
+---
 
-## Phase 2 — Registry and artifact discipline
+## Phase 1 - Canonical and offline foundation
 
-Goal:
-- enforce policy artifact schema
-- enforce registry schema
-- enforce champion/challenger gates
-- ensure search-budget recording is wired
+Purpose:
 
-Exit criteria:
-- artifacts versioned and linked
-- unscored champion impossible
-- promotion gate inputs persisted
-- registry lineage works
+- freeze market scope and canonical semantics
+- build trajectory, training, and evaluation discipline
+- enforce artifact and registry lineage
+- freeze runtime and executor contracts before live plumbing
 
-## Phase 3 — Runtime selector / executor boundary
+Current status:
 
-Goal:
-- freeze runtime selector boundaries
-- freeze execution intent contract
-- ensure executor remains thin
-- prevent policy intelligence from leaking into executor
+- materially implemented
+- still needs current-phase hardening on continuity-debt closeout and truth-surface clarity
+
+Remaining exit work:
+
+- close QL-016 continuity audit and retire temporary core-training continuity paths when safe
+- close remaining explicit compat windows rather than letting them read like growth areas
+- keep README, project state, roadmap, backlog, and agent guidance phase-honest
+
+---
+
+## Phase 2 - Runtime/live parity foundation
+
+Purpose:
+
+- build websocket ingestion across the declared market scope
+- build online state and feature services
+- prove replay-vs-live parity
+- define degraded-input, stale-state, and recovery behavior
+- stand up a selector runtime that consumes declared live state
 
 Exit criteria:
-- runtime selector consumes inference artifacts
-- executor consumes execution intent only
-- traceability from runtime decision to artifact exists
 
-## Phase 4 — Paper/sim operating loop
+- live ingestion and canonical normalization are materially implemented
+- online state semantics are explicit
+- replay-vs-live parity checks exist
+- stale/recovery behavior is testable
+- selector runtime exists without moving strategy logic into the executor
 
-Goal:
-- make official evaluation and paper/sim path operational
-- make promotion flow reproducible
-- ensure artifact completeness for candidate promotion
+This is the next major build phase.
 
-Exit criteria:
-- evaluation runbook is executable
-- paper/sim evidence can be attached to candidates
-- promotion check can be run consistently
+---
 
-## Phase 5 — Real policy-learning implementation
+## Phase 3 - Shadow/paper loop and executor controls
 
-Goal:
-- replace dummy/baseline logic with real policy-learning systems
-- converge the core training path onto PyTorch
-- make meaningful real training target remote GPU compute when available rather than local laptop continuity assumptions
-- preserve all governance and contract constraints
-- begin genuine policy discovery
+Purpose:
+
+- connect selector runtime to a thin executor
+- prove shadow/paper operation under explicit venue/risk controls
+- ensure decision traces are reconstructable end to end
 
 Exit criteria:
-- real training loop exists
-- meaningful-size training and search runs are explicitly treated as GPU-first when available
-- policies are produced under search-budget discipline
-- OOS evidence path is intact
 
-## Phase 6 — Deployment readiness
+- shadow/paper loop exists
+- executor integration is thin and explicit
+- kill-switch and feasibility controls are wired
+- live-style traces can be reconstructed from input to execution intent
 
-Goal:
-- prepare runtime inference for low-latency or production-like execution
-- optionally add ONNX/TensorRT acceleration
-- preserve selector/executor boundary
+---
 
-Runtime inference acceleration remains separate from Phase 5 training compute decisions.
+## Phase 4 - Commercialization readiness
+
+Purpose:
+
+- turn target gates into operational evidence
+- package replay, runtime, shadow, and control evidence for review
+- make readiness claims machine-checkable rather than narrative only
 
 Exit criteria:
-- deployment artifacts exist
-- runtime selector can consume them
-- executor path remains thin
-- no live learning introduced
+
+- gate evidence is generated systematically
+- shadow/paper evidence is attached to promotion decisions
+- readiness reporting is explicit about what is evidenced vs only defined
+
+---
+
+## Phase 5 - Pilot/live operations maturity
+
+Purpose:
+
+- run cautious pilot exposure under reviewed controls
+- learn from incidents and real frictions
+- decide whether scaling is justified
+
+Exit criteria:
+
+- pilot controls are proven
+- post-cost behavior survives live frictions
+- operational learning is recorded
+- scale-up decisions are evidence-backed
+
+---
 
 ## Ordering rule
 
 Phases are sequential by default.
 
 Do not skip ahead unless:
-- the dependency is explicitly waived,
-- the deviation is written into `docs/PROJECT_STATE.md`,
-- and the reason is justified.
 
-Later phases and allowed future options do not override the current active next task in `docs/PROJECT_STATE.md`.
-A phase label does not mean all carried-over governance gaps are closed; unresolved gaps stay active until state/backlog retire them explicitly.
+- the dependency is explicitly waived
+- the deviation is written into `docs/PROJECT_STATE.md`
+- the reason is justified
+
+Later phases do not override the current active focus in `docs/PROJECT_STATE.md`.
