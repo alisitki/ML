@@ -28,6 +28,7 @@ superseded_by: []
 - execution queue / outstanding work -> `docs/BACKLOG.md`
 - offline closure definition -> `docs/OFFLINE_CLOSURE_CRITERIA.md`
 - continuity audit method -> `docs/CONTINUITY_AUDIT_RUNBOOK.md`
+- continuity authority discovery method -> `docs/CONTINUITY_AUTHORITY_DISCOVERY_RUNBOOK.md`
 - continuity closeout record format -> `docs/CONTINUITY_CLOSEOUT_RECORDS.md`
 - target live-path architecture -> `docs/ONLINE_RUNTIME_MODEL.md`
 - executor / runtime boundary -> `docs/RUNTIME_BOUNDARY.md`
@@ -51,10 +52,11 @@ If two docs seem to disagree, the more specific authority above wins unless a ne
 11. `docs/BACKLOG.md`
 12. `docs/OFFLINE_CLOSURE_CRITERIA.md`
 13. `docs/CONTINUITY_AUDIT_RUNBOOK.md`
-14. `docs/CONTINUITY_CLOSEOUT_RECORDS.md`
-15. `docs/DECISIONS.md`
-16. relevant canonical contracts
-17. relevant runbooks
+14. `docs/CONTINUITY_AUTHORITY_DISCOVERY_RUNBOOK.md`
+15. `docs/CONTINUITY_CLOSEOUT_RECORDS.md`
+16. `docs/DECISIONS.md`
+17. relevant canonical contracts
+18. relevant runbooks
 
 ---
 
@@ -87,6 +89,7 @@ If two docs seem to disagree, the more specific authority above wins unless a ne
 - `docs/BACKLOG.md`
 - `docs/OFFLINE_CLOSURE_CRITERIA.md`
 - `docs/CONTINUITY_AUDIT_RUNBOOK.md`
+- `docs/CONTINUITY_AUTHORITY_DISCOVERY_RUNBOOK.md`
 - `docs/CONTINUITY_CLOSEOUT_RECORDS.md`
 - `docs/DECISIONS.md`
 
@@ -97,6 +100,7 @@ If two docs seem to disagree, the more specific authority above wins unless a ne
 - `docs/EVALUATION_RUNBOOK.md`
 - `docs/REMOTE_GPU_RUNBOOK.md`
 - `docs/CONTINUITY_AUDIT_RUNBOOK.md`
+- `docs/CONTINUITY_AUTHORITY_DISCOVERY_RUNBOOK.md`
 
 ---
 

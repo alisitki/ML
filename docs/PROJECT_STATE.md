@@ -32,7 +32,7 @@ QuantLab aims to become an end-to-end multi-exchange futures ML trading system:
 
 QuantLab is in late Phase 1 hardening.
 
-The repo materially implements the canonical and offline foundation. It does not yet materially implement the live-operating half. Phase 2 remains planned next-phase work, not current implemented reality and not the main focus while offline closure blockers remain open.
+The repo materially implements the canonical and offline foundation. It does not yet materially implement the live-operating half. Phase 2 remains planned next-phase work, not current implemented reality and not the main focus while broader offline-closure evidence remains partial.
 
 ---
 
@@ -43,10 +43,12 @@ QuantLab is `offline operational but not professionally closed`.
 Why:
 
 - current HEAD contains a real offline engine with trajectory build, train, evaluate, score, export, and registry flows
-- current HEAD contains authority-aware continuity audit semantics plus repo-tracked closeout records for the remaining continuity windows
+- current HEAD contains authority-aware continuity audit semantics plus repo-tracked closeout records for the temporary continuity windows
 - current HEAD now also carries a repo-tracked minimum offline-closure evidence pack that indexes one inspected-scope continuity audit and one same-surface current-head retained-run comparison
+- current HEAD now also carries a fresh authoritative controlled rerun at `/workspace/runs/ql016-ql004-authoritative-20260418` with a confirmed external active registry root
+- current HEAD now carries decided continuity closeout records that retire the NumPy and legacy compat windows on that authoritative scope
 - current HEAD does not include repo-tracked QL-021 retained bundles under `outputs/`; any such bundle is external retained evidence until its provenance and authority are confirmed
-- offline closure is still incomplete because continuity retirement depends on authoritative evidence, relocation-safe retained artifact handling, and broader evidence packaging discipline
+- offline closure is still incomplete because broader evidence packaging discipline, multi-window proof, and champion/challenger comparison surfaces remain partial
 
 ---
 
@@ -79,7 +81,10 @@ These missing layers are planned later-phase work, not current defects by defaul
 
 - keep repo-truth docs aligned with current HEAD rather than planned target-state architecture
 - keep `quantlab-ml audit-continuity` authority-aware so inspected-scope truth does not read as authoritative closeout truth
-- keep repo-tracked continuity closeout records explicit and pending until authoritative evidence is attached
+- keep continuity-authority discovery conditional so repo-local retained bundles never read like eligible external authority candidates
+- keep repo-tracked continuity closeout decisions explicit and keep retained bundles classified as non-authoritative control surfaces only
+- treat historical local authority discovery as closed in this workspace; future continuity closure should prefer fresh external controlled reruns or already-present concrete external roots
+- run `QL-031` broader offline evidence expansion as the single active next batch in this workspace
 - define explicit offline-closure criteria and continuity-audit procedure
 - leave evidence-dependent items visible instead of writing optimistic closure language
 
@@ -87,10 +92,9 @@ These missing layers are planned later-phase work, not current defects by defaul
 
 ## Blocked before live-path focus
 
-- authoritative registry root discovery for current active continuity truth
-- closure-grade continuity decision on NumPy and legacy compat windows remains pending even though one relocation-safe retained bundle is now clear in inspected scope
-- the default configured `outputs/registry` root is not present on current HEAD, so authority cannot be proven from repo-tracked state alone
 - broader multi-window and champion/challenger offline evidence remains partial; the current minimum evidence pack is still narrow and same-surface only
+- comparison-report and paper/sim linkage remain incomplete on the retained proof surfaces used for offline-closure arguments
+- commercialization-grade evidence packaging still depends on broader offline proof than the single authoritative continuity rerun
 
 Until those are explicit, Phase 2 is still planned next work but not the main execution focus.
 
@@ -116,7 +120,10 @@ The following remain visible but are not the current main focus:
 - Current HEAD does not include repo-tracked QL-021 bundles under `outputs/`. If external retained QL-021 bundles exist, they are external retained evidence rather than current-head repo-tracked proof until provenance and authority are attached explicitly.
 - A relocation-safe external retained bundle may prove `clear_in_inspected_scope` via registry-local fallback, but that still does not make it authoritative evidence.
 - If an external active registry root cannot be confirmed, retained bundles remain external retained evidence only and must not be promoted to authoritative evidence.
-- The repo-tracked continuity closeout records are pre-decision records. They do not, by themselves, prove authoritative continuity closure or live readiness.
+- Repo-local `outputs/.../registry` candidates may appear in discovery summaries as `retained_bundle_only`, but they are never eligible external authority candidates.
+- Historical authoritative continuity roots are unavailable in this workspace baseline as a source of historical authority; local discovery remains closed as a main task in this workspace.
+- Fresh authoritative evidence has now been produced by a controlled rerun at `/workspace/runs/ql016-ql004-authoritative-20260418`.
+- The repo-tracked continuity closeout records are now decision records for retired windows. They still do not, by themselves, prove live readiness.
 - The repo-tracked minimum offline-closure evidence pack remains evidence of progress, not evidence that multi-window closure or champion/challenger proof is complete.
 - Runtime and executor contracts exist as governance and artifact surfaces. They are not the same thing as a live selector daemon plus executor loop.
 - Commercialization gates are defined, but no gate above the offline side is currently operationally evidenced in this repository.

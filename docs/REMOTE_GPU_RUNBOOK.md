@@ -80,11 +80,10 @@ together with another single full successful day rather than widening scope.
 ## Vast instance guidance
 
 Start with:
-- single GPU
 - verified or secure-cloud offer
 - direct SSH
 - on-demand instance
-- 80-100 GB disk
+- 250 GB disk
 - high reliability score
 
 Preferred GPU class:

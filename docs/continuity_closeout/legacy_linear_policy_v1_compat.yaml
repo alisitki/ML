@@ -1,15 +1,9 @@
 window_id: legacy_linear_policy_v1_compat
-scope_kind: external_retained_evidence
-authority_status: unconfirmed
+scope_kind: authoritative_evidence
+authority_status: confirmed
 latest_audit_scope_verdict: clear_in_inspected_scope
-blocking_reasons:
-  - authoritative_scope_not_confirmed
-  - configured_active_registry_root_missing_from_current_head
-next_required_evidence:
-  - Confirm the external active registry root for the active continuity closeout surface.
-  - Rerun the authority-aware continuity audit with `authoritative-evidence` only on that confirmed external root.
-  - Keep the inspected relocation-safe retained bundle classified as external retained evidence only; it must not be upgraded to authoritative evidence.
-  - Revisit the legacy compat window only after authoritative evidence is attached.
+blocking_reasons: []
+next_required_evidence: []
 last_reviewed: 2026-04-18
-decision_status: pending_authoritative_evidence
-decision: null
+decision_status: decided
+decision: RETIRE

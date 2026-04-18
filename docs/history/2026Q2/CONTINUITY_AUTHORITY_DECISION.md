@@ -24,9 +24,11 @@ remains `external_retained_evidence` only.
 - `docs/continuity_closeout/*.yaml` must remain `pending_authoritative_evidence` until an external active registry root is confirmed.
 - No rerun of `audit-continuity` may use `authoritative-evidence` on the retained bundle alone.
 - The retained bundle may still be cited to narrow blockers, prove relocation-safe readability, and document `clear_in_inspected_scope`.
+- In this workspace, do not continue the historical external-root discovery loop unless a concrete external path is already present.
+- The active next repo batch in this workspace is broader offline evidence expansion, not more local historical-root discovery.
 
 ## What Would Change This
 
-- A real external active registry root is discovered and confirmed as the closeout scope.
-- That external root can be audited with readable active records and artifacts.
+- Fresh authoritative evidence is produced by a future controlled rerun or a concrete already-present external root.
+- That fresh authoritative root can be audited with readable active records and artifacts.
 - Only after that confirmation may `audit-continuity` be rerun as `authoritative-evidence`.

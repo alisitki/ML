@@ -43,4 +43,6 @@ Current repo-tracked continuity records live under:
 docs/continuity_closeout/
 ```
 
-The current records are intentionally pre-decision. They document what is blocked and what evidence is still required; they do not claim that NumPy or legacy compat windows are already closed.
+Current records may be either pre-decision or decided, depending on whether authoritative evidence has been attached.
+
+No record may claim `RETIRE` or `FREEZE` without authoritative evidence.

@@ -18,9 +18,12 @@ This is not a notebook sandbox, but it is also not yet a live-operating trading 
 QuantLab is currently `offline operational but not professionally closed`.
 
 - The offline engine is real on current HEAD: `build-trajectories`, `train`, `evaluate`, `score`, and `export-policy` exist and are test-covered.
-- Current HEAD also carries repo-tracked continuity closeout records and an authority-aware continuity audit surface, but that is not the same thing as authoritative closeout evidence.
+- Current HEAD also carries repo-tracked continuity closeout records and an authority-aware continuity audit surface; authoritative closeout still depends on an external active registry scope rather than repo-local retained bundles.
 - Current HEAD does not include repo-tracked QL-021 retained bundles under `outputs/`; any such bundle must be treated as external retained evidence until its provenance and authority are confirmed.
-- Offline closure is still incomplete because continuity retirement depends on authoritative evidence, relocation-safe retained artifacts, and explicit evidence-based closure criteria.
+- Historical local authority discovery was blocked in this workspace baseline, but fresh authoritative evidence was produced by a controlled rerun on April 18, 2026 at `/workspace/runs/ql016-ql004-authoritative-20260418`.
+- NumPy and legacy `linear-policy-v1` continuity windows are now retired on that authoritative external scope.
+- Offline closure is still incomplete because broader evidence packaging, multi-window proof, and champion/challenger comparison discipline remain partial.
+- In this workspace, the next active repo batch is broader offline evidence expansion rather than more local historical-root discovery.
 - Until those blockers are cleared or explicitly frozen, live/runtime buildout is a planned next phase, not the current main focus.
 
 ## Not yet implemented as current repo reality
@@ -41,8 +44,9 @@ Those are target-state layers, not current capabilities.
 
 - keep repo-truth docs aligned with current HEAD rather than planned architecture
 - keep `audit-continuity` authority-aware so inspected-scope truth is not mistaken for authoritative closeout truth
-- keep repo-tracked closeout records explicit and pending until authoritative evidence is attached
-- define explicit offline-closure evidence gaps before Phase 2 becomes the main execution track
+- keep repo-tracked closeout decisions explicit and keep retained-bundle evidence distinct from authoritative external evidence
+- stop the historical local authority-discovery loop in this workspace unless a concrete external root is already present
+- make broader offline evidence expansion the single active next batch before Phase 2 becomes the main execution track
 
 ## Next build phase
 

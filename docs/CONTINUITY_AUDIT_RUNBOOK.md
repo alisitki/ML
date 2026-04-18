@@ -153,6 +153,7 @@ Required action:
 
 - identify the active registry root(s)
 - document why an external active registry root is authoritative before retiring or freezing compat windows
+- if historical remote roots are gone or inaccessible in the current workspace and no concrete external root is already present, stop the local discovery loop and leave continuity closeout pending until fresh authoritative evidence exists
 
 ---
 
@@ -171,11 +172,12 @@ A copied bundle with broken record paths but no readable local artifact is evide
 
 1. Identify the external active registry root you believe is authoritative.
 2. If that external root is unavailable, treat any retained bundle as inspected-scope truth only and keep it `external_retained_evidence`.
-3. Run `quantlab-ml audit-continuity --registry-root <root>`.
-4. Inspect `audit_scope_verdict` and `blocking_reasons` before reading the readiness booleans.
-5. If the verdict is `blocked`, do not retire anything.
-6. If the verdict is `active_dependency_present`, keep the window temporary and explicitly scoped.
-7. If the verdict is `clear_in_inspected_scope`, confirm that the inspected root is the external active authoritative root before choosing `FREEZE` or `RETIRE`.
+3. If historical remote roots are unavailable in the current workspace and no concrete external root is already present, stop local discovery and wait for fresh authoritative evidence.
+4. Run `quantlab-ml audit-continuity --registry-root <root>`.
+5. Inspect `audit_scope_verdict` and `blocking_reasons` before reading the readiness booleans.
+6. If the verdict is `blocked`, do not retire anything.
+7. If the verdict is `active_dependency_present`, keep the window temporary and explicitly scoped.
+8. If the verdict is `clear_in_inspected_scope`, confirm that the inspected root is the external active authoritative root before choosing `FREEZE` or `RETIRE`.
 
 ---
 

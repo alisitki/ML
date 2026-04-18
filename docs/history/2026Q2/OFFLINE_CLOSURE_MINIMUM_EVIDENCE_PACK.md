@@ -84,8 +84,8 @@ Limitations:
 
 ## 4. Missing evidence after this sprint
 
-- External active registry root confirmation for the active continuity closeout scope
-- Authoritative rerun of `audit-continuity` on that confirmed external scope
+- Fresh authoritative evidence for the active continuity closeout scope, produced by a future controlled rerun or a concrete external root already present when closure is revisited
+- Authoritative rerun of `audit-continuity` on that fresh authoritative scope
 - Multi-window or multi-slice offline evaluation pack
 - Registry-backed champion/challenger comparison report surface
 - Paper/sim linkage for any surface used to argue promotion readiness
@@ -94,5 +94,7 @@ Limitations:
 
 - `docs/continuity_closeout/*.yaml` remain `pending_authoritative_evidence`.
 - Their `latest_audit_scope_verdict` now reflects `clear_in_inspected_scope` rather than `blocked`.
-- The blocker is no longer “inspection failed”; the blocker is “external active authority is still not confirmed.”
+- The blocker is no longer “inspection failed”; the blocker is “fresh authoritative evidence does not yet exist in this workspace baseline.”
+- The historical local authority-discovery loop is closed for this workspace unless a concrete external path is already present when closure is revisited.
+- `QL-031` broader offline evidence expansion is the current active repo batch.
 - See `docs/history/2026Q2/CONTINUITY_AUTHORITY_DECISION.md` for the authority posture that keeps the retained bundle non-authoritative.

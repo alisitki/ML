@@ -22,6 +22,7 @@ LEGACY_REFERENCES = LEGACY_DOCS + tuple(_legacy_name(parts) for parts in LEGACY_
 def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
     project_state = (repo_root / "docs" / "PROJECT_STATE.md").read_text(encoding="utf-8")
+    backlog = (repo_root / "docs" / "BACKLOG.md").read_text(encoding="utf-8")
     roadmap = (repo_root / "docs" / "ROADMAP.md").read_text(encoding="utf-8")
     docs_index = (repo_root / "docs" / "DOCS_INDEX.md").read_text(encoding="utf-8")
     runtime_model = (repo_root / "docs" / "ONLINE_RUNTIME_MODEL.md").read_text(encoding="utf-8")
@@ -30,10 +31,16 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     ).read_text(encoding="utf-8")
     offline_closure = (repo_root / "docs" / "OFFLINE_CLOSURE_CRITERIA.md").read_text(encoding="utf-8")
     continuity_runbook = (repo_root / "docs" / "CONTINUITY_AUDIT_RUNBOOK.md").read_text(encoding="utf-8")
+    continuity_discovery_runbook = (
+        repo_root / "docs" / "CONTINUITY_AUTHORITY_DISCOVERY_RUNBOOK.md"
+    ).read_text(encoding="utf-8")
     closeout_records = (repo_root / "docs" / "CONTINUITY_CLOSEOUT_RECORDS.md").read_text(encoding="utf-8")
     remote_gpu_runbook = (repo_root / "docs" / "REMOTE_GPU_RUNBOOK.md").read_text(encoding="utf-8")
     continuity_authority_decision = (
         repo_root / "docs" / "history" / "2026Q2" / "CONTINUITY_AUTHORITY_DECISION.md"
+    ).read_text(encoding="utf-8")
+    continuity_discovery_record = (
+        repo_root / "docs" / "history" / "2026Q2" / "CONTINUITY_AUTHORITY_DISCOVERY_RUN_2026-04-18.md"
     ).read_text(encoding="utf-8")
     minimum_evidence_pack = (
         repo_root / "docs" / "history" / "2026Q2" / "OFFLINE_CLOSURE_MINIMUM_EVIDENCE_PACK.md"
@@ -63,6 +70,9 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "## Current focus before live/runtime work" in readme
     assert "## Next build phase" in readme
     assert "Current repository boundary" in readme
+    assert "fresh authoritative evidence" in readme.lower()
+    assert "broader offline evidence expansion" in readme.lower()
+    assert "historical local authority-discovery loop" in readme.lower()
 
     assert "## Current phase" in project_state
     assert "## Current verdict" in project_state
@@ -73,6 +83,15 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "## Not started / not main focus yet" in project_state
     assert "minimum offline-closure evidence pack" in project_state.lower()
     assert "outputs/registry" in project_state
+    assert "historical authoritative continuity roots are unavailable in this workspace" in project_state.lower()
+    assert "ql-031" in project_state.lower()
+    assert "single active next batch in this workspace" in project_state.lower()
+
+    assert "ql-016" in backlog.lower()
+    assert "ql-031" in backlog.lower()
+    assert "single active next batch in this workspace" in backlog.lower()
+    assert "fresh authoritative evidence" in backlog.lower()
+    assert "discover_continuity_authority.py --search-root" not in backlog
 
     assert "## Target runtime architecture" in runtime_model
     assert "## Current implemented runtime-related surface" in runtime_model
@@ -91,6 +110,7 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "## Authority map" in docs_index
     assert "docs/OFFLINE_CLOSURE_CRITERIA.md" in docs_index
     assert "docs/CONTINUITY_AUDIT_RUNBOOK.md" in docs_index
+    assert "docs/CONTINUITY_AUTHORITY_DISCOVERY_RUNBOOK.md" in docs_index
     assert "docs/CONTINUITY_CLOSEOUT_RECORDS.md" in docs_index
 
     assert "PASS" in offline_closure
@@ -113,6 +133,16 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "authoritative evidence" in continuity_runbook.lower()
     assert "do not relabel the retained bundle as `authoritative_evidence`" in continuity_runbook
 
+    assert "/workspace/runs/*/registry" in continuity_discovery_runbook
+    assert "/root/runs/*/registry" in continuity_discovery_runbook
+    assert "0 eligible external candidates => blocked" in continuity_discovery_runbook
+    assert ">1 eligible external candidates => blocked as ambiguity" in continuity_discovery_runbook
+    assert "1 eligible external candidate => authority confirmation step allowed" in (
+        continuity_discovery_runbook
+    )
+    assert "retained_bundle_only" in continuity_discovery_runbook
+    assert "must not run `authoritative-evidence` reruns" in continuity_discovery_runbook
+
     assert "decision_status" in closeout_records
     assert "pending_authoritative_evidence" in closeout_records
     assert "repo-tracked artifact" in closeout_records.lower()
@@ -127,13 +157,30 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "no rerun of `audit-continuity` may use `authoritative-evidence` on the retained bundle alone" in (
         continuity_authority_decision.lower()
     )
+    assert "do not continue the historical external-root discovery loop" in continuity_authority_decision.lower()
+    assert "broader offline evidence expansion" in continuity_authority_decision.lower()
+
+    assert "blocked_no_eligible_external_candidates" in continuity_discovery_record
+    assert "/workspace/runs" in continuity_discovery_record
+    assert "/root/runs" in continuity_discovery_record
+    assert "authoritative rerun command/output" in continuity_discovery_record.lower()
+    assert "not run because zero eligible external candidates were found" in continuity_discovery_record.lower()
+    assert "outputs/analysis/continuity-authority-discovery-2026-04-18.json" in continuity_discovery_record
+    assert "no mounted external run roots were visible" in continuity_discovery_record.lower()
+    assert "closes the historical local authority-discovery loop" in continuity_discovery_record.lower()
+    assert "broader offline evidence expansion" in continuity_discovery_record.lower()
+    assert (
+        "authoritative scope still blocked; closeout remains pending with sharper blockers"
+        in continuity_discovery_record
+    )
 
     assert "Sprint closeout sentence" in minimum_evidence_pack
     assert "clear_in_inspected_scope" in minimum_evidence_pack
     assert "comparison_report_id" in minimum_evidence_pack
     assert "multi-window or multi-slice" in minimum_evidence_pack
     assert "must remain `external_retained_evidence`" in minimum_evidence_pack
-    assert "external active registry root confirmation" in minimum_evidence_pack.lower()
+    assert "fresh authoritative evidence" in minimum_evidence_pack.lower()
+    assert "ql-031" in minimum_evidence_pack.lower()
 
     assert "fields` as the primary field carrier" in market_data_contract
     assert "compacted/_state.json" in market_data_contract

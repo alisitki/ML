@@ -61,7 +61,13 @@ def test_repo_tracked_closeout_records_remain_pending_until_authoritative_eviden
         assert record.authority_status == "unconfirmed"
         assert "authoritative_scope_not_confirmed" in record.blocking_reasons
         assert "configured_active_registry_root_missing_from_current_head" in record.blocking_reasons
+        assert "historical_external_authority_unavailable_in_current_workspace" in (
+            record.blocking_reasons
+        )
         assert record.next_required_evidence
-        assert any("external active registry root" in item.lower() for item in record.next_required_evidence)
+        assert any("fresh authoritative evidence" in item.lower() for item in record.next_required_evidence)
+        assert any("future controlled rerun" in item.lower() for item in record.next_required_evidence)
         assert any("external retained evidence only" in item.lower() for item in record.next_required_evidence)
+        assert any("historical local authority-discovery loop" in item.lower() for item in record.next_required_evidence)
+        assert not any("discover_continuity_authority.py" in item for item in record.next_required_evidence)
         assert not any("becomes authoritative" in item.lower() for item in record.next_required_evidence)
