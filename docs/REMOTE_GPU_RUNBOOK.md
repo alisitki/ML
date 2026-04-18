@@ -14,6 +14,10 @@ It exists to:
 This runbook is provider-agnostic in principle. Vast.ai is used here as the concrete
 example workflow because the current operating target is a rented single-GPU instance.
 
+For the authoritative continuity rerun that closed `QL-016` and `QL-004`, see:
+- `docs/history/2026Q2/AUTHORITATIVE_CONTINUITY_RERUN_2026-04-18.md`
+- `docs/history/2026Q2/AUTHORITATIVE_CONTINUITY_RERUN_OPERATIONS_2026-04-18.md`
+
 ## Scope
 
 This runbook covers:
@@ -95,6 +99,25 @@ Avoid for the first run:
 - A100/H100-class cost
 - candidate search
 
+## Operational planning minimum
+
+For the current one-day controlled rerun shape, plan for at least `~150 GB` free disk
+inside the remote instance before `build-trajectories` starts.
+
+Why this floor exists:
+- `trajectories/development.jsonl` reached `21G`
+- `trajectories/train.jsonl` reached `17G`
+- `trajectories/validation.jsonl` reached `4.1G`
+- `trajectories/final_untouched_test.jsonl` reached `4.1G`
+- `trajectories/tensor_cache_v1/` reached `67G`
+- registry, policy, evaluation, score, inference export, logs, and the repo checkout add more write pressure
+
+This is an operational planning minimum, not a retained-bundle size estimate.
+The retained minimum evidence bundle for the authoritative rerun was only `192M`.
+
+Provider-level rule:
+- request `250 GB` instance disk for this workflow so the instance still has headroom for the repo, venv, logs, and shutdown-time evidence handling
+
 ## Bootstrap
 
 ```bash
@@ -119,6 +142,39 @@ Secrets:
 - copy `.env` onto the instance
 - do not treat `VAST_API_KEY` as a repo runtime dependency; the repo does not consume it
 
+## SSH and copy practicals
+
+Use the provider-issued SSH host and port exactly as given for that instance.
+For Vast direct SSH, pin the key path and force identity selection in every command:
+
+```bash
+ssh -i ~/.ssh/quantlab_hetzner -o IdentitiesOnly=yes -p <port> root@<host>
+```
+
+Verified example from the authoritative rerun:
+
+```bash
+ssh -i ~/.ssh/quantlab_hetzner -o IdentitiesOnly=yes -p 11422 root@ssh1.vast.ai
+```
+
+For live monitoring, `tail -f` on the remote log is sufficient:
+
+```bash
+ssh -i ~/.ssh/quantlab_hetzner -o IdentitiesOnly=yes -p <port> root@<host> \
+  'tail -f /workspace/runs/<run-id>/build.log'
+```
+
+For evidence copy, reuse the same SSH options in `rsync`:
+
+```bash
+rsync -az -e 'ssh -i ~/.ssh/quantlab_hetzner -o IdentitiesOnly=yes -p <port>' \
+  root@<host>:/workspace/runs/<run-id>/policy.json \
+  outputs/<retained-bundle>/
+```
+
+If the remote workspace was synced without `.git`, remote `git rev-parse HEAD` is not available.
+Capture the local commit SHA before sync or before instance shutdown and record it in the retained manifest.
+
 ## Preflight
 
 Inspect compact state against the controlled snapshot before building trajectories:
@@ -137,6 +193,20 @@ Preflight must show:
 - matched partitions greater than zero
 - the intended full-day coverage
 - no immediate object-readability failure
+
+## Authoritative root rule
+
+For authoritative continuity reruns, the active run root must be outside repo-local `outputs/`.
+
+Use an external operator-supplied path such as:
+
+```bash
+export RUN_ROOT=/workspace/runs/<authoritative-rerun-id>
+mkdir -p "$RUN_ROOT/registry"
+```
+
+Do not point an authoritative rerun at repo-local `outputs/registry`.
+Repo-local retained bundles remain retained copies and are not the active authoritative root.
 
 ## Official command flow
 
@@ -234,6 +304,42 @@ Inside the logs, confirm:
 - `compiled_policy_mode=tensor_cache_linear_policy_batch`
 - `train_rows_per_sec`, `validation_rows_per_sec`, and `evaluation_rows_per_sec` are present
 - if `acceptance_evidence.json` is present, it must only index the retained files and may not replace them as the source of truth
+
+## Shutdown retention for authoritative reruns
+
+Before instance termination, retain the minimum evidence bundle needed to support future truth, audit, closeout, and docs verification.
+
+Retain:
+- `continuity_audit_authoritative.json`
+- `continuity_authority_discovery.json`
+- `inspect_s3.json`
+- `policy.json`
+- `evaluation.json`
+- `score.json`
+- `inference_artifact.json`
+- `trajectories/manifest.json`
+- `trajectories/tensor_cache_v1/tensor_cache_manifest.json`
+- `registry/index.json`
+- active `registry/records/*`
+- active `registry/evaluations/*`
+- active `registry/scores/*`
+- active `registry/artifacts/*` with duplicate bytes avoided when a hardlink to `policy.json` is sufficient
+- `build.log`, `train.log`, `evaluate.log`, `score.log`, `export.log`
+- `build.exit`, `train.exit`, `evaluate.exit`, `score.exit`, `export.exit`
+- exact copies of the data, training, reward, and evaluation config files used for the run
+- retained manifest metadata with source commit SHA, run root, timestamps, training summary, and authority summary
+- retained checksums such as `SHA256SUMS`
+
+Do not copy:
+- raw market data
+- full split JSONL payloads
+- full tensor-cache shard payloads
+- temporary transfer files
+- duplicate large artifacts that carry no additional decision evidence
+
+Retention honesty:
+- the retained-local bundle is a preserved copy derived from an authoritative rerun
+- the retained-local bundle is not itself re-labeled as authoritative evidence
 
 ## Acceptance criteria
 
