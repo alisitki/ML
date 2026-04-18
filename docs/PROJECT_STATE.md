@@ -115,6 +115,7 @@ The following remain visible but are not the current main focus:
 - The default configured registry root lives under ignored `outputs/registry` and is not repo-tracked on current HEAD.
 - Current HEAD does not include repo-tracked QL-021 bundles under `outputs/`. If external retained QL-021 bundles exist, they are external retained evidence rather than current-head repo-tracked proof until provenance and authority are attached explicitly.
 - A relocation-safe external retained bundle may prove `clear_in_inspected_scope` via registry-local fallback, but that still does not make it authoritative evidence.
+- If an external active registry root cannot be confirmed, retained bundles remain external retained evidence only and must not be promoted to authoritative evidence.
 - The repo-tracked continuity closeout records are pre-decision records. They do not, by themselves, prove authoritative continuity closure or live readiness.
 - The repo-tracked minimum offline-closure evidence pack remains evidence of progress, not evidence that multi-window closure or champion/challenger proof is complete.
 - Runtime and executor contracts exist as governance and artifact surfaces. They are not the same thing as a live selector daemon plus executor loop.

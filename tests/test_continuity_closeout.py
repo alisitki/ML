@@ -62,3 +62,6 @@ def test_repo_tracked_closeout_records_remain_pending_until_authoritative_eviden
         assert "authoritative_scope_not_confirmed" in record.blocking_reasons
         assert "configured_active_registry_root_missing_from_current_head" in record.blocking_reasons
         assert record.next_required_evidence
+        assert any("external active registry root" in item.lower() for item in record.next_required_evidence)
+        assert any("external retained evidence only" in item.lower() for item in record.next_required_evidence)
+        assert not any("becomes authoritative" in item.lower() for item in record.next_required_evidence)

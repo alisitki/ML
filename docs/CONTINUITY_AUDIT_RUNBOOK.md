@@ -35,7 +35,10 @@ Required:
 Preferred:
 
 - the authoritative active registry root
-- or a relocation-safe retained bundle that includes readable local artifact copies under `registry/artifacts/`
+
+Secondary inspected-scope input:
+
+- a relocation-safe retained bundle that includes readable local artifact copies under `registry/artifacts/`
 
 Command:
 
@@ -89,6 +92,7 @@ If `closeout_decision_allowed=false`, the audit may still be useful for inspecte
 - `repo_tracked_artifact` typically means the inspected files are versioned on current `HEAD`, but that still does not prove they are the authoritative active scope.
 - `external_retained_evidence` means the inspected files live outside the repo-tracked surface. A clean result here is still not authoritative by default.
 - `authoritative_evidence` means the inspected scope has already been confirmed as the active closeout surface. Only this class may default to `authority_status=confirmed`.
+- A relocation-safe retained bundle may narrow blockers or prove `clear_in_inspected_scope`, but it remains `external_retained_evidence` unless an external active registry root is separately confirmed. Absent that external root confirmation, do not relabel the retained bundle as `authoritative_evidence`.
 
 ---
 
@@ -148,7 +152,7 @@ If you do not know whether the inspected root is authoritative, treat the result
 Required action:
 
 - identify the active registry root(s)
-- document why the inspected scope is authoritative before retiring or freezing compat windows
+- document why an external active registry root is authoritative before retiring or freezing compat windows
 
 ---
 
@@ -165,12 +169,13 @@ A copied bundle with broken record paths but no readable local artifact is evide
 
 ## Recommended procedure
 
-1. Identify the registry root you believe is authoritative.
-2. Run `quantlab-ml audit-continuity --registry-root <root>`.
-3. Inspect `audit_scope_verdict` and `blocking_reasons` before reading the readiness booleans.
-4. If the verdict is `blocked`, do not retire anything.
-5. If the verdict is `active_dependency_present`, keep the window temporary and explicitly scoped.
-6. If the verdict is `clear_in_inspected_scope`, confirm that the inspected root is authoritative before choosing `FREEZE` or `RETIRE`.
+1. Identify the external active registry root you believe is authoritative.
+2. If that external root is unavailable, treat any retained bundle as inspected-scope truth only and keep it `external_retained_evidence`.
+3. Run `quantlab-ml audit-continuity --registry-root <root>`.
+4. Inspect `audit_scope_verdict` and `blocking_reasons` before reading the readiness booleans.
+5. If the verdict is `blocked`, do not retire anything.
+6. If the verdict is `active_dependency_present`, keep the window temporary and explicitly scoped.
+7. If the verdict is `clear_in_inspected_scope`, confirm that the inspected root is the external active authoritative root before choosing `FREEZE` or `RETIRE`.
 
 ---
 

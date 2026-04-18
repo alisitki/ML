@@ -48,16 +48,16 @@ Status values:
   - PyTorch is the active core-training path, but final retirement or freeze of continuity windows depends on authoritative registry truth
   - the authority-aware audit surface exists, but authoritative evidence for the active registry scope is still missing
   - the default configured `outputs/registry` root is not present on current HEAD, so active authority cannot be proven from repo-tracked state alone
-  - one relocation-safe retained bundle is now `clear_in_inspected_scope`, but that remains external retained evidence until an explicit authority decision is attached
+  - one relocation-safe retained bundle is now `clear_in_inspected_scope`, but that remains external retained evidence and does not close the authority gap by itself
 - next_action:
-  - decide whether the inspected relocation-safe retained bundle is the authoritative closeout surface or identify a different active registry root
-  - rerun `quantlab-ml audit-continuity --registry-root ...` with `authoritative-evidence` only after that authority decision exists
-  - update the repo-tracked closeout records only after the authoritative scope is explicit
+  - identify and confirm an external active registry root for the active continuity closeout surface
+  - rerun `quantlab-ml audit-continuity --registry-root ...` with `authoritative-evidence` only on that confirmed external root
+  - keep the inspected relocation-safe retained bundle documented as external retained evidence only; do not upgrade it to authoritative evidence
 - evidence_needed:
-  - explicit authority decision for the inspected relocation-safe retained bundle or authoritative registry root confirmation
-  - readable retained artifact paths for every active record in scope
+  - external active registry root confirmation
+  - readable retained artifact paths for every active record in the inspected retained scope used to narrow blockers
 - done_when:
-  - authoritative evidence is confirmed for the active scope
+  - authoritative evidence is confirmed for an external active scope
   - zero active dependency is proven on that scope, or the remaining dependency is explicitly frozen with written scope
 
 ### QL-004
@@ -70,7 +70,7 @@ Status values:
   - the latest inspected retained scope is `clear_in_inspected_scope`, but whether the window can be retired still depends on the same authoritative continuity truth as QL-016
   - the repo-tracked closeout record should stay `pending_authoritative_evidence` until that truth exists
 - next_action:
-  - keep the closeout record pending until QL-016 confirms authoritative evidence for the active scope
+  - keep the closeout record pending until QL-016 confirms authoritative evidence on an external active root
   - only then decide whether the window should be retired, frozen, or kept temporary with explicit scope
 - evidence_needed:
   - authoritative continuity audit result

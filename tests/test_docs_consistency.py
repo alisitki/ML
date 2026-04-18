@@ -32,6 +32,9 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     continuity_runbook = (repo_root / "docs" / "CONTINUITY_AUDIT_RUNBOOK.md").read_text(encoding="utf-8")
     closeout_records = (repo_root / "docs" / "CONTINUITY_CLOSEOUT_RECORDS.md").read_text(encoding="utf-8")
     remote_gpu_runbook = (repo_root / "docs" / "REMOTE_GPU_RUNBOOK.md").read_text(encoding="utf-8")
+    continuity_authority_decision = (
+        repo_root / "docs" / "history" / "2026Q2" / "CONTINUITY_AUTHORITY_DECISION.md"
+    ).read_text(encoding="utf-8")
     minimum_evidence_pack = (
         repo_root / "docs" / "history" / "2026Q2" / "OFFLINE_CLOSURE_MINIMUM_EVIDENCE_PACK.md"
     ).read_text(encoding="utf-8")
@@ -108,6 +111,7 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "repo-tracked artifact" in continuity_runbook.lower()
     assert "external retained evidence" in continuity_runbook.lower()
     assert "authoritative evidence" in continuity_runbook.lower()
+    assert "do not relabel the retained bundle as `authoritative_evidence`" in continuity_runbook
 
     assert "decision_status" in closeout_records
     assert "pending_authoritative_evidence" in closeout_records
@@ -118,10 +122,18 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "retained evidence" in remote_gpu_runbook.lower()
     assert "audit-continuity" in remote_gpu_runbook
 
+    assert "only a confirmed external active registry root" in continuity_authority_decision.lower()
+    assert "remains `external_retained_evidence` only" in continuity_authority_decision
+    assert "no rerun of `audit-continuity` may use `authoritative-evidence` on the retained bundle alone" in (
+        continuity_authority_decision.lower()
+    )
+
     assert "Sprint closeout sentence" in minimum_evidence_pack
     assert "clear_in_inspected_scope" in minimum_evidence_pack
     assert "comparison_report_id" in minimum_evidence_pack
     assert "multi-window or multi-slice" in minimum_evidence_pack
+    assert "must remain `external_retained_evidence`" in minimum_evidence_pack
+    assert "external active registry root confirmation" in minimum_evidence_pack.lower()
 
     assert "fields` as the primary field carrier" in market_data_contract
     assert "compacted/_state.json" in market_data_contract

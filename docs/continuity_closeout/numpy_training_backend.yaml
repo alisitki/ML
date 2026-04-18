@@ -6,8 +6,9 @@ blocking_reasons:
   - authoritative_scope_not_confirmed
   - configured_active_registry_root_missing_from_current_head
 next_required_evidence:
-  - Confirm whether the active continuity closeout surface is a non-repo-tracked `outputs/registry` root outside current HEAD or explicitly designate a relocation-safe retained bundle as authoritative.
-  - If the inspected retained bundle becomes authoritative, rerun the authority-aware continuity audit on that scope with `authoritative-evidence`.
+  - Confirm the external active registry root for the active continuity closeout surface.
+  - Rerun the authority-aware continuity audit with `authoritative-evidence` only on that confirmed external root.
+  - Keep the inspected relocation-safe retained bundle classified as external retained evidence only; it must not be upgraded to authoritative evidence.
   - Revisit the NumPy continuity window only after authoritative evidence is attached.
 last_reviewed: 2026-04-18
 decision_status: pending_authoritative_evidence

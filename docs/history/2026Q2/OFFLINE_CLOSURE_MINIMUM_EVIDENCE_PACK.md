@@ -7,7 +7,7 @@
 
 `authoritative scope still blocked; closeout remains pending with sharper blockers`
 
-That sentence is intentional. This pack documents real progress, but it does not claim that QuantLab is offline professionally closed or ready to treat the inspected retained bundle as authoritative by default.
+That sentence is intentional. This pack documents real progress, but it does not claim that QuantLab is offline professionally closed or ready to treat the inspected retained bundle as authoritative in any form.
 
 ## 2. Continuity scope discovery
 
@@ -48,6 +48,7 @@ Interpretation:
 
 - The inspected retained scope is clean for the audited continuity windows.
 - The inspected retained scope is still not authoritative evidence.
+- Without a separately confirmed external active registry root, this retained bundle must remain `external_retained_evidence` and must not be relabeled as `authoritative_evidence`.
 - NumPy and legacy compat windows therefore remain repo-tracked pre-decision records.
 
 ## 3. Current-head same-surface comparison surface
@@ -83,8 +84,8 @@ Limitations:
 
 ## 4. Missing evidence after this sprint
 
-- Explicit authority decision for the active continuity closeout scope
-- Authoritative rerun of `audit-continuity` on that declared scope
+- External active registry root confirmation for the active continuity closeout scope
+- Authoritative rerun of `audit-continuity` on that confirmed external scope
 - Multi-window or multi-slice offline evaluation pack
 - Registry-backed champion/challenger comparison report surface
 - Paper/sim linkage for any surface used to argue promotion readiness
@@ -93,4 +94,5 @@ Limitations:
 
 - `docs/continuity_closeout/*.yaml` remain `pending_authoritative_evidence`.
 - Their `latest_audit_scope_verdict` now reflects `clear_in_inspected_scope` rather than `blocked`.
-- The blocker is no longer “inspection failed”; the blocker is “authority is still not confirmed.”
+- The blocker is no longer “inspection failed”; the blocker is “external active authority is still not confirmed.”
+- See `docs/history/2026Q2/CONTINUITY_AUTHORITY_DECISION.md` for the authority posture that keeps the retained bundle non-authoritative.
