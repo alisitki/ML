@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 import json
 from pathlib import Path
+import shutil
 from typing import Any
 
 from quantlab_ml.common import dump_json_data, hash_payload, load_model, utcnow
@@ -22,6 +23,15 @@ from quantlab_ml.registry.store import LocalRegistryStore
 _ACTIVE_STATUSES = {"candidate", "challenger", "champion"}
 _DIAGNOSTIC_CLASSIFICATION_FILENAME = "import_classification.json"
 _REQUIRED_BUNDLE_FILES = ("manifest.json", "policy.json", "evaluation.json", "score.json")
+_RETAINED_REGISTRY_JSON_DIRS = (
+    "records",
+    "scores",
+    "evaluations",
+    "artifacts",
+    "comparisons",
+    "paper_sim",
+    "promotions",
+)
 
 
 def build_blocker_inventory(
@@ -200,6 +210,7 @@ def import_diagnostic_retained_run(
     resolved_output_root = output_root.expanduser().resolve()
     _validate_diagnostic_source_root(resolved_source_root)
     _validate_diagnostic_output_root(resolved_output_root)
+    registry_state = _registry_state_for_run(resolved_source_root)
 
     manifest = load_model(resolved_source_root / "manifest.json", TrajectoryManifest)
     artifact = load_model(resolved_source_root / "policy.json", PolicyArtifact)
@@ -217,11 +228,16 @@ def import_diagnostic_retained_run(
 
     registry_root = resolved_output_root / "registry"
     store = LocalRegistryStore(registry_root)
+    trajectory_directory = _resolve_diagnostic_trajectory_directory(
+        source_root=resolved_source_root,
+        output_root=resolved_output_root,
+    )
     store.register_candidate_from_manifest(
         artifact,
         manifest,
         reward_config_hash=hash_payload(manifest.reward_spec),
         training_config_hash=artifact.training_config_hash,
+        trajectory_directory=trajectory_directory,
     )
     store.append_score(artifact.policy_id, score, evaluation)
 
@@ -235,7 +251,11 @@ def import_diagnostic_retained_run(
         "promotion_eligible": False,
         "comparison_eligible": False,
         "classification_reasons": [
-            "source_root_had_no_registry_state",
+            (
+                "source_root_had_incomplete_registry_scaffold"
+                if registry_state == "incomplete_registry_scaffold"
+                else "source_root_had_no_usable_registry_state"
+            ),
             "diagnostic_import_created_for_blocker_inventory_only",
             "promotion_is_forbidden_on_diagnostic_imports",
             "comparison_is_forbidden_on_diagnostic_imports",
@@ -495,6 +515,8 @@ def _require_registry_root(registry_root: Path) -> Path:
     resolved_root = registry_root.expanduser().resolve()
     if not resolved_root.exists() or not resolved_root.is_dir():
         raise FileNotFoundError(f"registry root does not exist: {resolved_root}")
+    if not _looks_like_registry_root(resolved_root):
+        raise ValueError(f"registry root does not contain usable retained registry state: {resolved_root}")
     return resolved_root
 
 
@@ -558,8 +580,11 @@ def _validate_diagnostic_source_root(source_root: Path) -> None:
         raise FileNotFoundError(
             f"diagnostic import source root is missing required retained files: {', '.join(sorted(missing))}"
         )
-    if (source_root / "registry").exists():
-        raise ValueError("diagnostic import source root already contains registry state; import is reserved for non-registry roots")
+    if _registry_state_for_run(source_root) == "usable_registry_state":
+        raise ValueError(
+            "diagnostic import source root already contains usable retained registry state; "
+            "import is reserved for bundle-complete roots without usable registry state"
+        )
 
 
 def _validate_diagnostic_output_root(output_root: Path) -> None:
@@ -590,6 +615,8 @@ def _discover_candidate_run_roots(search_root: Path) -> list[Path]:
 def _summarize_retained_root(run_root: Path, *, repo_root: Path) -> dict[str, Any]:
     registry_root = _resolve_registry_root_for_run(run_root)
     has_bundle_artifacts = all((run_root / filename).exists() for filename in _REQUIRED_BUNDLE_FILES)
+    registry_state = _registry_state_for_run(run_root)
+    has_incomplete_registry_scaffold = registry_state == "incomplete_registry_scaffold"
     if registry_root is not None:
         classification = _load_source_classification_sidecar(registry_root)
         analysis_only = bool(classification["analysis_only"]) if classification is not None else False
@@ -599,6 +626,13 @@ def _summarize_retained_root(run_root: Path, *, repo_root: Path) -> dict[str, An
         )
         promotion_eligible = False if analysis_only else True
         comparison_eligible = comparison_preflight["allowed"]
+        candidate_classification = "diagnostic_import_only_bundle" if analysis_only else "usable_registry_root"
+        classification_reasons = (
+            ["analysis_only_sidecar_present"]
+            if analysis_only
+            else ["usable_retained_registry_state_present"]
+        )
+        surface_identities = _surface_identities_from_registry(registry_root)
     else:
         classification = None
         comparison_preflight = {
@@ -612,16 +646,31 @@ def _summarize_retained_root(run_root: Path, *, repo_root: Path) -> dict[str, An
         }
         promotion_eligible = False
         comparison_eligible = False
+        surface_identities = _surface_identities_from_bundle(run_root)
+        if has_bundle_artifacts:
+            candidate_classification = "diagnostic_import_only_bundle"
+            classification_reasons = ["bundle_artifacts_present"]
+            if has_incomplete_registry_scaffold:
+                classification_reasons.append("registry_scaffold_incomplete_or_empty")
+            else:
+                classification_reasons.append("usable_registry_state_missing")
+        else:
+            candidate_classification = "not_usable"
+            classification_reasons = ["bundle_artifacts_missing", "usable_registry_state_missing"]
 
     return {
         "run_root": str(run_root),
         "registry_root": str(registry_root) if registry_root is not None else None,
         "has_registry_state": registry_root is not None,
         "has_bundle_artifacts": has_bundle_artifacts,
+        "has_incomplete_registry_scaffold": has_incomplete_registry_scaffold,
         "is_repo_outputs_retained_bundle": (
             _is_repo_outputs_retained_bundle(registry_root, repo_root) if registry_root is not None else False
         ),
         "analysis_only": bool(classification["analysis_only"]) if classification is not None else False,
+        "candidate_classification": candidate_classification,
+        "classification_reasons": classification_reasons,
+        "surface_identities": surface_identities,
         "promotion_eligible": promotion_eligible,
         "comparison_eligible": comparison_eligible,
         "comparison_preflight": comparison_preflight,
@@ -638,7 +687,13 @@ def _resolve_registry_root_for_run(run_root: Path) -> Path | None:
 
 
 def _looks_like_registry_root(path: Path) -> bool:
-    return path.is_dir() and (path / "records").exists()
+    return path.is_dir() and (
+        (path / "index.json").exists()
+        or any(
+            next((path / directory).glob("*.json"), None) is not None
+            for directory in _RETAINED_REGISTRY_JSON_DIRS
+        )
+    )
 
 
 def _looks_like_run_root(path: Path) -> bool:
@@ -647,6 +702,75 @@ def _looks_like_run_root(path: Path) -> bool:
     if (path / "registry").is_dir():
         return True
     return all((path / filename).exists() for filename in _REQUIRED_BUNDLE_FILES)
+
+
+def _registry_state_for_run(run_root: Path) -> str:
+    registry_root = run_root / "registry"
+    if not registry_root.exists():
+        return "missing_registry"
+    if _looks_like_registry_root(registry_root):
+        return "usable_registry_state"
+    return "incomplete_registry_scaffold"
+
+
+def _surface_identities_from_registry(registry_root: Path) -> list[dict[str, str]]:
+    identities: dict[tuple[str, str, str], dict[str, str]] = {}
+    store = LocalRegistryStore(registry_root)
+    for record in store.list_records():
+        key = (
+            record.evaluation_surface_id,
+            record.slice_id,
+            _format_range(record.train_window),
+        )
+        identities.setdefault(
+            key,
+            {
+                "evaluation_surface_id": record.evaluation_surface_id,
+                "slice_id": record.slice_id,
+                "train_window": _format_range(record.train_window),
+            },
+        )
+    return [identities[key] for key in sorted(identities)]
+
+
+def _surface_identities_from_bundle(run_root: Path) -> list[dict[str, str]]:
+    if not all((run_root / filename).exists() for filename in _REQUIRED_BUNDLE_FILES):
+        return []
+    manifest = load_model(run_root / "manifest.json", TrajectoryManifest)
+    return [
+        {
+            "evaluation_surface_id": build_evaluation_surface_id(
+                slice_id=manifest.dataset_spec.slice_id,
+                split_version=manifest.split_artifact.split_version,
+                reward_version=manifest.reward_spec.reward_version,
+            ),
+            "slice_id": manifest.dataset_spec.slice_id,
+            "train_window": _format_range(manifest.dataset_spec.train_range),
+        }
+    ]
+
+
+def _resolve_diagnostic_trajectory_directory(*, source_root: Path, output_root: Path) -> Path | None:
+    direct_tensor_cache_manifest = source_root / "tensor_cache_v1" / "tensor_cache_manifest.json"
+    if direct_tensor_cache_manifest.exists():
+        return source_root
+
+    trajectories_dir = source_root / "trajectories"
+    if (trajectories_dir / "tensor_cache_v1" / "tensor_cache_manifest.json").exists():
+        return trajectories_dir
+
+    legacy_root_tensor_cache_manifest = source_root / "tensor_cache_manifest.json"
+    if not legacy_root_tensor_cache_manifest.exists():
+        return None
+
+    recovery_directory = output_root / "_coverage_recovery"
+    cache_directory = recovery_directory / "tensor_cache_v1"
+    cache_directory.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(
+        legacy_root_tensor_cache_manifest,
+        cache_directory / "tensor_cache_manifest.json",
+    )
+    return recovery_directory
 
 
 def _append_group_entry(bucket: dict[str, list[str]], policy_id: str, registry_root: Path) -> None:

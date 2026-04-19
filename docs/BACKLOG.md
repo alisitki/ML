@@ -61,7 +61,7 @@ Result:
   - broader multi-window or multi-slice evidence remains incomplete even after the comparison and paper/sim linkage surfaces became first-class
 - next_action:
   - build a QL-031 blocker-inventory artifact from currently visible registry-backed retained surfaces before claiming broader closure evidence
-  - import non-registry retained runs only as analysis-only diagnostic roots; they are never promotion or comparison registries
+  - import bundle-complete retained runs with no usable registry state, including empty or incomplete `registry/` scaffolds, only as analysis-only diagnostic roots; they are never promotion or comparison registries
   - search for additional external retained surfaces before scheduling any rerun
   - open `compare-policies` only when a single root already contains a current champion plus a scored same-surface challenger
   - use `build-offline-evidence-pack` only after blocker inventory is explicit and only on retained surfaces whose evidence class and authority status are still stated directly

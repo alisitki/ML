@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -47,6 +50,7 @@ def test_import_diagnostic_retained_run_marks_analysis_only(
         reward_spec=reward_spec,
         evaluation_boundary=evaluation_boundary,
     )
+    _add_incomplete_registry_scaffold(source_root)
 
     output_root = tmp_path / "diagnostic-import"
     classification = import_diagnostic_retained_run(
@@ -61,10 +65,50 @@ def test_import_diagnostic_retained_run_marks_analysis_only(
     assert classification["comparison_eligible"] is False
     assert classification["inspected_evidence_kind"] == "external_retained_evidence"
     assert classification["authority_status"] == "unconfirmed"
+    assert "source_root_had_incomplete_registry_scaffold" in classification["classification_reasons"]
     assert imported_record is not None
     assert imported_record.evaluation_surface_id == artifact.evaluation_surface_id
     assert imported_record.score_history[-1].evaluation_id == report.evaluation_id
     assert json.loads((output_root / "import_classification.json").read_text(encoding="utf-8"))["analysis_only"] is True
+
+
+def test_import_diagnostic_retained_run_recovers_coverage_from_root_tensor_cache_manifest(
+    tmp_path: Path,
+    fixture_path: Path,
+    dataset_spec,
+    training_bundle: tuple,
+    reward_spec,
+    evaluation_boundary,
+) -> None:
+    source_root, artifact, report, score, _ = _build_retained_run_root(
+        tmp_path=tmp_path,
+        fixture_path=fixture_path,
+        dataset_spec=dataset_spec,
+        training_bundle=training_bundle,
+        reward_spec=reward_spec,
+        evaluation_boundary=evaluation_boundary,
+    )
+    manifest_payload = json.loads((source_root / "manifest.json").read_text(encoding="utf-8"))
+    manifest_payload["split_write_stats"] = {}
+    (source_root / "manifest.json").write_text(json.dumps(manifest_payload, indent=2), encoding="utf-8")
+    (source_root / "tensor_cache_manifest.json").write_text(
+        (source_root / "tensor_cache_v1" / "tensor_cache_manifest.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    shutil.rmtree(source_root / "tensor_cache_v1")
+    _add_incomplete_registry_scaffold(source_root)
+
+    output_root = tmp_path / "legacy-diagnostic-import"
+    classification = import_diagnostic_retained_run(
+        source_root=source_root,
+        output_root=output_root,
+    )
+    imported_store = LocalRegistryStore(output_root / "registry")
+    imported_record = imported_store.get_record(artifact.policy_id)
+
+    assert classification["analysis_only"] is True
+    assert imported_record is not None
+    assert imported_record.coverage.train_sample_count > 0
 
 
 def test_blocker_inventory_carries_evidence_class_and_analysis_flags(
@@ -275,6 +319,7 @@ def test_discover_retained_roots_marks_analysis_only_candidates(
         reward_spec=reward_spec,
         evaluation_boundary=evaluation_boundary,
     )
+    _add_incomplete_registry_scaffold(source_root)
     diagnostic_root = tmp_path / "analysis-only-import"
     import_diagnostic_retained_run(source_root=source_root, output_root=diagnostic_root)
 
@@ -292,6 +337,138 @@ def test_discover_retained_roots_marks_analysis_only_candidates(
     assert any(candidate["has_bundle_artifacts"] for candidate in discovery["candidates"])
     assert any(candidate["analysis_only"] for candidate in discovery["candidates"])
     assert any(candidate["comparison_eligible"] is False for candidate in discovery["candidates"])
+    incomplete_scaffold_candidate = next(
+        candidate
+        for candidate in discovery["candidates"]
+        if candidate["run_root"] == str(source_root.resolve())
+    )
+    assert incomplete_scaffold_candidate["candidate_classification"] == "diagnostic_import_only_bundle"
+    assert incomplete_scaffold_candidate["has_registry_state"] is False
+    assert incomplete_scaffold_candidate["has_incomplete_registry_scaffold"] is True
+    assert "registry_scaffold_incomplete_or_empty" in incomplete_scaffold_candidate["classification_reasons"]
+
+
+def test_ql031_batch_script_builds_workspace_and_diagnostic_artifacts(
+    tmp_path: Path,
+    fixture_path: Path,
+    dataset_spec,
+    training_bundle: tuple,
+    reward_spec,
+    evaluation_boundary,
+) -> None:
+    source_root, artifact, report, score, manifest = _build_retained_run_root(
+        tmp_path=tmp_path,
+        fixture_path=fixture_path,
+        dataset_spec=dataset_spec,
+        training_bundle=training_bundle,
+        reward_spec=reward_spec,
+        evaluation_boundary=evaluation_boundary,
+    )
+    registry_root_a = tmp_path / "retained-a" / "registry"
+    _register_retained_run(
+        registry_root=registry_root_a,
+        artifact=artifact,
+        manifest=manifest,
+        report=report,
+        score=score,
+    )
+
+    artifact_b = artifact.model_copy(
+        update={
+            "policy_id": f"{artifact.policy_id}-b",
+            "artifact_id": f"{artifact.artifact_id}-b",
+            "training_run_id": f"{artifact.training_run_id}-b",
+        },
+        deep=True,
+    )
+    report_b = report.model_copy(
+        update={
+            "policy_id": artifact_b.policy_id,
+            "evaluation_id": f"{report.evaluation_id}-b",
+            "total_net_return": report.total_net_return - 0.1,
+        }
+    )
+    score_b = score.model_copy(
+        update={
+            "policy_id": artifact_b.policy_id,
+            "evaluation_id": report_b.evaluation_id,
+            "composite_rank": score.composite_rank - 0.001,
+        }
+    )
+    registry_root_b = tmp_path / "retained-b" / "registry"
+    _register_retained_run(
+        registry_root=registry_root_b,
+        artifact=artifact_b,
+        manifest=manifest,
+        report=report_b,
+        score=score_b,
+    )
+
+    diagnostic_bundle_root = tmp_path / "controlled-rerun-bundle"
+    diagnostic_bundle_root.mkdir(parents=True, exist_ok=True)
+    for name in ("manifest.json", "policy.json", "evaluation.json", "score.json"):
+        (diagnostic_bundle_root / name).write_text(
+            (source_root / name).read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    _add_incomplete_registry_scaffold(diagnostic_bundle_root)
+
+    data_config, reward_config_path = _write_preflight_configs(
+        tmp_path=tmp_path,
+        dataset_spec=dataset_spec,
+        reward_spec=reward_spec,
+    )
+    output_root = tmp_path / "analysis" / "ql031"
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "run_ql031_batch.py"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "--workspace-registry-root",
+            str(registry_root_a),
+            "--workspace-authority-status",
+            "unconfirmed",
+            "--workspace-registry-root",
+            str(registry_root_b),
+            "--workspace-authority-status",
+            "unconfirmed",
+            "--diagnostic-bundle-root",
+            str(diagnostic_bundle_root),
+            "--external-search-root",
+            str(tmp_path),
+            "--output-root",
+            str(output_root),
+            "--rerun-data-config",
+            str(data_config),
+            "--reward-config",
+            str(reward_config_path),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    workspace_inventory = json.loads((output_root / "workspace_blocker_inventory.json").read_text(encoding="utf-8"))
+    workspace_plus_inventory = json.loads(
+        (output_root / "workspace_plus_diagnostic_blocker_inventory.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads((output_root / "ql031_status.json").read_text(encoding="utf-8"))
+
+    assert workspace_inventory["source_count"] == 2
+    assert workspace_plus_inventory["source_count"] == 3
+    assert len(workspace_plus_inventory["grouped_by_evaluation_surface"]) == 1
+    assert len(workspace_plus_inventory["grouped_by_slice"]) == 1
+    assert len(workspace_plus_inventory["grouped_by_train_window"]) == 1
+    assert summary["status"] == "blocked_distinct_surface_collision"
+    assert summary["comparison_reports"] == []
+    assert summary["distinct_surface_preflight_allowed"] is False
+    assert (output_root / "distinct_surface_preflight.json").exists()
+    assert (output_root / "retained_root_discovery.json").exists()
+    assert (output_root / "diagnostic_imports" / diagnostic_bundle_root.name / "import_classification.json").exists()
 
 
 def test_cli_compare_policies_fails_closed_without_same_root_champion(
@@ -386,6 +563,30 @@ def _register_retained_run(
         training_config_hash=artifact.training_config_hash,
     )
     store.append_score(artifact.policy_id, score, report)
+
+
+def _add_incomplete_registry_scaffold(run_root: Path) -> None:
+    for directory in ("records", "scores", "evaluations", "artifacts", "paper_sim", "promotions"):
+        (run_root / "registry" / directory).mkdir(parents=True, exist_ok=True)
+
+
+def _write_preflight_configs(
+    *,
+    tmp_path: Path,
+    dataset_spec,
+    reward_spec,
+) -> tuple[Path, Path]:
+    data_config = tmp_path / "rerun-data.yaml"
+    reward_config = tmp_path / "rerun-reward.yaml"
+    data_config.write_text(
+        json.dumps({"dataset": dataset_spec.model_dump(mode="json")}, indent=2),
+        encoding="utf-8",
+    )
+    reward_config.write_text(
+        json.dumps({"reward": reward_spec.model_dump(mode="json")}, indent=2),
+        encoding="utf-8",
+    )
+    return data_config, reward_config
 
 
 def _promotion_evidence(
