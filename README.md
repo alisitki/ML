@@ -1,6 +1,7 @@
 # QuantLab ML
 
 QuantLab ML targets an end-to-end multi-exchange futures ML trading system for futures markets. The target system ingests websocket market data, builds exchange-aware canonical state, trains and evaluates policies offline, runs runtime inference, and hands controlled execution intent to a thin executor on the path toward live capital deployment.
+Read this file phase-aware: the target destination, current implemented scope, and next build phase are separate truths. Current HEAD authority for what exists now lives in `docs/PROJECT_STATE.md`, `docs/ROADMAP.md`, and `docs/BACKLOG.md`.
 
 ## Current implemented scope
 
@@ -105,14 +106,20 @@ CLI surfaces:
 
 - `AGENTS.md`
 - `docs/DOCS_INDEX.md`
-- `docs/PRODUCT_THESIS.md`
+- `docs/PROJECT_STATE.md`
+- `docs/ROADMAP.md`
+- `docs/BACKLOG.md`
 - `docs/MARKET_SCOPE.md`
+- `docs/PRODUCT_THESIS.md`
 - `docs/ONLINE_RUNTIME_MODEL.md`
 - `docs/COMMERCIALIZATION_GATES.md`
-- `docs/PROJECT_STATE.md`
-- `docs/OFFLINE_CLOSURE_CRITERIA.md`
-- `docs/CONTINUITY_AUDIT_RUNBOOK.md`
-- `docs/CONTINUITY_CLOSEOUT_RECORDS.md`
+- `docs/QUANTLAB_CONSTITUTION.md`
+- `docs/RUNTIME_BOUNDARY.md`
+- relevant canonical contracts
+- relevant runbooks
+
+Use `.agents/skills/quantlab-governance/SKILL.md` for governance-sensitive work. Offline-closure and continuity docs are conditional runbooks, not part of the fixed bootstrap sequence.
+When the task touches offline closure or continuity authority, follow the relevant runbooks and supporting docs, including `docs/OFFLINE_CLOSURE_CRITERIA.md`, `docs/CONTINUITY_AUDIT_RUNBOOK.md`, and `docs/CONTINUITY_CLOSEOUT_RECORDS.md`.
 
 ## Canonical technical docs
 

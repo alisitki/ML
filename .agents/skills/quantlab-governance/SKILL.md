@@ -139,10 +139,12 @@ Classify as blocker if the task would:
 When active, answer in this structure:
 
 1. `task_classification`
-   - layer
-   - business effect
-   - execution mode
-   - risk focus
+   - Use the `AGENTS.md` canonical taxonomy verbatim in this exact order.
+   - `task_phase`: choose one primary
+   - `layer`: choose one primary
+   - `business_effect`: choose one primary
+   - `execution_mode`: choose one
+   - `risk_focus`: choose all relevant
 
 2. `rules_touched`
    - relevant documents and contracts

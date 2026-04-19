@@ -17,6 +17,102 @@ def _legacy_name(parts: tuple[str, str]) -> str:
 
 LEGACY_DOCS = tuple(str(Path("docs") / _legacy_name(parts)) for parts in LEGACY_DOC_STEMS)
 LEGACY_REFERENCES = LEGACY_DOCS + tuple(_legacy_name(parts) for parts in LEGACY_DOC_STEMS)
+EXPECTED_CLASSIFICATION_LINES = (
+    "- `task_phase`: choose one primary",
+    "- `layer`: choose one primary",
+    "- `business_effect`: choose one primary",
+    "- `execution_mode`: choose one",
+    "- `risk_focus`: choose all relevant",
+)
+LEGACY_TAXONOMY_TOKENS = (
+    "observation_surface",
+    "registry_artifacts",
+    "docs_only",
+    "runtime_live_path",
+    "runtime-live-path",
+)
+
+
+def _extract_level_two_section(text: str, heading: str) -> str:
+    lines = text.splitlines()
+    capture = False
+    collected: list[str] = []
+
+    for line in lines:
+        if line == heading:
+            capture = True
+            continue
+        if capture and line.startswith("## "):
+            break
+        if capture:
+            collected.append(line)
+
+    assert collected, f"missing section {heading}"
+    return "\n".join(collected)
+
+
+def _assert_items_in_order(text: str, items: tuple[str, ...]) -> None:
+    positions = [text.index(item) for item in items]
+    assert positions == sorted(positions), f"items not in order: {items}"
+
+
+def _extract_list_entries(section: str) -> str:
+    entries: list[str] = []
+
+    for line in section.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("- "):
+            entries.append(stripped)
+            continue
+        if "." in stripped and stripped.split(".", 1)[0].isdigit():
+            entries.append(stripped)
+
+    assert entries, "missing list entries"
+    return "\n".join(entries)
+
+
+def _select_entries_in_order(section: str, items: tuple[str, ...]) -> tuple[str, ...]:
+    selected: list[str] = []
+
+    for line in section.splitlines():
+        for item in items:
+            if item in line:
+                selected.append(item)
+                break
+
+    return tuple(selected)
+
+
+def _extract_classification_lines(section: str) -> tuple[str, ...]:
+    selected: list[str] = []
+
+    for line in section.splitlines():
+        stripped = line.strip()
+        if stripped in EXPECTED_CLASSIFICATION_LINES:
+            selected.append(stripped)
+
+    return tuple(selected)
+
+
+def _extract_classification_section(text: str) -> str:
+    return _extract_level_two_section(text, "## 1. Task classification")
+
+
+def _extract_governance_skill_task_classification_lines(text: str) -> tuple[str, ...]:
+    selected: list[str] = []
+    capture = False
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "1. `task_classification`":
+            capture = True
+            continue
+        if capture and stripped.startswith("2. `"):
+            break
+        if capture and stripped in EXPECTED_CLASSIFICATION_LINES:
+            selected.append(stripped)
+
+    return tuple(selected)
 
 
 def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
@@ -199,6 +295,130 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     )
     assert "explicit contract override wins" in market_data_contract
     assert "contract-unavailable (availability_by_contract = False)" in observation_schema
+
+
+def test_bootstrap_read_order_prioritizes_current_repo_truth(repo_root: Path) -> None:
+    agents = (repo_root / "AGENTS.md").read_text(encoding="utf-8")
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    docs_index = (repo_root / "docs" / "DOCS_INDEX.md").read_text(encoding="utf-8")
+
+    agents_read_order = _extract_level_two_section(agents, "## Required read order")
+    readme_read_first = _extract_level_two_section(readme, "## Read first")
+    docs_index_start_here = _extract_level_two_section(docs_index, "## Start here")
+    docs_index_read_order = _extract_level_two_section(docs_index, "## Reading order")
+    docs_index_start_here_entries = _extract_list_entries(docs_index_start_here)
+
+    expected_current_truth_first = (
+        "docs/PROJECT_STATE.md",
+        "docs/ROADMAP.md",
+        "docs/BACKLOG.md",
+        "docs/MARKET_SCOPE.md",
+        "docs/PRODUCT_THESIS.md",
+        "docs/ONLINE_RUNTIME_MODEL.md",
+        "docs/COMMERCIALIZATION_GATES.md",
+        "docs/QUANTLAB_CONSTITUTION.md",
+        "docs/RUNTIME_BOUNDARY.md",
+        "relevant canonical contracts",
+        "relevant runbooks",
+    )
+
+    canonical_bootstrap_subsequence: tuple[str, ...] | None = None
+
+    for section in (agents_read_order, readme_read_first, docs_index_read_order):
+        list_entries = _extract_list_entries(section)
+        _assert_items_in_order(list_entries, expected_current_truth_first)
+        assert "docs/OFFLINE_CLOSURE_CRITERIA.md" not in list_entries
+        assert "docs/CONTINUITY_AUDIT_RUNBOOK.md" not in list_entries
+        assert "docs/CONTINUITY_AUTHORITY_DISCOVERY_RUNBOOK.md" not in list_entries
+        assert "docs/CONTINUITY_CLOSEOUT_RECORDS.md" not in list_entries
+        shared_subsequence = _select_entries_in_order(list_entries, expected_current_truth_first)
+        if canonical_bootstrap_subsequence is None:
+            canonical_bootstrap_subsequence = shared_subsequence
+        else:
+            assert shared_subsequence == canonical_bootstrap_subsequence
+
+    assert canonical_bootstrap_subsequence == expected_current_truth_first
+
+    _assert_items_in_order(
+        docs_index_start_here_entries,
+        (
+            "docs/PROJECT_STATE.md",
+            "docs/ROADMAP.md",
+            "docs/BACKLOG.md",
+            "docs/PRODUCT_THESIS.md",
+        ),
+    )
+
+
+def test_bootstrap_authority_and_governance_skill_are_explicit(repo_root: Path) -> None:
+    agents = (repo_root / "AGENTS.md").read_text(encoding="utf-8")
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    docs_index = (repo_root / "docs" / "DOCS_INDEX.md").read_text(encoding="utf-8")
+
+    skill_path = ".agents/skills/quantlab-governance/SKILL.md"
+
+    assert skill_path in agents
+    assert skill_path in readme
+    assert skill_path in docs_index
+
+    assert "three separate truth surfaces" in agents
+    assert "They must never be collapsed into a single claim." in agents
+    assert "target destination, current implemented scope, and next build phase are separate truths" in readme
+    assert "Current implemented reality is governed by `docs/PROJECT_STATE.md`, `docs/ROADMAP.md`, and `docs/BACKLOG.md`." in docs_index
+    assert "do not override current implemented reality without explicit supersession" in docs_index
+
+
+def test_taxonomy_classification_fields_and_cardinality_are_aligned(repo_root: Path) -> None:
+    agents = (repo_root / "AGENTS.md").read_text(encoding="utf-8")
+    task_template = (repo_root / "docs" / "TASK_TEMPLATE.md").read_text(encoding="utf-8")
+    report_template = (repo_root / "docs" / "REPORT_TEMPLATE.md").read_text(encoding="utf-8")
+    governance_skill = (repo_root / ".agents" / "skills" / "quantlab-governance" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    agents_section = _extract_level_two_section(agents, "## Required task classification")
+    task_template_section = _extract_classification_section(task_template)
+    report_template_section = _extract_classification_section(report_template)
+
+    agents_lines = _extract_classification_lines(agents_section)
+    task_template_lines = _extract_classification_lines(task_template_section)
+    report_template_lines = _extract_classification_lines(report_template_section)
+    governance_skill_lines = _extract_governance_skill_task_classification_lines(governance_skill)
+
+    assert agents_lines == EXPECTED_CLASSIFICATION_LINES
+    assert task_template_lines == EXPECTED_CLASSIFICATION_LINES
+    assert report_template_lines == EXPECTED_CLASSIFICATION_LINES
+    assert governance_skill_lines == EXPECTED_CLASSIFICATION_LINES
+
+    assert "repo templates and governance-skill output" in agents_section
+    assert "`task_phase`, `layer`, `business_effect`, `execution_mode`, and `risk_focus` are explicit" in (
+        _extract_level_two_section(agents, "## Definition of done")
+    )
+
+
+def test_taxonomy_surfaces_do_not_use_legacy_tokens_or_alias_field_names(repo_root: Path) -> None:
+    agents = (repo_root / "AGENTS.md").read_text(encoding="utf-8")
+    task_template = (repo_root / "docs" / "TASK_TEMPLATE.md").read_text(encoding="utf-8")
+    report_template = (repo_root / "docs" / "REPORT_TEMPLATE.md").read_text(encoding="utf-8")
+    governance_skill = (repo_root / ".agents" / "skills" / "quantlab-governance" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    taxonomy_surfaces = (
+        _extract_level_two_section(agents, "## Required task classification"),
+        _extract_classification_section(task_template),
+        _extract_classification_section(report_template),
+        _extract_level_two_section(governance_skill, "## Required answer format"),
+    )
+
+    for surface in taxonomy_surfaces:
+        lowered = surface.lower()
+        for token in LEGACY_TAXONOMY_TOKENS:
+            assert token not in surface
+        assert "task phase" not in lowered
+        assert "business effect" not in lowered
+        assert "execution mode" not in lowered
+        assert "risk focus" not in lowered
 
 
 def test_legacy_docs_are_deleted_and_unreferenced(repo_root: Path) -> None:

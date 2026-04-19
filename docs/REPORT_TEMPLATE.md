@@ -1,10 +1,69 @@
 # Report Template
 
-## 1. Summary of change
+## 1. Task classification
+
+Use these exact machine keys in this order:
+- `task_phase`: choose one primary
+- `layer`: choose one primary
+- `business_effect`: choose one primary
+- `execution_mode`: choose one
+- `risk_focus`: choose all relevant
+
+### `task_phase`
+Choose one primary:
+- `target-state clarification`
+- `current-phase hardening`
+- `next-phase enablement`
+- `optional research`
+- `non-priority work`
+
+### `layer`
+Choose one primary:
+- `data_plane`
+- `canonicalization`
+- `online_feature_state`
+- `offline_training`
+- `evaluation`
+- `runtime_inference`
+- `executor_risk`
+- `observability_recovery`
+- `docs_governance`
+
+### `business_effect`
+Choose one primary:
+- `expected_edge`
+- `parity_integrity`
+- `capital_protection`
+- `latency_freshness_safety`
+- `research_throughput`
+- `continuity_debt_retirement`
+- `docs_hygiene_only`
+
+### `execution_mode`
+Choose one:
+- `smoke_debug`
+- `continuity_baseline`
+- `shadow_paper`
+- `real_training`
+- `live_path_change`
+
+### `risk_focus`
+Choose all relevant:
+- `unsupported_stream_misuse`
+- `missing_vs_stale_confusion`
+- `replay_mismatch`
+- `leakage`
+- `reward_drift`
+- `runtime_feature_drift`
+- `venue_semantic_drift`
+- `execution_drift`
+- `recovery_corruption`
+
+## 2. Summary of change
 
 Describe what changed.
 
-## 2. Why it changed
+## 3. Why it changed
 
 Explain the primary business or safety effect:
 - expected edge
@@ -14,23 +73,23 @@ Explain the primary business or safety effect:
 - research throughput
 - docs hygiene only
 
-## 3. Rule or contract served
+## 4. Rule or contract served
 
 State the governing docs served by the change.
 
-## 4. Files changed
+## 5. Files changed
 
 List files changed.
 
-## 5. Tests and verification
+## 6. Tests and verification
 
 List:
 - commands run
 - important results
 - what was not tested
-- whether evidence is smoke, continuity, real-training, or runtime-live-path
+- whether evidence is `smoke_debug`, `continuity_baseline`, `shadow_paper`, `real_training`, or `live_path_change`
 
-## 6. Remaining risks
+## 7. Remaining risks
 
 State:
 - blockers
@@ -38,7 +97,7 @@ State:
 - unverified assumptions
 - follow-up risks
 
-## 7. Docs and state updates
+## 8. Docs and state updates
 
 State whether the following were updated:
 - `PROJECT_STATE.md`
@@ -47,7 +106,7 @@ State whether the following were updated:
 - canonical docs
 - runbooks
 
-## 8. Commercial / live-trading interpretation
+## 9. Commercial / live-trading interpretation
 
 State plainly:
 - whether this improves edge discovery,
@@ -55,6 +114,6 @@ State plainly:
 - whether this reduces live-trading risk,
 - whether promotion or live readiness changed.
 
-## 9. Next recommended task
+## 10. Next recommended task
 
 Propose the next task and why it should come next.

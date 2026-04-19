@@ -29,6 +29,8 @@ The next build phase is the live-operating half:
 - shadow/paper loop
 - thin executor integration and live controls
 
+Treat `ultimate goal`, `current implemented scope`, and `next build phase` as three separate truth surfaces: destination, current HEAD reality, and planned next work. They must never be collapsed into a single claim.
+
 This repository is not only a research scaffold, but it is also not yet a fully implemented live trading system. Agents must preserve both truths at the same time.
 
 ---
@@ -36,6 +38,7 @@ This repository is not only a research scaffold, but it is also not yet a fully 
 ## Phase-awareness rules
 
 - Always distinguish `ultimate goal`, `current implemented scope`, and `next build phase`.
+- Treat those three labels as separate authority surfaces for destination, current implemented reality, and planned next work.
 - A missing capability is not automatically a defect if it clearly belongs to a later planned phase.
 - A document, task summary, or agent output must never describe a later-phase capability as current implemented reality unless code and evidence prove it.
 - If target architecture and current repo reality differ, say so explicitly rather than flattening them together.
@@ -128,18 +131,20 @@ Before any non-trivial change, read in this order:
 
 1. `README.md`
 2. `docs/DOCS_INDEX.md`
-3. `docs/PRODUCT_THESIS.md`
-4. `docs/MARKET_SCOPE.md`
-5. `docs/ONLINE_RUNTIME_MODEL.md`
-6. `docs/COMMERCIALIZATION_GATES.md`
-7. `docs/QUANTLAB_CONSTITUTION.md`
-8. `docs/RUNTIME_BOUNDARY.md`
-9. `docs/PROJECT_STATE.md`
-10. `docs/ROADMAP.md`
-11. `docs/BACKLOG.md`
+3. `docs/PROJECT_STATE.md`
+4. `docs/ROADMAP.md`
+5. `docs/BACKLOG.md`
+6. `docs/MARKET_SCOPE.md`
+7. `docs/PRODUCT_THESIS.md`
+8. `docs/ONLINE_RUNTIME_MODEL.md`
+9. `docs/COMMERCIALIZATION_GATES.md`
+10. `docs/QUANTLAB_CONSTITUTION.md`
+11. `docs/RUNTIME_BOUNDARY.md`
 12. relevant canonical contracts
 13. relevant runbooks
 
+Use `.agents/skills/quantlab-governance/SKILL.md` for governance-sensitive work before proposing or applying changes.
+This fixed bootstrap order prioritizes current repo truth before aspirational target-state docs. Offline-closure and continuity docs stay conditional under relevant runbooks rather than in the mandatory bootstrap sequence.
 If active state and requested work conflict, justify the deviation explicitly.
 
 ---
@@ -147,10 +152,17 @@ If active state and requested work conflict, justify the deviation explicitly.
 ## Required task classification
 
 For every meaningful task, classify all five fields.
+This ordering, these exact machine keys, and these cardinality semantics are canonical for repo templates and governance-skill output.
 
-### 0. Task phase
+- `task_phase`: choose one primary
+- `layer`: choose one primary
+- `business_effect`: choose one primary
+- `execution_mode`: choose one
+- `risk_focus`: choose all relevant
 
-Choose one primary phase classification:
+### `task_phase`
+
+Choose one primary:
 
 - `target-state clarification`
 - `current-phase hardening`
@@ -158,7 +170,7 @@ Choose one primary phase classification:
 - `optional research`
 - `non-priority work`
 
-### 1. Layer
+### `layer`
 
 Choose one primary layer:
 
@@ -172,9 +184,9 @@ Choose one primary layer:
 - `observability_recovery`
 - `docs_governance`
 
-### 2. Business effect
+### `business_effect`
 
-Choose one primary effect:
+Choose one primary:
 
 - `expected_edge`
 - `parity_integrity`
@@ -184,7 +196,7 @@ Choose one primary effect:
 - `continuity_debt_retirement`
 - `docs_hygiene_only`
 
-### 3. Execution mode
+### `execution_mode`
 
 Choose one:
 
@@ -194,7 +206,7 @@ Choose one:
 - `real_training`
 - `live_path_change`
 
-### 4. Risk focus
+### `risk_focus`
 
 Choose all relevant:
 
@@ -284,7 +296,7 @@ Forbidden unless a higher-order canonical document changes the rule:
 
 For every non-trivial task, Codex must:
 
-1. classify the task across all five required fields
+1. classify the task across all five required fields using the canonical machine keys and ordering above
 2. identify the exact layer touched
 3. name the governing documents
 4. state whether the task is target-state clarification, current-phase hardening, or next-phase enablement
@@ -311,7 +323,7 @@ If the change touches runtime or execution behavior, Codex must also state:
 A meaningful task is done only when all are true:
 
 - ultimate goal, current implemented scope, and next build phase are not blurred together
-- the phase classification, layer, and business effect are explicit
+- `task_phase`, `layer`, `business_effect`, `execution_mode`, and `risk_focus` are explicit
 - parity impact is explicit
 - live-path safety impact is explicit
 - relevant tests exist
