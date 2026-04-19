@@ -146,6 +146,32 @@ class PaperSimEvidenceRecord(QuantBaseModel):
     report_format: Literal["markdown", "json", "text", "unknown"] = "unknown"
 
 
+class ComparisonReport(QuantBaseModel):
+    comparison_report_id: str
+    created_at: datetime
+    challenger_policy_id: str
+    challenger_artifact_id: str
+    challenger_evaluation_id: str
+    challenger_training_snapshot_id: str
+    champion_policy_id: str
+    champion_artifact_id: str
+    champion_evaluation_id: str
+    champion_training_snapshot_id: str
+    evaluation_surface_id: str
+    challenger_active_date_range: TimeRange
+    champion_active_date_range: TimeRange
+    challenger_total_net_return: float
+    champion_total_net_return: float
+    total_net_return_delta: float
+    challenger_composite_rank: float
+    champion_composite_rank: float
+    composite_rank_delta: float
+    governing_objective: Literal["total_net_return"] = "total_net_return"
+    same_surface: bool = True
+    challenger_beats_champion: bool
+    notes: list[str] = Field(default_factory=list)
+
+
 class PromotionEvidence(QuantBaseModel):
     preprocessing_fit_on_train_only: bool
     no_future_features: bool

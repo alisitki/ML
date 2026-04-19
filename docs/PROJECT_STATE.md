@@ -48,6 +48,7 @@ Why:
 - current HEAD now also carries a fresh authoritative controlled rerun at `/workspace/runs/ql016-ql004-authoritative-20260418` with a confirmed external active registry root
 - current HEAD now carries decided continuity closeout records that retire the NumPy and legacy compat windows on that authoritative scope
 - current HEAD does not include repo-tracked QL-021 retained bundles under `outputs/`; any such bundle is external retained evidence until its provenance and authority are confirmed
+- current HEAD can now persist registry-backed comparison reports and reusable offline evidence-pack summaries, but those surfaces do not by themselves prove broader offline closure
 - offline closure is still incomplete because broader evidence packaging discipline, multi-window proof, and champion/challenger comparison surfaces remain partial
 
 ---
@@ -58,6 +59,7 @@ Why:
 - offline trajectory building
 - walk-forward training and evaluation discipline
 - artifact export and registry discipline
+- registry-backed comparison-report persistence and reusable offline evidence-pack summaries
 - runtime-facing contracts and thin-executor boundary definitions
 - governance, runbook, and repo-tracked closeout-record discipline around retained proof surfaces
 
@@ -93,7 +95,7 @@ These missing layers are planned later-phase work, not current defects by defaul
 ## Blocked before live-path focus
 
 - broader multi-window and champion/challenger offline evidence remains partial; the current minimum evidence pack is still narrow and same-surface only
-- comparison-report and paper/sim linkage remain incomplete on the retained proof surfaces used for offline-closure arguments
+- comparison-report and paper/sim linkage remain incomplete on the retained proof surfaces used for offline-closure arguments, even though current HEAD can now persist those links cleanly
 - commercialization-grade evidence packaging still depends on broader offline proof than the single authoritative continuity rerun
 
 Until those are explicit, Phase 2 is still planned next work but not the main execution focus.
@@ -125,5 +127,6 @@ The following remain visible but are not the current main focus:
 - Fresh authoritative evidence has now been produced by a controlled rerun at `/workspace/runs/ql016-ql004-authoritative-20260418`.
 - The repo-tracked continuity closeout records are now decision records for retired windows. They still do not, by themselves, prove live readiness.
 - The repo-tracked minimum offline-closure evidence pack remains evidence of progress, not evidence that multi-window closure or champion/challenger proof is complete.
+- Comparison-report and offline evidence-pack tooling exist on current HEAD; neither one, by itself, upgrades offline closure to `PASS`.
 - Runtime and executor contracts exist as governance and artifact surfaces. They are not the same thing as a live selector daemon plus executor loop.
 - Commercialization gates are defined, but no gate above the offline side is currently operationally evidenced in this repository.

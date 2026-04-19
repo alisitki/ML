@@ -53,7 +53,8 @@ Every official evaluation run must know:
 ### Step 3 — Compare against champion
 - compare challenger and champion on the same surface
 - do not compare across incomparable surfaces
-- store comparison result
+- persist the comparison result as a first-class registry-backed comparison report
+- `quantlab-ml compare-policies` is the official CLI surface for this linkage
 
 ### Step 4 — Produce reports
 Required outputs:
@@ -67,6 +68,7 @@ Required outputs:
 If candidate passes evaluation:
 - produce paper/sim evidence and record it as a first-class registry-linked evidence record
 - link the paper/sim evidence to the evaluation report and comparison report if one exists
+- if a current champion exists, `quantlab-ml record-paper-sim` requires a valid `comparison_report_id`
 - do not promote directly from offline evaluation alone
 
 ## 4. Failure handling

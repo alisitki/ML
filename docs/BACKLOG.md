@@ -57,12 +57,13 @@ Result:
 - why_open:
   - this is now the single active next batch in this workspace because historical local authority discovery is closed here
   - current HEAD now has a repo-tracked minimum evidence pack that indexes one inspected-scope continuity audit and one same-surface current-head retained-run comparison
-  - current HEAD still contains only narrow same-surface proof; broader multi-window or multi-slice evidence remains incomplete
-  - `comparison_report_id`, paper/sim linkage, and champion-backed comparison surfaces remain missing on the retained proof surfaces currently available
+  - current HEAD now also has registry-backed comparison-report and offline evidence-pack tooling, but the retained proof surfaces currently available still contain only narrow same-surface proof
+  - broader multi-window or multi-slice evidence remains incomplete even after the comparison and paper/sim linkage surfaces became first-class
 - next_action:
-  - expand beyond the current same-surface proof using currently available retained surfaces only
+  - use `compare-policies`, `record-paper-sim`, and `build-offline-evidence-pack` on currently available retained surfaces only
+  - expand beyond the current same-surface proof without claiming authoritative continuity closure
   - produce broader multi-window or multi-slice offline evidence without claiming authoritative continuity closure
-  - improve comparison-report and paper/sim linkage honesty on the retained proof surfaces that already exist
+  - keep evidence class and authority status explicit in every retained-surface summary
 - evidence_needed:
   - multi-window or multi-slice offline evaluation packs
   - current-head champion/challenger comparison surfaces

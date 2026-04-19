@@ -490,6 +490,180 @@ def test_record_paper_sim_evidence_links_report_to_registry_lineage(
     assert reloaded_evidence.policy_id == policy_artifact.policy_id
 
 
+def test_record_comparison_report_persists_same_surface_champion_challenger_evidence(
+    tmp_path: Path,
+    trajectory_bundle: TrajectoryBundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score: PolicyScore,
+    training_bundle: tuple,
+) -> None:
+    _, _, training_config = training_bundle
+    champion_report = evaluation_report.model_copy(
+        update={
+            "total_net_return": 0.25,
+            "average_net_return": 0.05,
+        }
+    )
+    champion_score = policy_score.model_copy(
+        update={
+            "expected_return_score": 0.05,
+            "composite_rank": max(policy_score.composite_rank, 0.82),
+        }
+    )
+    store = LocalRegistryStore(tmp_path / "registry")
+    reward_hash = hash_payload(trajectory_bundle.reward_spec)
+    training_hash = hash_payload(training_config)
+    store.register_candidate(
+        policy_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    store.append_score(policy_artifact.policy_id, champion_score, champion_report)
+
+    champion_artifact_path = tmp_path / "champion-inference-artifact.json"
+    champion_artifact_path.write_text("{}", encoding="utf-8")
+    champion_paper_sim = _record_paper_sim_evidence(
+        store,
+        policy_artifact.policy_id,
+        tmp_path / "champion-paper-sim.md",
+    )
+    store.promote_candidate(
+        policy_artifact.policy_id,
+        evidence=_promotion_evidence(
+            policy_artifact,
+            deployment_artifact_path=str(champion_artifact_path),
+            paper_sim_evidence_id=champion_paper_sim.evidence_id,
+        ),
+    )
+
+    challenger_artifact = policy_artifact.model_copy(
+        update={
+            "policy_id": f"{policy_artifact.policy_id}-challenger",
+            "artifact_id": f"{policy_artifact.artifact_id}-challenger",
+            "training_run_id": f"{policy_artifact.training_run_id}-challenger",
+        },
+        deep=True,
+    )
+    challenger_report = evaluation_report.model_copy(
+        update={
+            "policy_id": challenger_artifact.policy_id,
+            "evaluation_id": f"{evaluation_report.evaluation_id}-challenger",
+            "total_net_return": 0.8,
+            "average_net_return": 0.16,
+        }
+    )
+    challenger_score = policy_score.model_copy(
+        update={
+            "policy_id": challenger_artifact.policy_id,
+            "evaluation_id": challenger_report.evaluation_id,
+            "expected_return_score": 0.16,
+            "composite_rank": max(policy_score.composite_rank, 0.93),
+        }
+    )
+    store.register_candidate(
+        challenger_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    store.append_score(challenger_artifact.policy_id, challenger_score, challenger_report)
+
+    comparison_report = store.record_comparison_report(challenger_artifact.policy_id)
+    challenger_record = store.get_record(challenger_artifact.policy_id)
+    reloaded_report = store.get_comparison_report(comparison_report.comparison_report_id)
+
+    assert challenger_record is not None
+    assert challenger_record.comparison_report_id == comparison_report.comparison_report_id
+    assert reloaded_report is not None
+    assert reloaded_report.same_surface is True
+    assert reloaded_report.challenger_policy_id == challenger_artifact.policy_id
+    assert reloaded_report.champion_policy_id == policy_artifact.policy_id
+    assert reloaded_report.total_net_return_delta > 0.0
+
+
+def test_record_comparison_report_rejects_mismatched_evaluation_surface(
+    tmp_path: Path,
+    trajectory_bundle: TrajectoryBundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score: PolicyScore,
+    training_bundle: tuple,
+) -> None:
+    _, _, training_config = training_bundle
+    champion_report = evaluation_report.model_copy(
+        update={
+            "total_net_return": 0.35,
+            "average_net_return": 0.07,
+        }
+    )
+    champion_score = policy_score.model_copy(
+        update={
+            "expected_return_score": 0.07,
+            "composite_rank": max(policy_score.composite_rank, 0.86),
+        }
+    )
+    store = LocalRegistryStore(tmp_path / "registry")
+    reward_hash = hash_payload(trajectory_bundle.reward_spec)
+    training_hash = hash_payload(training_config)
+    store.register_candidate(
+        policy_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    store.append_score(policy_artifact.policy_id, champion_score, champion_report)
+
+    champion_artifact_path = tmp_path / "champion-inference-artifact.json"
+    champion_artifact_path.write_text("{}", encoding="utf-8")
+    champion_paper_sim = _record_paper_sim_evidence(
+        store,
+        policy_artifact.policy_id,
+        tmp_path / "champion-paper-sim.md",
+    )
+    store.promote_candidate(
+        policy_artifact.policy_id,
+        evidence=_promotion_evidence(
+            policy_artifact,
+            deployment_artifact_path=str(champion_artifact_path),
+            paper_sim_evidence_id=champion_paper_sim.evidence_id,
+        ),
+    )
+
+    mismatched_artifact = policy_artifact.model_copy(
+        update={
+            "policy_id": f"{policy_artifact.policy_id}-mismatch",
+            "artifact_id": f"{policy_artifact.artifact_id}-mismatch",
+            "training_run_id": f"{policy_artifact.training_run_id}-mismatch",
+            "evaluation_surface_id": "different-surface",
+        },
+        deep=True,
+    )
+    mismatched_report = evaluation_report.model_copy(
+        update={
+            "policy_id": mismatched_artifact.policy_id,
+            "evaluation_id": f"{evaluation_report.evaluation_id}-mismatch",
+        }
+    )
+    mismatched_score = policy_score.model_copy(
+        update={
+            "policy_id": mismatched_artifact.policy_id,
+            "evaluation_id": mismatched_report.evaluation_id,
+        }
+    )
+    store.register_candidate(
+        mismatched_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    store.append_score(mismatched_artifact.policy_id, mismatched_score, mismatched_report)
+
+    with pytest.raises(ValueError, match="identical evaluation_surface_id"):
+        store.record_comparison_report(mismatched_artifact.policy_id)
+
+
 def test_promotion_gate_promotes_scored_candidate_with_complete_evidence(
     tmp_path: Path,
     trajectory_bundle: TrajectoryBundle,
@@ -627,27 +801,31 @@ def test_promotion_gate_requires_champion_comparison_evidence_for_challenger(
 
     challenger_artifact_path = tmp_path / "challenger-inference-artifact.json"
     challenger_artifact_path.write_text("{}", encoding="utf-8")
-    challenger_paper_sim = _record_paper_sim_evidence(
-        store,
-        challenger_artifact.policy_id,
-        tmp_path / "challenger-paper-sim.md",
-    )
+    challenger_paper_sim_report = tmp_path / "challenger-paper-sim.md"
+    challenger_paper_sim_report.write_text("# paper sim\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="comparison_report_id"):
+        store.record_paper_sim_evidence(
+            challenger_artifact.policy_id,
+            challenger_paper_sim_report,
+        )
 
     rejected = store.promote_candidate(
         challenger_artifact.policy_id,
         evidence=_promotion_evidence(
             challenger_artifact,
             deployment_artifact_path=str(challenger_artifact_path),
-            paper_sim_evidence_id=challenger_paper_sim.evidence_id,
+            paper_sim_evidence_id=champion_paper_sim.evidence_id,
         ),
     )
     assert rejected.decision == "reject"
     assert "comparison.report_attached" in rejected.failure_reasons
 
+    comparison_report = store.record_comparison_report(challenger_artifact.policy_id)
     linked_challenger_paper_sim = store.record_paper_sim_evidence(
         challenger_artifact.policy_id,
-        challenger_paper_sim.report_path,
-        comparison_report_id="comparison-001",
+        challenger_paper_sim_report,
+        comparison_report_id=comparison_report.comparison_report_id,
     )
     approved = store.promote_candidate(
         challenger_artifact.policy_id,
@@ -655,7 +833,7 @@ def test_promotion_gate_requires_champion_comparison_evidence_for_challenger(
             challenger_artifact,
             deployment_artifact_path=str(challenger_artifact_path),
             paper_sim_evidence_id=linked_challenger_paper_sim.evidence_id,
-            comparison_report_id="comparison-001",
+            comparison_report_id=comparison_report.comparison_report_id,
         ),
     )
     index = store.load_index()
@@ -706,9 +884,11 @@ def _record_paper_sim_evidence(
     store: LocalRegistryStore,
     policy_id: str,
     report_path: Path,
+    *,
+    comparison_report_id: str | None = None,
 ) -> PaperSimEvidenceRecord:
     report_path.write_text("# paper sim\n", encoding="utf-8")
-    return store.record_paper_sim_evidence(policy_id, report_path)
+    return store.record_paper_sim_evidence(policy_id, report_path, comparison_report_id=comparison_report_id)
 
 
 def _legacy_linear_artifact(policy_artifact: PolicyArtifact) -> PolicyArtifact:

@@ -21,7 +21,12 @@ from quantlab_ml.contracts import (
 from quantlab_ml.data import LocalFixtureSource, LocalParquetSource, S3CompactedSource
 from quantlab_ml.evaluation import EvaluationEngine
 from quantlab_ml.policies import PolicyRuntimeBridge
-from quantlab_ml.registry import LocalRegistryStore, audit_registry_continuity
+from quantlab_ml.registry import (
+    LocalRegistryStore,
+    audit_registry_continuity,
+    build_offline_evidence_pack,
+    render_offline_evidence_pack_markdown,
+)
 from quantlab_ml.scoring import PolicyScorer
 from quantlab_ml.training import LinearPolicyTrainer, TrainingConfig, TrainingSearchResult
 from quantlab_ml.trajectories import TrajectoryBuilder, TrajectoryDirectoryStore, TrajectoryStore
@@ -192,7 +197,10 @@ def record_paper_sim(
     registry_root: Path = typer.Option(..., help="Registry root."),
     policy_id: str = typer.Option(..., help="Registered policy id."),
     report: Path = typer.Option(..., exists=True, readable=True, help="Paper/sim report path."),
-    comparison_report_id: str | None = typer.Option(None, help="Optional comparison report id."),
+    comparison_report_id: str | None = typer.Option(
+        None,
+        help="Comparison report id. Required when recording paper/sim for a challenger against a current champion.",
+    ),
 ) -> None:
     registry = LocalRegistryStore(registry_root)
     evidence = registry.record_paper_sim_evidence(
@@ -201,6 +209,65 @@ def record_paper_sim(
         comparison_report_id=comparison_report_id,
     )
     typer.echo(f"recorded paper/sim evidence {evidence.evidence_id}")
+
+
+@app.command("compare-policies")
+def compare_policies(
+    registry_root: Path = typer.Option(..., help="Registry root."),
+    challenger_policy_id: str = typer.Option(..., help="Registered challenger policy id."),
+    champion_policy_id: str | None = typer.Option(None, help="Optional explicit champion policy id."),
+    output: Path | None = typer.Option(None, help="Optional comparison report output path."),
+) -> None:
+    registry = LocalRegistryStore(registry_root)
+    report = registry.record_comparison_report(
+        challenger_policy_id,
+        champion_policy_id=champion_policy_id,
+    )
+    if output is not None:
+        dump_model(output, report)
+        typer.echo(f"wrote comparison report to {output}")
+        return
+    typer.echo(f"recorded comparison report {report.comparison_report_id}")
+
+
+@app.command("build-offline-evidence-pack")
+def build_offline_evidence_pack_command(
+    registry_root: list[Path] = typer.Option(..., help="Registry root. Repeat for multiple retained surfaces."),
+    inspected_evidence_kind: list[str] = typer.Option(
+        ["external-retained-evidence"],
+        help=(
+            "Inspected evidence class. Repeat to align with registry roots, or pass once to apply to all roots. "
+            "Allowed values mirror audit-continuity."
+        ),
+    ),
+    authority_status: list[str] = typer.Option(
+        [],
+        help="Authority status per retained surface. Repeat to align with registry roots, or omit to use defaults.",
+    ),
+    output: Path = typer.Option(..., help="Offline evidence pack output path (.md or .json)."),
+) -> None:
+    inspected_evidence_kinds = _expand_option_values(
+        registry_root,
+        inspected_evidence_kind,
+        option_name="inspected_evidence_kind",
+    )
+    authority_statuses = _expand_option_values(
+        registry_root,
+        authority_status,
+        option_name="authority_status",
+        allow_empty=True,
+    )
+    pack = build_offline_evidence_pack(
+        registry_roots=registry_root,
+        inspected_evidence_kinds=inspected_evidence_kinds,
+        authority_statuses=authority_statuses,
+    )
+    if output.suffix.lower() == ".json":
+        dump_json_data(output, pack)
+    else:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(render_offline_evidence_pack_markdown(pack), encoding="utf-8")
+    typer.echo(f"wrote offline evidence pack to {output}")
 
 
 @app.command("audit-continuity")
@@ -255,6 +322,26 @@ def _resolve_source(
     if path.suffix == ".parquet" or path.is_dir():
         return LocalParquetSource(path)
     return LocalFixtureSource(path)
+
+
+def _expand_option_values(
+    registry_roots: list[Path],
+    raw_values: list[str],
+    *,
+    option_name: str,
+    allow_empty: bool = False,
+) -> list[str | None]:
+    if not raw_values:
+        if allow_empty:
+            return [None] * len(registry_roots)
+        raise typer.BadParameter(f"--{option_name.replace('_', '-')} is required")
+    if len(raw_values) == 1:
+        return raw_values * len(registry_roots)
+    if len(raw_values) != len(registry_roots):
+        raise typer.BadParameter(
+            f"--{option_name.replace('_', '-')} must be provided once or once per --registry-root"
+        )
+    return raw_values
 
 
 def _load_dataset_spec(path: Path) -> DatasetSpec:

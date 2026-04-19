@@ -23,6 +23,7 @@ Registry must support at least:
 
 - candidate policy record
 - evaluation record
+- comparison report record
 - paper/sim evidence record
 - champion / challenger state
 - lineage linkage
@@ -59,6 +60,7 @@ At minimum:
 - unscored policy cannot become champion
 - champion selection must be evidence-backed
 - challenger must be compared against champion on the same evaluation surface
+- challenger comparison must persist a first-class comparison report before paper/sim or promotion-readiness claims
 - stale or invalid challengers must not remain indistinguishable from active challengers
 
 ## 6. Score history

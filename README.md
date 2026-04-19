@@ -8,7 +8,7 @@ The repository materially implements the offline-first foundation-heavy half of 
 
 - canonical market-data, observation, reward, split, artifact, registry, and execution-intent contracts for the declared market scope
 - trajectory building plus offline training, evaluation, scoring, and policy export flows
-- registry lineage, promotion discipline, and continuity-audit tooling for temporary compatibility windows
+- registry lineage, comparison-report, promotion discipline, continuity-audit, and offline evidence-pack tooling for temporary compatibility windows
 - governance docs, runbooks, and repo-tracked truth surfaces for controlled offline work
 
 This is not a notebook sandbox, but it is also not yet a live-operating trading system.
@@ -22,6 +22,7 @@ QuantLab is currently `offline operational but not professionally closed`.
 - Current HEAD does not include repo-tracked QL-021 retained bundles under `outputs/`; any such bundle must be treated as external retained evidence until its provenance and authority are confirmed.
 - Historical local authority discovery was blocked in this workspace baseline, but fresh authoritative evidence was produced by a controlled rerun on April 18, 2026 at `/workspace/runs/ql016-ql004-authoritative-20260418`.
 - NumPy and legacy `linear-policy-v1` continuity windows are now retired on that authoritative external scope.
+- Current HEAD can now persist registry-backed comparison reports and reusable offline evidence-pack summaries, but those support surfaces do not by themselves create broader offline closure evidence.
 - Offline closure is still incomplete because broader evidence packaging, multi-window proof, and champion/challenger comparison discipline remain partial.
 - In this workspace, the next active repo batch is broader offline evidence expansion rather than more local historical-root discovery.
 - Until those blockers are cleared or explicitly frozen, live/runtime buildout is a planned next phase, not the current main focus.
@@ -90,6 +91,9 @@ CLI surfaces:
 - `quantlab-ml evaluate`
 - `quantlab-ml score`
 - `quantlab-ml export-policy`
+- `quantlab-ml compare-policies`
+- `quantlab-ml record-paper-sim`
+- `quantlab-ml build-offline-evidence-pack`
 - `quantlab-ml inspect-s3-compact --env-file .env`
 - `quantlab-ml audit-continuity --registry-root outputs/registry`
 

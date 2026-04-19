@@ -52,6 +52,7 @@ from quantlab_ml.contracts.policies import (
     StrictRuntimeContract,
 )
 from quantlab_ml.contracts.registry import (
+    ComparisonReport,
     ContinuityAuditSummary,
     ContinuityCloseoutRecord,
     CoverageStats,
@@ -137,6 +138,7 @@ __all__ = [
     "RuntimeMetadata",
     "StrictRuntimeContract",
     # registry
+    "ComparisonReport",
     "ContinuityAuditSummary",
     "ContinuityCloseoutRecord",
     "CoverageStats",

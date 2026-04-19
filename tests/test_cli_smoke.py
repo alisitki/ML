@@ -7,7 +7,7 @@ import shutil
 from typer.testing import CliRunner
 
 from quantlab_ml.cli.app import app
-from quantlab_ml.common import load_model
+from quantlab_ml.common import hash_payload, load_model
 from quantlab_ml.contracts import InferenceArtifactExport, PolicyArtifact, PromotionEvidence, ReproducibilityMetadata
 from quantlab_ml.evaluation import EvaluationEngine
 from quantlab_ml.policies import PolicyRuntimeBridge
@@ -390,6 +390,210 @@ def test_cli_audit_continuity_blocks_empty_registry_scope(tmp_path: Path) -> Non
     assert audit["blocking_reasons"] == ["no_active_records_in_registry_scope"]
     assert audit["ready_to_close_numpy_continuity_window"] is False
     assert audit["ready_to_retire_legacy_compat_window"] is False
+
+
+def test_cli_compare_policies_and_build_offline_evidence_pack(
+    tmp_path: Path,
+    trajectory_bundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score,
+    training_bundle: tuple,
+) -> None:
+    runner = CliRunner()
+    _, _, training_config = training_bundle
+    reward_hash = hash_payload(trajectory_bundle.reward_spec)
+    training_hash = hash_payload(training_config)
+    registry_root = tmp_path / "registry"
+    registry = LocalRegistryStore(registry_root)
+
+    champion_report = evaluation_report.model_copy(
+        update={
+            "total_net_return": 0.3,
+            "average_net_return": 0.06,
+        }
+    )
+    champion_score = policy_score.model_copy(
+        update={
+            "expected_return_score": 0.06,
+            "composite_rank": max(policy_score.composite_rank, 0.84),
+        }
+    )
+    registry.register_candidate(
+        policy_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    registry.append_score(policy_artifact.policy_id, champion_score, champion_report)
+    champion_export = tmp_path / "champion-inference-artifact.json"
+    champion_export.write_text("{}", encoding="utf-8")
+    champion_paper_sim = tmp_path / "champion-paper-sim.md"
+    champion_paper_sim.write_text("# champion paper sim\n", encoding="utf-8")
+    champion_evidence = registry.record_paper_sim_evidence(policy_artifact.policy_id, champion_paper_sim)
+    registry.promote_candidate(
+        policy_artifact.policy_id,
+        evidence=PromotionEvidence(
+            preprocessing_fit_on_train_only=True,
+            no_future_features=True,
+            no_future_masks=True,
+            no_future_reward_construction=True,
+            no_cross_split_contamination=True,
+            final_untouched_test_unused_for_selection=True,
+            realistic_execution_assumptions=True,
+            superiority_not_one_lucky_slice_only=True,
+            comparison_report_id=None,
+            paper_sim_evidence_id=champion_evidence.evidence_id,
+            deployment_artifact_path=str(champion_export),
+            runtime_uses_inference_artifact_only=True,
+            no_live_learning=True,
+            executor_boundary_respected=True,
+            selector_boundary_respected=True,
+            reproducibility=ReproducibilityMetadata(
+                data_snapshot_id=policy_artifact.training_snapshot_id,
+                code_commit_hash=policy_artifact.code_commit_hash,
+                config_hash=policy_artifact.training_config_hash,
+                seed=7,
+                runtime_stack={"python": "3.12", "framework": "pytorch"},
+                reproducible_within_tolerance=True,
+            ),
+        ),
+    )
+
+    challenger_artifact = policy_artifact.model_copy(
+        update={
+            "policy_id": f"{policy_artifact.policy_id}-challenger",
+            "artifact_id": f"{policy_artifact.artifact_id}-challenger",
+            "training_run_id": f"{policy_artifact.training_run_id}-challenger",
+        },
+        deep=True,
+    )
+    challenger_report = evaluation_report.model_copy(
+        update={
+            "policy_id": challenger_artifact.policy_id,
+            "evaluation_id": f"{evaluation_report.evaluation_id}-challenger",
+            "total_net_return": 0.7,
+            "average_net_return": 0.14,
+        }
+    )
+    challenger_score = policy_score.model_copy(
+        update={
+            "policy_id": challenger_artifact.policy_id,
+            "evaluation_id": challenger_report.evaluation_id,
+            "expected_return_score": 0.14,
+            "composite_rank": max(policy_score.composite_rank, 0.94),
+        }
+    )
+    registry.register_candidate(
+        challenger_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    registry.append_score(challenger_artifact.policy_id, challenger_score, challenger_report)
+
+    comparison_output = tmp_path / "comparison-report.json"
+    result = runner.invoke(
+        app,
+        [
+            "compare-policies",
+            "--registry-root",
+            str(registry_root),
+            "--challenger-policy-id",
+            challenger_artifact.policy_id,
+            "--output",
+            str(comparison_output),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    comparison_payload = json.loads(comparison_output.read_text(encoding="utf-8"))
+    comparison_report_id = comparison_payload["comparison_report_id"]
+
+    challenger_paper_sim = tmp_path / "challenger-paper-sim.md"
+    challenger_paper_sim.write_text("# challenger paper sim\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        [
+            "record-paper-sim",
+            "--registry-root",
+            str(registry_root),
+            "--policy-id",
+            challenger_artifact.policy_id,
+            "--report",
+            str(challenger_paper_sim),
+            "--comparison-report-id",
+            comparison_report_id,
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    second_registry_root = tmp_path / "registry-second"
+    second_registry = LocalRegistryStore(second_registry_root)
+    second_bundle = trajectory_bundle.model_copy(
+        update={
+            "dataset_spec": trajectory_bundle.dataset_spec.model_copy(update={"slice_id": "fixture-slice-second"}),
+        },
+        deep=True,
+    )
+    second_artifact = challenger_artifact.model_copy(
+        update={
+            "policy_id": f"{challenger_artifact.policy_id}-second",
+            "artifact_id": f"{challenger_artifact.artifact_id}-second",
+            "training_run_id": f"{challenger_artifact.training_run_id}-second",
+        },
+        deep=True,
+    )
+    second_report = challenger_report.model_copy(
+        update={
+            "policy_id": second_artifact.policy_id,
+            "evaluation_id": f"{challenger_report.evaluation_id}-second",
+        }
+    )
+    second_score = challenger_score.model_copy(
+        update={
+            "policy_id": second_artifact.policy_id,
+            "evaluation_id": second_report.evaluation_id,
+        }
+    )
+    second_registry.register_candidate(
+        second_artifact,
+        second_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    second_registry.append_score(second_artifact.policy_id, second_score, second_report)
+
+    evidence_pack_path = tmp_path / "offline-evidence-pack.json"
+    result = runner.invoke(
+        app,
+        [
+            "build-offline-evidence-pack",
+            "--registry-root",
+            str(registry_root),
+            "--registry-root",
+            str(second_registry_root),
+            "--inspected-evidence-kind",
+            "external-retained-evidence",
+            "--output",
+            str(evidence_pack_path),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    pack = json.loads(evidence_pack_path.read_text(encoding="utf-8"))
+    assert pack["source_count"] == 2
+    assert challenger_artifact.training_snapshot_id in pack["grouped_by_training_snapshot"]
+    assert challenger_artifact.evaluation_surface_id in pack["grouped_by_evaluation_surface"]
+    assert comparison_report_id in {
+        source_record["comparison_report_id"]
+        for source in pack["sources"]
+        for source_record in source["policy_records"]
+        if source_record["comparison_report_id"] is not None
+    }
+    assert any(
+        source["comparison_report_count"] >= 1 and source["paper_sim_evidence_count"] >= 1
+        for source in pack["sources"]
+    )
 
 
 def test_cli_evaluate_directory_uses_tensor_cache_api(

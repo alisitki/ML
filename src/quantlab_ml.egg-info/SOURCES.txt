@@ -37,6 +37,8 @@ src/quantlab_ml/policies/__init__.py
 src/quantlab_ml/policies/runtime.py
 src/quantlab_ml/registry/__init__.py
 src/quantlab_ml/registry/audit.py
+src/quantlab_ml/registry/authority_discovery.py
+src/quantlab_ml/registry/evidence_pack.py
 src/quantlab_ml/registry/store.py
 src/quantlab_ml/rewards/__init__.py
 src/quantlab_ml/rewards/engine.py
@@ -55,6 +57,7 @@ src/quantlab_ml/trajectories/storage.py
 src/quantlab_ml/trajectories/streaming_store.py
 src/quantlab_ml/trajectories/tensor_cache.py
 tests/test_cli_smoke.py
+tests/test_continuity_authority_discovery.py
 tests/test_continuity_closeout.py
 tests/test_contracts.py
 tests/test_data_contract.py

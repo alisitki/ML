@@ -56,6 +56,9 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "configs/data/s3-current.yaml" in readme
     assert "configs/data/controlled-remote-day.yaml" in readme
     assert "configs/training/production.yaml" in readme
+    assert "compare-policies" in readme
+    assert "record-paper-sim" in readme
+    assert "build-offline-evidence-pack" in readme
     assert "inspect-s3-compact" in readme
     assert "audit-continuity" in readme
     assert "docs/CANONICAL_MARKET_DATA_CONTRACT.md" in readme
@@ -73,6 +76,8 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "fresh authoritative evidence" in readme.lower()
     assert "broader offline evidence expansion" in readme.lower()
     assert "historical local authority-discovery loop" in readme.lower()
+    assert "registry-backed comparison reports" in readme.lower()
+    assert "offline evidence-pack summaries" in readme.lower()
 
     assert "## Current phase" in project_state
     assert "## Current verdict" in project_state
@@ -86,11 +91,14 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "historical authoritative continuity roots are unavailable in this workspace" in project_state.lower()
     assert "ql-031" in project_state.lower()
     assert "single active next batch in this workspace" in project_state.lower()
+    assert "comparison-report and offline evidence-pack tooling exist" in project_state.lower()
 
     assert "ql-016" in backlog.lower()
     assert "ql-031" in backlog.lower()
     assert "single active next batch in this workspace" in backlog.lower()
     assert "fresh authoritative evidence" in backlog.lower()
+    assert "compare-policies" in backlog
+    assert "build-offline-evidence-pack" in backlog
     assert "discover_continuity_authority.py --search-root" not in backlog
 
     assert "## Target runtime architecture" in runtime_model
@@ -151,6 +159,8 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
 
     assert "retained evidence" in remote_gpu_runbook.lower()
     assert "audit-continuity" in remote_gpu_runbook
+    assert "quantlab-ml compare-policies" in (repo_root / "docs" / "EVALUATION_RUNBOOK.md").read_text(encoding="utf-8")
+    assert "comparison report record" in (repo_root / "docs" / "REGISTRY_SCHEMA.md").read_text(encoding="utf-8")
 
     assert "only a confirmed external active registry root" in continuity_authority_decision.lower()
     assert "remains `external_retained_evidence` only" in continuity_authority_decision

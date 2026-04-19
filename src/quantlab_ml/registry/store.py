@@ -6,6 +6,7 @@ from typing import Literal
 
 from quantlab_ml.common import dump_model, hash_payload, load_model, utcnow
 from quantlab_ml.contracts import (
+    ComparisonReport,
     CoverageStats,
     EvaluationReport,
     PaperSimEvidenceRecord,
@@ -34,6 +35,7 @@ class LocalRegistryStore:
         self.records_dir = root / "records"
         self.scores_dir = root / "scores"
         self.evaluations_dir = root / "evaluations"
+        self.comparisons_dir = root / "comparisons"
         self.paper_sim_dir = root / "paper_sim"
         self.promotions_dir = root / "promotions"
         for directory in (
@@ -42,6 +44,7 @@ class LocalRegistryStore:
             self.records_dir,
             self.scores_dir,
             self.evaluations_dir,
+            self.comparisons_dir,
             self.paper_sim_dir,
             self.promotions_dir,
         ):
@@ -226,6 +229,10 @@ class LocalRegistryStore:
     ) -> PaperSimEvidenceRecord:
         record = self._require_record(policy_id)
         evaluation_report = self._require_evaluation_report(record)
+        comparison_report = self._validate_paper_sim_comparison_linkage(
+            record=record,
+            comparison_report_id=comparison_report_id,
+        )
         resolved_report_path = Path(report_path)
         if not resolved_report_path.exists():
             raise FileNotFoundError(f"paper/sim report not found at {resolved_report_path}")
@@ -251,8 +258,8 @@ class LocalRegistryStore:
 
         record.paper_sim_evidence_id = evidence_record.evidence_id
         record.paper_sim_report_path = evidence_record.report_path
-        if comparison_report_id is not None:
-            record.comparison_report_id = comparison_report_id
+        if comparison_report is not None:
+            record.comparison_report_id = comparison_report.comparison_report_id
         record.updated_at = utcnow()
         dump_model(self.records_dir / f"{policy_id}.json", record)
         logger.info(
@@ -262,6 +269,75 @@ class LocalRegistryStore:
             comparison_report_id or "",
         )
         return evidence_record
+
+    def record_comparison_report(
+        self,
+        challenger_policy_id: str,
+        *,
+        champion_policy_id: str | None = None,
+    ) -> ComparisonReport:
+        challenger = self._require_record(challenger_policy_id)
+        current_index = self.load_index()
+        resolved_champion_policy_id = champion_policy_id or current_index.champion_policy_id
+        if resolved_champion_policy_id is None:
+            raise ValueError("comparison requires a current champion or an explicit champion_policy_id")
+        if resolved_champion_policy_id == challenger_policy_id:
+            raise ValueError("comparison requires distinct challenger and champion policies")
+
+        champion = self._require_record(resolved_champion_policy_id)
+        if champion.status != "champion":
+            raise ValueError("comparison requires the comparison target to be the current champion")
+        if not challenger.score_history:
+            raise ValueError("comparison requires a scored challenger policy")
+        if not champion.score_history:
+            raise ValueError("comparison requires a scored champion policy")
+        if challenger.evaluation_surface_id != champion.evaluation_surface_id:
+            raise ValueError("comparison requires identical evaluation_surface_id for challenger and champion")
+
+        challenger_evaluation = self._require_evaluation_report(challenger)
+        champion_evaluation = self._require_evaluation_report(champion)
+        challenger_score = challenger.score_history[-1]
+        champion_score = champion.score_history[-1]
+        comparison_report_id = _comparison_report_id(
+            challenger_policy_id=challenger.policy_id,
+            challenger_evaluation_id=challenger_evaluation.evaluation_id,
+            champion_policy_id=champion.policy_id,
+            champion_evaluation_id=champion_evaluation.evaluation_id,
+            evaluation_surface_id=challenger.evaluation_surface_id,
+        )
+        comparison_report = ComparisonReport(
+            comparison_report_id=comparison_report_id,
+            created_at=utcnow(),
+            challenger_policy_id=challenger.policy_id,
+            challenger_artifact_id=challenger.artifact_id,
+            challenger_evaluation_id=challenger_evaluation.evaluation_id,
+            challenger_training_snapshot_id=challenger.training_snapshot_id,
+            champion_policy_id=champion.policy_id,
+            champion_artifact_id=champion.artifact_id,
+            champion_evaluation_id=champion_evaluation.evaluation_id,
+            champion_training_snapshot_id=champion.training_snapshot_id,
+            evaluation_surface_id=challenger.evaluation_surface_id,
+            challenger_active_date_range=challenger_evaluation.active_date_range,
+            champion_active_date_range=champion_evaluation.active_date_range,
+            challenger_total_net_return=challenger_evaluation.total_net_return,
+            champion_total_net_return=champion_evaluation.total_net_return,
+            total_net_return_delta=challenger_evaluation.total_net_return - champion_evaluation.total_net_return,
+            challenger_composite_rank=challenger_score.composite_rank,
+            champion_composite_rank=champion_score.composite_rank,
+            composite_rank_delta=challenger_score.composite_rank - champion_score.composite_rank,
+            challenger_beats_champion=challenger_evaluation.total_net_return > champion_evaluation.total_net_return,
+        )
+        dump_model(self.comparisons_dir / f"{comparison_report_id}.json", comparison_report)
+        challenger.comparison_report_id = comparison_report.comparison_report_id
+        challenger.updated_at = utcnow()
+        dump_model(self.records_dir / f"{challenger.policy_id}.json", challenger)
+        logger.info(
+            "registry_comparison_recorded challenger_policy_id=%s champion_policy_id=%s comparison_report_id=%s",
+            challenger.policy_id,
+            champion.policy_id,
+            comparison_report.comparison_report_id,
+        )
+        return comparison_report
 
     def promote_candidate(
         self,
@@ -274,8 +350,8 @@ class LocalRegistryStore:
         current_champion = (
             self.get_record(current_index.champion_policy_id) if current_index.champion_policy_id is not None else None
         )
-        champion_report = self._maybe_load_report(current_champion) if current_champion is not None else None
         paper_sim_evidence = self.get_paper_sim_evidence(evidence.paper_sim_evidence_id)
+        comparison_report = self.get_comparison_report(evidence.comparison_report_id)
 
         checks: dict[str, bool] = {}
         failure_reasons: list[str] = []
@@ -323,19 +399,23 @@ class LocalRegistryStore:
             checks["comparison.not_one_lucky_slice_only"] = True
             checks["comparison.paper_sim_linkage_consistent"] = True
         else:
+            report_matches = (
+                comparison_report is not None
+                and comparison_report.challenger_policy_id == record.policy_id
+                and comparison_report.champion_policy_id == current_champion.policy_id
+            )
             checks["comparison.same_surface"] = (
-                record.evaluation_surface_id == current_champion.evaluation_surface_id
+                report_matches
+                and comparison_report.same_surface
+                and comparison_report.evaluation_surface_id == record.evaluation_surface_id
             )
-            checks["comparison.report_attached"] = evidence.comparison_report_id is not None
+            checks["comparison.report_attached"] = report_matches
             checks["comparison.not_one_lucky_slice_only"] = evidence.superiority_not_one_lucky_slice_only
-            checks["comparison.beats_champion"] = (
-                champion_report is not None
-                and evaluation_report.total_net_return > champion_report.total_net_return
-            )
+            checks["comparison.beats_champion"] = report_matches and comparison_report.challenger_beats_champion
             checks["comparison.paper_sim_linkage_consistent"] = (
                 paper_sim_evidence is not None
-                and evidence.comparison_report_id is not None
-                and paper_sim_evidence.comparison_report_id == evidence.comparison_report_id
+                and report_matches
+                and paper_sim_evidence.comparison_report_id == comparison_report.comparison_report_id
             )
 
         repro = evidence.reproducibility
@@ -446,8 +526,22 @@ class LocalRegistryStore:
             return None
         return load_model(path, PaperSimEvidenceRecord)
 
+    def get_comparison_report(self, comparison_report_id: str | None) -> ComparisonReport | None:
+        if comparison_report_id is None:
+            return None
+        path = self.comparisons_dir / f"{comparison_report_id}.json"
+        if not path.exists():
+            return None
+        return load_model(path, ComparisonReport)
+
     def list_records(self) -> list[RegistryRecord]:
         return [load_model(path, RegistryRecord) for path in sorted(self.records_dir.glob("*.json"))]
+
+    def list_comparison_reports(self) -> list[ComparisonReport]:
+        return [load_model(path, ComparisonReport) for path in sorted(self.comparisons_dir.glob("*.json"))]
+
+    def list_paper_sim_evidence(self) -> list[PaperSimEvidenceRecord]:
+        return [load_model(path, PaperSimEvidenceRecord) for path in sorted(self.paper_sim_dir.glob("*.json"))]
 
     def load_index(self) -> RegistryIndex:
         path = self.root / "index.json"
@@ -507,6 +601,37 @@ class LocalRegistryStore:
         if not path.exists():
             return None
         return load_model(path, EvaluationReport)
+
+    def _validate_paper_sim_comparison_linkage(
+        self,
+        *,
+        record: RegistryRecord,
+        comparison_report_id: str | None,
+    ) -> ComparisonReport | None:
+        current_index = self.load_index()
+        current_champion = (
+            self.get_record(current_index.champion_policy_id) if current_index.champion_policy_id is not None else None
+        )
+        comparison_report = self.get_comparison_report(comparison_report_id)
+        if comparison_report_id is not None and comparison_report is None:
+            raise FileNotFoundError(f"comparison report not found for id {comparison_report_id}")
+        if current_champion is not None and current_champion.policy_id != record.policy_id:
+            if comparison_report is None:
+                raise ValueError(
+                    "challenger paper/sim recording requires comparison_report_id linked to the current champion"
+                )
+            if comparison_report.challenger_policy_id != record.policy_id:
+                raise ValueError("comparison report challenger policy does not match the requested paper/sim policy")
+            if comparison_report.champion_policy_id != current_champion.policy_id:
+                raise ValueError("comparison report champion policy does not match the current registry champion")
+            if comparison_report.evaluation_surface_id != record.evaluation_surface_id:
+                raise ValueError("comparison report evaluation surface does not match the policy evaluation surface")
+        elif comparison_report is not None and record.policy_id not in {
+            comparison_report.challenger_policy_id,
+            comparison_report.champion_policy_id,
+        }:
+            raise ValueError("comparison report is not linked to the requested paper/sim policy")
+        return comparison_report
 
 
 def _coverage_from_bundle(bundle: TrajectoryBundle) -> CoverageStats:
@@ -657,6 +782,24 @@ def _paper_sim_evidence_id(
         "comparison_report_id": comparison_report_id,
     }
     return f"paper-sim-{hash_payload(payload)[:12]}"
+
+
+def _comparison_report_id(
+    *,
+    challenger_policy_id: str,
+    challenger_evaluation_id: str,
+    champion_policy_id: str,
+    champion_evaluation_id: str,
+    evaluation_surface_id: str,
+) -> str:
+    payload = {
+        "challenger_policy_id": challenger_policy_id,
+        "challenger_evaluation_id": challenger_evaluation_id,
+        "champion_policy_id": champion_policy_id,
+        "champion_evaluation_id": champion_evaluation_id,
+        "evaluation_surface_id": evaluation_surface_id,
+    }
+    return f"comparison-{hash_payload(payload)[:12]}"
 
 
 def _report_format(report_path: Path) -> Literal["markdown", "json", "text", "unknown"]:
