@@ -40,6 +40,7 @@ from quantlab_ml.contracts import (
     VenueExecutionRef,
     WalkForwardFold,
 )
+from quantlab_ml.contracts.learning_surface import _CANONICAL_SPLIT_VERSION
 from quantlab_ml.rewards import RewardEngine
 from quantlab_ml.runtime_contract import expected_feature_dim
 from quantlab_ml.trajectories.tensor_cache import (
@@ -472,7 +473,7 @@ class TrajectoryBuilder:
             embargo_width_steps=embargo_width_steps,
         )
         return SplitArtifact(
-            split_version="split_v1_walkforward",
+            split_version=_CANONICAL_SPLIT_VERSION,
             purge_width_steps=purge_width_steps,
             embargo_width_steps=embargo_width_steps,
             fold_generation_config=self.dataset_spec.walkforward,

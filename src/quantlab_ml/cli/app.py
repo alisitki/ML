@@ -27,6 +27,7 @@ from quantlab_ml.registry import (
     build_offline_evidence_pack,
     render_offline_evidence_pack_markdown,
 )
+from quantlab_ml.registry.analysis import preflight_same_root_comparison
 from quantlab_ml.scoring import PolicyScorer
 from quantlab_ml.training import LinearPolicyTrainer, TrainingConfig, TrainingSearchResult
 from quantlab_ml.trajectories import TrajectoryBuilder, TrajectoryDirectoryStore, TrajectoryStore
@@ -218,6 +219,15 @@ def compare_policies(
     champion_policy_id: str | None = typer.Option(None, help="Optional explicit champion policy id."),
     output: Path | None = typer.Option(None, help="Optional comparison report output path."),
 ) -> None:
+    preflight = preflight_same_root_comparison(
+        registry_root=registry_root,
+        challenger_policy_id=challenger_policy_id,
+    )
+    if not preflight["allowed"]:
+        raise typer.BadParameter(
+            "compare-policies requires a same-root champion and scored same-surface challenger; "
+            f"blocking_reasons={', '.join(preflight['blocking_reasons'])}"
+        )
     registry = LocalRegistryStore(registry_root)
     report = registry.record_comparison_report(
         challenger_policy_id,

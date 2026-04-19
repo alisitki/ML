@@ -32,6 +32,7 @@ from quantlab_ml.contracts import (
     TrajectoryStep,
     WalkForwardFold,
 )
+from quantlab_ml.contracts.policies import build_evaluation_surface_id
 from quantlab_ml.models.features import observation_feature_vector
 from quantlab_ml.models.linear_policy import LinearPolicyParameters
 from quantlab_ml.runtime_contract import build_strict_runtime_contract
@@ -767,8 +768,10 @@ class LinearPolicyTrainer:
         )
         policy_id = f"policy-{artifact_identity[:12]}"
         artifact_id = f"artifact-{artifact_identity[:12]}"
-        evaluation_surface_id = (
-            f"{bundle.dataset_spec.slice_id}:{bundle.split_artifact.split_version}:{bundle.reward_spec.reward_version}"
+        evaluation_surface_id = build_evaluation_surface_id(
+            slice_id=bundle.dataset_spec.slice_id,
+            split_version=bundle.split_artifact.split_version,
+            reward_version=bundle.reward_spec.reward_version,
         )
         target_asset = bundle.dataset_spec.symbols[0] if len(bundle.dataset_spec.symbols) == 1 else DYNAMIC_TARGET_ASSET
         required_context: dict[str, object] = {}
@@ -2186,10 +2189,10 @@ class LinearPolicyTrainer:
         )
         policy_id = f"policy-{artifact_identity[:12]}"
         artifact_id = f"artifact-{artifact_identity[:12]}"
-        evaluation_surface_id = (
-            f"{manifest.dataset_spec.slice_id}"
-            f":{manifest.split_artifact.split_version}"
-            f":{manifest.reward_spec.reward_version}"
+        evaluation_surface_id = build_evaluation_surface_id(
+            slice_id=manifest.dataset_spec.slice_id,
+            split_version=manifest.split_artifact.split_version,
+            reward_version=manifest.reward_spec.reward_version,
         )
         target_asset = (
             manifest.dataset_spec.symbols[0]

@@ -60,7 +60,12 @@ Result:
   - current HEAD now also has registry-backed comparison-report and offline evidence-pack tooling, but the retained proof surfaces currently available still contain only narrow same-surface proof
   - broader multi-window or multi-slice evidence remains incomplete even after the comparison and paper/sim linkage surfaces became first-class
 - next_action:
-  - use `compare-policies`, `record-paper-sim`, and `build-offline-evidence-pack` on currently available retained surfaces only
+  - build a QL-031 blocker-inventory artifact from currently visible registry-backed retained surfaces before claiming broader closure evidence
+  - import non-registry retained runs only as analysis-only diagnostic roots; they are never promotion or comparison registries
+  - search for additional external retained surfaces before scheduling any rerun
+  - open `compare-policies` only when a single root already contains a current champion plus a scored same-surface challenger
+  - use `build-offline-evidence-pack` only after blocker inventory is explicit and only on retained surfaces whose evidence class and authority status are still stated directly
+  - run distinct-surface preflight before any minimal controlled rerun fallback; if `evaluation_surface_id`, `slice_id`, or `train_window` collide with existing surfaces, stop
   - expand beyond the current same-surface proof without claiming authoritative continuity closure
   - produce broader multi-window or multi-slice offline evidence without claiming authoritative continuity closure
   - keep evidence class and authority status explicit in every retained-surface summary

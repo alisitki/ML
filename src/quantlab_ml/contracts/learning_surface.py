@@ -13,6 +13,7 @@ from quantlab_ml.contracts.rewards import RewardContext, RewardEventSpec, Reward
 
 OBSERVATION_SCHEMA_VERSION = "observation_schema_v1"
 DERIVED_SURFACE_CONTRACT_VERSION = "derived_surface_v1"
+_CANONICAL_SPLIT_VERSION = "split_v1_walkforward"
 
 
 # ---------------------------------------------------------------------------
@@ -446,8 +447,8 @@ class SplitArtifact(QuantBaseModel):
 
     @model_validator(mode="after")
     def validate_folds(self) -> "SplitArtifact":
-        if self.split_version != "split_v1_walkforward":
-            raise ValueError("split artifact must use split_v1_walkforward")
+        if self.split_version != _CANONICAL_SPLIT_VERSION:
+            raise ValueError(f"split artifact must use {_CANONICAL_SPLIT_VERSION}")
         if not self.folds:
             raise ValueError("split artifact must contain at least one walk-forward fold")
         return self

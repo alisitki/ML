@@ -18,6 +18,15 @@ DERIVED_CHANNEL_TARGET_PLACEHOLDER = "__target_symbol__"
 DYNAMIC_TARGET_ASSET = "__dynamic_target_symbol__"
 
 
+def build_evaluation_surface_id(
+    *,
+    slice_id: str,
+    split_version: str,
+    reward_version: str,
+) -> str:
+    return f"{slice_id}:{split_version}:{reward_version}"
+
+
 class OpaquePolicyPayload(QuantBaseModel):
     runtime_adapter: str
     payload_format: str = "json"
