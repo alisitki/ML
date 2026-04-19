@@ -30,7 +30,7 @@ DEFAULT_DIAGNOSTIC_BUNDLE_ROOTS = [
     Path("outputs/ql021-controlled-remote-rerun-20260417-build-fresh"),
 ]
 DEFAULT_OUTPUT_ROOT = Path("outputs/analysis/ql031")
-DEFAULT_RERUN_DATA_CONFIG = Path("configs/data/controlled-remote-day.yaml")
+DEFAULT_RERUN_DATA_CONFIG = Path("configs/data/ql031-controlled-remote-day-20260126.yaml")
 DEFAULT_RERUN_REWARD_CONFIG = Path("configs/reward/default.yaml")
 
 

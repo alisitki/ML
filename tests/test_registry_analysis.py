@@ -10,8 +10,9 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from quantlab_ml.cli.app import app
-from quantlab_ml.common import dump_model, hash_payload
+from quantlab_ml.common import dump_model, hash_payload, load_yaml
 from quantlab_ml.contracts import (
+    DatasetSpec,
     PolicyArtifact,
     PolicyScore,
     PromotionEvidence,
@@ -303,6 +304,111 @@ def test_preflight_distinct_surface_fails_closed_on_collisions_and_uses_shared_h
     assert distinct["collisions"] == []
 
 
+def test_ql031_distinct_rerun_config_preserves_market_scope_and_shifts_surface(repo_root: Path) -> None:
+    baseline = DatasetSpec.model_validate(load_yaml(repo_root / "configs" / "data" / "controlled-remote-day.yaml")["dataset"])
+    fallback = DatasetSpec.model_validate(
+        load_yaml(repo_root / "configs" / "data" / "ql031-controlled-remote-day-20260126.yaml")["dataset"]
+    )
+
+    baseline_payload = baseline.model_dump(mode="json")
+    fallback_payload = fallback.model_dump(mode="json")
+    for key in ("slice_id", "train_range", "validation_range", "final_untouched_test_range"):
+        baseline_payload.pop(key)
+        fallback_payload.pop(key)
+
+    assert fallback_payload == baseline_payload
+    assert fallback.slice_id == "controlled-remote-example-20260126"
+    assert fallback.train_range.start == baseline.train_range.start + timedelta(days=1)
+    assert fallback.train_range.end == baseline.train_range.end + timedelta(days=1)
+    assert fallback.validation_range.start == baseline.validation_range.start + timedelta(days=1)
+    assert fallback.validation_range.end == baseline.validation_range.end + timedelta(days=1)
+    assert fallback.final_untouched_test_range.start == baseline.final_untouched_test_range.start + timedelta(days=1)
+    assert fallback.final_untouched_test_range.end == baseline.final_untouched_test_range.end + timedelta(days=1)
+
+
+def test_ql031_distinct_rerun_config_preflight_passes_controlled_remote_collision_shape(
+    repo_root: Path,
+    tmp_path: Path,
+    trajectory_bundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score: PolicyScore,
+    training_bundle: tuple,
+    reward_spec,
+) -> None:
+    _, _, training_config = training_bundle
+    registry_root = tmp_path / "registry"
+    controlled_remote_train_range = TimeRange(
+        start="2026-01-25T00:00:00Z",
+        end="2026-01-25T15:59:00Z",
+    )
+    controlled_remote_bundle = trajectory_bundle.model_copy(
+        update={
+            "dataset_spec": trajectory_bundle.dataset_spec.model_copy(
+                update={
+                    "dataset_hash": "s3-controlled-remote-v1",
+                    "slice_id": "controlled-remote-example-20260125",
+                    "train_range": controlled_remote_train_range,
+                    "validation_range": TimeRange(
+                        start="2026-01-25T16:00:00Z",
+                        end="2026-01-25T19:59:00Z",
+                    ),
+                    "final_untouched_test_range": TimeRange(
+                        start="2026-01-25T20:00:00Z",
+                        end="2026-01-25T23:59:00Z",
+                    ),
+                }
+            ),
+        },
+        deep=True,
+    )
+    controlled_remote_artifact = policy_artifact.model_copy(
+        update={
+            "policy_id": f"{policy_artifact.policy_id}-controlled-remote",
+            "artifact_id": f"{policy_artifact.artifact_id}-controlled-remote",
+            "training_run_id": f"{policy_artifact.training_run_id}-controlled-remote",
+            "training_snapshot_id": "s3-controlled-remote-v1:controlled-remote-example-20260125",
+            "evaluation_surface_id": "controlled-remote-example-20260125:split_v1_walkforward:reward_v1",
+        },
+        deep=True,
+    )
+    controlled_remote_report = evaluation_report.model_copy(
+        update={
+            "policy_id": controlled_remote_artifact.policy_id,
+            "evaluation_id": f"{evaluation_report.evaluation_id}-controlled-remote",
+        }
+    )
+    controlled_remote_score = policy_score.model_copy(
+        update={
+            "policy_id": controlled_remote_artifact.policy_id,
+            "evaluation_id": controlled_remote_report.evaluation_id,
+        }
+    )
+    store = LocalRegistryStore(registry_root)
+    store.register_candidate(
+        controlled_remote_artifact,
+        controlled_remote_bundle,
+        reward_config_hash=hash_payload(trajectory_bundle.reward_spec),
+        training_config_hash=hash_payload(training_config),
+    )
+    store.append_score(controlled_remote_artifact.policy_id, controlled_remote_score, controlled_remote_report)
+
+    fallback_dataset = DatasetSpec.model_validate(
+        load_yaml(repo_root / "configs" / "data" / "ql031-controlled-remote-day-20260126.yaml")["dataset"]
+    )
+    preflight = preflight_distinct_surface(
+        dataset_spec=fallback_dataset,
+        reward_spec=reward_spec,
+        registry_roots=[registry_root],
+    )
+
+    assert preflight["allowed"] is True
+    assert preflight["collisions"] == []
+    assert preflight["candidate"]["evaluation_surface_id"] == "controlled-remote-example-20260126:split_v1_walkforward:reward_v1"
+    assert preflight["candidate"]["slice_id"] == "controlled-remote-example-20260126"
+    assert preflight["candidate"]["train_window"] == "2026-01-26T00:00:00+00:00 -> 2026-01-26T15:59:00+00:00"
+
+
 def test_discover_retained_roots_marks_analysis_only_candidates(
     fixture_path: Path,
     tmp_path: Path,
@@ -348,7 +454,7 @@ def test_discover_retained_roots_marks_analysis_only_candidates(
     assert "registry_scaffold_incomplete_or_empty" in incomplete_scaffold_candidate["classification_reasons"]
 
 
-def test_ql031_batch_script_builds_workspace_and_diagnostic_artifacts(
+def test_ql031_batch_script_uses_distinct_default_preflight_surface(
     tmp_path: Path,
     fixture_path: Path,
     dataset_spec,
@@ -413,11 +519,6 @@ def test_ql031_batch_script_builds_workspace_and_diagnostic_artifacts(
         )
     _add_incomplete_registry_scaffold(diagnostic_bundle_root)
 
-    data_config, reward_config_path = _write_preflight_configs(
-        tmp_path=tmp_path,
-        dataset_spec=dataset_spec,
-        reward_spec=reward_spec,
-    )
     output_root = tmp_path / "analysis" / "ql031"
     script_path = Path(__file__).resolve().parents[1] / "scripts" / "run_ql031_batch.py"
 
@@ -439,10 +540,6 @@ def test_ql031_batch_script_builds_workspace_and_diagnostic_artifacts(
             str(tmp_path),
             "--output-root",
             str(output_root),
-            "--rerun-data-config",
-            str(data_config),
-            "--reward-config",
-            str(reward_config_path),
         ],
         cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
@@ -463,9 +560,9 @@ def test_ql031_batch_script_builds_workspace_and_diagnostic_artifacts(
     assert len(workspace_plus_inventory["grouped_by_evaluation_surface"]) == 1
     assert len(workspace_plus_inventory["grouped_by_slice"]) == 1
     assert len(workspace_plus_inventory["grouped_by_train_window"]) == 1
-    assert summary["status"] == "blocked_distinct_surface_collision"
+    assert summary["status"] == "preflight_passed_no_distinct_retained_surface"
     assert summary["comparison_reports"] == []
-    assert summary["distinct_surface_preflight_allowed"] is False
+    assert summary["distinct_surface_preflight_allowed"] is True
     assert (output_root / "distinct_surface_preflight.json").exists()
     assert (output_root / "retained_root_discovery.json").exists()
     assert (output_root / "diagnostic_imports" / diagnostic_bundle_root.name / "import_classification.json").exists()
@@ -568,25 +665,6 @@ def _register_retained_run(
 def _add_incomplete_registry_scaffold(run_root: Path) -> None:
     for directory in ("records", "scores", "evaluations", "artifacts", "paper_sim", "promotions"):
         (run_root / "registry" / directory).mkdir(parents=True, exist_ok=True)
-
-
-def _write_preflight_configs(
-    *,
-    tmp_path: Path,
-    dataset_spec,
-    reward_spec,
-) -> tuple[Path, Path]:
-    data_config = tmp_path / "rerun-data.yaml"
-    reward_config = tmp_path / "rerun-reward.yaml"
-    data_config.write_text(
-        json.dumps({"dataset": dataset_spec.model_dump(mode="json")}, indent=2),
-        encoding="utf-8",
-    )
-    reward_config.write_text(
-        json.dumps({"reward": reward_spec.model_dump(mode="json")}, indent=2),
-        encoding="utf-8",
-    )
-    return data_config, reward_config
 
 
 def _promotion_evidence(

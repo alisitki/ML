@@ -65,7 +65,7 @@ Result:
   - search for additional external retained surfaces before scheduling any rerun
   - open `compare-policies` only when a single root already contains a current champion plus a scored same-surface challenger
   - use `build-offline-evidence-pack` only after blocker inventory is explicit and only on retained surfaces whose evidence class and authority status are still stated directly
-  - run distinct-surface preflight before any minimal controlled rerun fallback; if `evaluation_surface_id`, `slice_id`, or `train_window` collide with existing surfaces, stop
+  - run distinct-surface preflight before any minimal controlled rerun fallback; the default fallback preflight target is `configs/data/ql031-controlled-remote-day-20260126.yaml`, and if `evaluation_surface_id`, `slice_id`, or `train_window` collide with existing surfaces, stop
   - expand beyond the current same-surface proof without claiming authoritative continuity closure
   - produce broader multi-window or multi-slice offline evidence without claiming authoritative continuity closure
   - keep evidence class and authority status explicit in every retained-surface summary
