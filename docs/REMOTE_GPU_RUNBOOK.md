@@ -11,6 +11,19 @@ It exists to:
 - separate repo implementation work from external continuity follow-up
 - avoid treating local smoke workflows as the real-training default
 
+## Interpretation rule
+
+For QuantLab, real training and closure-grade retained evidence generation are remote-GPU tasks by default.
+
+Apply this rule strictly:
+
+- lack of local disk is not a reason to attempt the run locally
+- lack of local CUDA is not a reason to attempt the run locally
+- lack of local throughput is not a reason to downscope the task into a local workflow
+- if the current machine cannot satisfy the run requirements, provision the remote GPU environment and run there
+
+Local execution remains continuity-only and must not be treated as the fallback execution target for meaningful runs.
+
 This runbook is provider-agnostic in principle. Vast.ai is used here as the concrete
 example workflow because the current operating target is a rented single-GPU instance.
 
@@ -33,6 +46,7 @@ This runbook does not cover:
 - reserved or interruptible policy optimization
 - checkpoint/resume design
 - external `audit-continuity` closure against active runtime registries
+- reframing remote-GPU work as local execution because the current machine is resource-constrained
 
 ## Retained evidence honesty
 

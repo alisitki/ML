@@ -122,6 +122,7 @@ When choosing between valid options, prefer the one that most directly improves 
 6. retirement of temporary continuity debt
 
 Do not optimize the system around laptop convenience or weak compatibility expectations if that harms the live trading objective.
+For `real_training` work on meaningful data volume, production observation surfaces, controlled reruns, or closure-grade evidence generation, the execution target is remote GPU infrastructure by default. Lack of local disk, local CUDA, or local throughput is not a reason to reinterpret that work as a local run or to treat local-machine limits as the governing constraint.
 
 ---
 
@@ -305,6 +306,13 @@ Choose all relevant:
 - "Backtest improved" is not "ready for money."
 - "Shadow looked fine" is not "ready to scale."
 - Changes on the live path must improve either edge, parity, safety, or capital protection.
+
+### Training execution rules
+
+- `real_training` on meaningful data volume, production observation surfaces, candidate search, controlled reruns, or closure-grade evidence generation is remote-GPU work by default.
+- Local CPU or laptop execution is continuity-only: smoke, debugging, tiny baseline continuity, or short validation.
+- Do not propose, justify, or normalize local execution of a `real_training` task because the current machine lacks disk, CUDA, or throughput.
+- If the current machine is resource-constrained, provision or use the remote GPU environment instead of reframing the task around local limits.
 
 ---
 

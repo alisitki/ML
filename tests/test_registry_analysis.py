@@ -22,7 +22,7 @@ from quantlab_ml.contracts import (
 )
 from quantlab_ml.data import LocalFixtureSource
 from quantlab_ml.evaluation import EvaluationEngine
-from quantlab_ml.registry import LocalRegistryStore
+from quantlab_ml.registry import LocalRegistryStore, build_offline_evidence_pack
 from quantlab_ml.registry.analysis import (
     build_blocker_inventory,
     candidate_surface_identity,
@@ -158,6 +158,146 @@ def test_blocker_inventory_carries_evidence_class_and_analysis_flags(
         "analysis-only" in limitation.lower()
         for limitation in diagnostic_source["limitations"]
     )
+
+
+def test_blocker_inventory_reports_missing_linkage_for_scored_same_root_challenger(
+    tmp_path: Path,
+    trajectory_bundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score: PolicyScore,
+    training_bundle: tuple,
+) -> None:
+    registry_root, champion_artifact, challenger_artifact, _, _ = _build_same_root_comparison_chain(
+        tmp_path=tmp_path,
+        trajectory_bundle=trajectory_bundle,
+        policy_artifact=policy_artifact,
+        evaluation_report=evaluation_report,
+        policy_score=policy_score,
+        training_bundle=training_bundle,
+        link_challenger=False,
+    )
+
+    inventory = build_blocker_inventory(
+        registry_roots=[registry_root],
+        inspected_evidence_kinds=["external-retained-evidence"],
+        authority_statuses=["unconfirmed"],
+    )
+    source = inventory["sources"][0]
+
+    assert source["comparison_preflight"]["allowed"] is True
+    assert source["missing_comparison_policy_ids"] == [challenger_artifact.policy_id]
+    assert source["missing_paper_sim_policy_ids"] == [challenger_artifact.policy_id]
+    assert "Scored challengers still require explicit comparison and paper/sim linkage review." in source["limitations"]
+    assert "No registry-backed comparison reports were found for this source." in source["limitations"]
+    assert "No paper/sim evidence was linked for this source." not in source["limitations"]
+
+
+def test_blocker_inventory_keeps_linked_same_root_challenger_out_of_generic_linkage_blocker(
+    tmp_path: Path,
+    trajectory_bundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score: PolicyScore,
+    training_bundle: tuple,
+) -> None:
+    registry_root, _, challenger_artifact, comparison_report_id, challenger_paper_sim_id = _build_same_root_comparison_chain(
+        tmp_path=tmp_path,
+        trajectory_bundle=trajectory_bundle,
+        policy_artifact=policy_artifact,
+        evaluation_report=evaluation_report,
+        policy_score=policy_score,
+        training_bundle=training_bundle,
+        link_challenger=True,
+    )
+
+    inventory = build_blocker_inventory(
+        registry_roots=[registry_root],
+        inspected_evidence_kinds=["external-retained-evidence"],
+        authority_statuses=["unconfirmed"],
+    )
+    source = inventory["sources"][0]
+    challenger_record = next(record for record in source["policy_records"] if record["policy_id"] == challenger_artifact.policy_id)
+
+    assert source["comparison_preflight"]["allowed"] is True
+    assert source["comparison_report_count"] == 1
+    assert source["paper_sim_evidence_count"] == 2
+    assert source["missing_comparison_policy_ids"] == []
+    assert source["missing_paper_sim_policy_ids"] == []
+    assert challenger_record["comparison_report_id"] == comparison_report_id
+    assert challenger_record["paper_sim_evidence_id"] == challenger_paper_sim_id
+    assert "Scored challengers still require explicit comparison and paper/sim linkage review." not in source["limitations"]
+    assert "No registry-backed comparison reports were found for this source." not in source["limitations"]
+    assert "No paper/sim evidence was linked for this source." not in source["limitations"]
+
+
+def test_offline_evidence_pack_reports_missing_linkage_for_scored_same_root_challenger(
+    tmp_path: Path,
+    trajectory_bundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score: PolicyScore,
+    training_bundle: tuple,
+) -> None:
+    registry_root, _, challenger_artifact, _, _ = _build_same_root_comparison_chain(
+        tmp_path=tmp_path,
+        trajectory_bundle=trajectory_bundle,
+        policy_artifact=policy_artifact,
+        evaluation_report=evaluation_report,
+        policy_score=policy_score,
+        training_bundle=training_bundle,
+        link_challenger=False,
+    )
+
+    pack = build_offline_evidence_pack(
+        registry_roots=[registry_root],
+        inspected_evidence_kinds=["external-retained-evidence"],
+        authority_statuses=["unconfirmed"],
+    )
+    source = pack["sources"][0]
+
+    assert source["missing_comparison_policy_ids"] == [challenger_artifact.policy_id]
+    assert source["missing_paper_sim_policy_ids"] == [challenger_artifact.policy_id]
+    assert "Scored challengers still require explicit comparison and paper/sim linkage review." in source["limitations"]
+    assert "No registry-backed comparison reports were found for this source." in source["limitations"]
+    assert "No paper/sim evidence was linked for this source." not in source["limitations"]
+
+
+def test_offline_evidence_pack_keeps_linked_same_root_challenger_out_of_generic_linkage_blocker(
+    tmp_path: Path,
+    trajectory_bundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score: PolicyScore,
+    training_bundle: tuple,
+) -> None:
+    registry_root, _, challenger_artifact, comparison_report_id, challenger_paper_sim_id = _build_same_root_comparison_chain(
+        tmp_path=tmp_path,
+        trajectory_bundle=trajectory_bundle,
+        policy_artifact=policy_artifact,
+        evaluation_report=evaluation_report,
+        policy_score=policy_score,
+        training_bundle=training_bundle,
+        link_challenger=True,
+    )
+
+    pack = build_offline_evidence_pack(
+        registry_roots=[registry_root],
+        inspected_evidence_kinds=["external-retained-evidence"],
+        authority_statuses=["unconfirmed"],
+    )
+    source = pack["sources"][0]
+    challenger_record = next(record for record in source["policy_records"] if record["policy_id"] == challenger_artifact.policy_id)
+
+    assert source["comparison_report_count"] == 1
+    assert source["paper_sim_evidence_count"] == 2
+    assert source["missing_comparison_policy_ids"] == []
+    assert source["missing_paper_sim_policy_ids"] == []
+    assert challenger_record["comparison_report_id"] == comparison_report_id
+    assert challenger_record["paper_sim_evidence_id"] == challenger_paper_sim_id
+    assert "Scored challengers still require explicit comparison and paper/sim linkage review." not in source["limitations"]
+    assert "No registry-backed comparison reports were found for this source." not in source["limitations"]
+    assert "No paper/sim evidence was linked for this source." not in source["limitations"]
 
 
 def test_preflight_same_root_comparison_requires_and_finds_same_root_champion(
@@ -325,6 +465,55 @@ def test_ql031_distinct_rerun_config_preserves_market_scope_and_shifts_surface(r
     assert fallback.validation_range.end == baseline.validation_range.end + timedelta(days=1)
     assert fallback.final_untouched_test_range.start == baseline.final_untouched_test_range.start + timedelta(days=1)
     assert fallback.final_untouched_test_range.end == baseline.final_untouched_test_range.end + timedelta(days=1)
+
+
+def test_ql031_next_fallback_configs_preserve_market_scope_and_shift_surface(repo_root: Path) -> None:
+    baseline = DatasetSpec.model_validate(load_yaml(repo_root / "configs" / "data" / "controlled-remote-day.yaml")["dataset"])
+    config_names = (
+        ("ql031-controlled-remote-day-20260127.yaml", "controlled-remote-example-20260127", 2),
+        ("ql031-controlled-remote-day-20260128.yaml", "controlled-remote-example-20260128", 3),
+    )
+
+    for config_name, expected_slice_id, day_offset in config_names:
+        fallback = DatasetSpec.model_validate(load_yaml(repo_root / "configs" / "data" / config_name)["dataset"])
+        baseline_payload = baseline.model_dump(mode="json")
+        fallback_payload = fallback.model_dump(mode="json")
+        for key in ("slice_id", "train_range", "validation_range", "final_untouched_test_range"):
+            baseline_payload.pop(key)
+            fallback_payload.pop(key)
+
+        assert fallback_payload == baseline_payload
+        assert fallback.slice_id == expected_slice_id
+        assert fallback.train_range.start == baseline.train_range.start + timedelta(days=day_offset)
+        assert fallback.train_range.end == baseline.train_range.end + timedelta(days=day_offset)
+        assert fallback.validation_range.start == baseline.validation_range.start + timedelta(days=day_offset)
+        assert fallback.validation_range.end == baseline.validation_range.end + timedelta(days=day_offset)
+        assert fallback.final_untouched_test_range.start == baseline.final_untouched_test_range.start + timedelta(
+            days=day_offset
+        )
+        assert fallback.final_untouched_test_range.end == baseline.final_untouched_test_range.end + timedelta(
+            days=day_offset
+        )
+
+
+def test_ql031_production_search_config_preserves_production_surface_and_only_adds_candidate_search(
+    repo_root: Path,
+) -> None:
+    production = load_yaml(repo_root / "configs" / "training" / "production.yaml")
+    ql031_search = load_yaml(repo_root / "configs" / "training" / "production-ql031-search.yaml")
+
+    assert ql031_search["trajectory"] == production["trajectory"]
+    assert ql031_search["action_space"] == production["action_space"]
+
+    production_trainer = dict(production["trainer"])
+    ql031_search_trainer = dict(ql031_search["trainer"])
+    ql031_candidate_search = ql031_search_trainer.pop("candidate_search")
+
+    assert ql031_search_trainer == production_trainer
+    assert ql031_candidate_search == {
+        "seeds": [7, 11],
+        "learning_rates": [0.05, 0.1],
+    }
 
 
 def test_ql031_distinct_rerun_config_preflight_passes_controlled_remote_collision_shape(
@@ -566,11 +755,317 @@ def test_ql031_batch_script_uses_distinct_default_preflight_surface(
     assert summary["batch_execution_result"] == "preflight_only"
     assert summary["failure_stage"] is None
     assert summary["failure_reason"] is None
+    assert summary["rerun_candidate_configs"] == [
+        str((Path(__file__).resolve().parents[1] / "configs" / "data" / "ql031-controlled-remote-day-20260127.yaml").resolve()),
+        str((Path(__file__).resolve().parents[1] / "configs" / "data" / "ql031-controlled-remote-day-20260128.yaml").resolve()),
+    ]
+    assert len(summary["rerun_candidate_preflights"]) == 1
+    assert summary["rerun_candidate_preflights"][0]["allowed"] is True
+    assert summary["selected_rerun_data_config"] == summary["rerun_candidate_configs"][0]
+    assert summary["selected_rerun_candidate"] == summary["rerun_candidate_preflights"][0]["candidate"]
     assert summary["comparison_reports"] == []
     assert summary["distinct_surface_preflight_allowed"] is True
     assert (output_root / "distinct_surface_preflight.json").exists()
     assert (output_root / "retained_root_discovery.json").exists()
     assert (output_root / "diagnostic_imports" / diagnostic_bundle_root.name / "import_classification.json").exists()
+
+
+def test_ql031_batch_script_tries_ordered_candidates_until_one_is_distinct(
+    repo_root: Path,
+    tmp_path: Path,
+    trajectory_bundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score: PolicyScore,
+    training_bundle: tuple,
+    reward_spec,
+) -> None:
+    _, _, training_config = training_bundle
+    registry_root = tmp_path / "controlled-remote-20260127" / "registry"
+    controlled_remote_bundle = trajectory_bundle.model_copy(
+        update={
+            "dataset_spec": trajectory_bundle.dataset_spec.model_copy(
+                update={
+                    "dataset_hash": "s3-controlled-remote-v1",
+                    "slice_id": "controlled-remote-example-20260127",
+                    "train_range": TimeRange(
+                        start="2026-01-27T00:00:00Z",
+                        end="2026-01-27T15:59:00Z",
+                    ),
+                    "validation_range": TimeRange(
+                        start="2026-01-27T16:00:00Z",
+                        end="2026-01-27T19:59:00Z",
+                    ),
+                    "final_untouched_test_range": TimeRange(
+                        start="2026-01-27T20:00:00Z",
+                        end="2026-01-27T23:59:00Z",
+                    ),
+                }
+            ),
+        },
+        deep=True,
+    )
+    controlled_remote_artifact = policy_artifact.model_copy(
+        update={
+            "policy_id": f"{policy_artifact.policy_id}-controlled-remote-20260127",
+            "artifact_id": f"{policy_artifact.artifact_id}-controlled-remote-20260127",
+            "training_run_id": f"{policy_artifact.training_run_id}-controlled-remote-20260127",
+            "training_snapshot_id": "s3-controlled-remote-v1:controlled-remote-example-20260127",
+            "evaluation_surface_id": "controlled-remote-example-20260127:split_v1_walkforward:reward_v1",
+        },
+        deep=True,
+    )
+    controlled_remote_report = evaluation_report.model_copy(
+        update={
+            "policy_id": controlled_remote_artifact.policy_id,
+            "evaluation_id": f"{evaluation_report.evaluation_id}-controlled-remote-20260127",
+        }
+    )
+    controlled_remote_score = policy_score.model_copy(
+        update={
+            "policy_id": controlled_remote_artifact.policy_id,
+            "evaluation_id": controlled_remote_report.evaluation_id,
+        }
+    )
+    store = LocalRegistryStore(registry_root)
+    store.register_candidate(
+        controlled_remote_artifact,
+        controlled_remote_bundle,
+        reward_config_hash=hash_payload(reward_spec),
+        training_config_hash=hash_payload(training_config),
+    )
+    store.append_score(controlled_remote_artifact.policy_id, controlled_remote_score, controlled_remote_report)
+
+    output_root = tmp_path / "analysis" / "ordered-selection"
+    script_path = repo_root / "scripts" / "run_ql031_batch.py"
+    config_20260127 = repo_root / "configs" / "data" / "ql031-controlled-remote-day-20260127.yaml"
+    config_20260128 = repo_root / "configs" / "data" / "ql031-controlled-remote-day-20260128.yaml"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "--workspace-registry-root",
+            str(registry_root),
+            "--workspace-authority-status",
+            "unconfirmed",
+            "--output-root",
+            str(output_root),
+            "--rerun-data-config",
+            str(config_20260127),
+            "--rerun-data-config",
+            str(config_20260128),
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    summary = json.loads((output_root / "ql031_status.json").read_text(encoding="utf-8"))
+
+    assert summary["preflight_selection_result"] == "preflight_passed_no_distinct_retained_surface"
+    assert summary["batch_execution_result"] == "preflight_only"
+    assert summary["failure_stage"] is None
+    assert summary["failure_reason"] is None
+    assert summary["rerun_candidate_configs"] == [str(config_20260127.resolve()), str(config_20260128.resolve())]
+    assert len(summary["rerun_candidate_preflights"]) == 2
+    assert summary["rerun_candidate_preflights"][0]["rerun_data_config"] == str(config_20260127.resolve())
+    assert summary["rerun_candidate_preflights"][0]["allowed"] is False
+    assert {item["field"] for item in summary["rerun_candidate_preflights"][0]["collisions"]} == {
+        "evaluation_surface_id",
+        "slice_id",
+        "train_window",
+    }
+    assert summary["rerun_candidate_preflights"][1]["rerun_data_config"] == str(config_20260128.resolve())
+    assert summary["rerun_candidate_preflights"][1]["allowed"] is True
+    assert summary["selected_rerun_data_config"] == str(config_20260128.resolve())
+    assert summary["selected_rerun_candidate"] == summary["rerun_candidate_preflights"][1]["candidate"]
+    assert summary["distinct_surface_preflight_allowed"] is True
+    assert (output_root / "distinct_surface_preflight.json").exists()
+
+
+def test_ql031_batch_script_reports_collision_when_all_ordered_candidates_collide(
+    repo_root: Path,
+    tmp_path: Path,
+    trajectory_bundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score: PolicyScore,
+    training_bundle: tuple,
+    reward_spec,
+) -> None:
+    _, _, training_config = training_bundle
+    config_dates = (
+        ("20260127", "2026-01-27"),
+        ("20260128", "2026-01-28"),
+    )
+    registry_roots: list[Path] = []
+
+    for suffix, date_text in config_dates:
+        registry_root = tmp_path / f"controlled-remote-{suffix}" / "registry"
+        registry_roots.append(registry_root)
+        controlled_remote_bundle = trajectory_bundle.model_copy(
+            update={
+                "dataset_spec": trajectory_bundle.dataset_spec.model_copy(
+                    update={
+                        "dataset_hash": "s3-controlled-remote-v1",
+                        "slice_id": f"controlled-remote-example-{suffix}",
+                        "train_range": TimeRange(
+                            start=f"{date_text}T00:00:00Z",
+                            end=f"{date_text}T15:59:00Z",
+                        ),
+                        "validation_range": TimeRange(
+                            start=f"{date_text}T16:00:00Z",
+                            end=f"{date_text}T19:59:00Z",
+                        ),
+                        "final_untouched_test_range": TimeRange(
+                            start=f"{date_text}T20:00:00Z",
+                            end=f"{date_text}T23:59:00Z",
+                        ),
+                    }
+                ),
+            },
+            deep=True,
+        )
+        controlled_remote_artifact = policy_artifact.model_copy(
+            update={
+                "policy_id": f"{policy_artifact.policy_id}-controlled-remote-{suffix}",
+                "artifact_id": f"{policy_artifact.artifact_id}-controlled-remote-{suffix}",
+                "training_run_id": f"{policy_artifact.training_run_id}-controlled-remote-{suffix}",
+                "training_snapshot_id": f"s3-controlled-remote-v1:controlled-remote-example-{suffix}",
+                "evaluation_surface_id": f"controlled-remote-example-{suffix}:split_v1_walkforward:reward_v1",
+            },
+            deep=True,
+        )
+        controlled_remote_report = evaluation_report.model_copy(
+            update={
+                "policy_id": controlled_remote_artifact.policy_id,
+                "evaluation_id": f"{evaluation_report.evaluation_id}-controlled-remote-{suffix}",
+            }
+        )
+        controlled_remote_score = policy_score.model_copy(
+            update={
+                "policy_id": controlled_remote_artifact.policy_id,
+                "evaluation_id": controlled_remote_report.evaluation_id,
+            }
+        )
+        store = LocalRegistryStore(registry_root)
+        store.register_candidate(
+            controlled_remote_artifact,
+            controlled_remote_bundle,
+            reward_config_hash=hash_payload(reward_spec),
+            training_config_hash=hash_payload(training_config),
+        )
+        store.append_score(controlled_remote_artifact.policy_id, controlled_remote_score, controlled_remote_report)
+
+    output_root = tmp_path / "analysis" / "all-collisions"
+    script_path = repo_root / "scripts" / "run_ql031_batch.py"
+    config_20260127 = repo_root / "configs" / "data" / "ql031-controlled-remote-day-20260127.yaml"
+    config_20260128 = repo_root / "configs" / "data" / "ql031-controlled-remote-day-20260128.yaml"
+    command = [
+        sys.executable,
+        str(script_path),
+        "--output-root",
+        str(output_root),
+        "--rerun-data-config",
+        str(config_20260127),
+        "--rerun-data-config",
+        str(config_20260128),
+    ]
+    for registry_root in registry_roots:
+        command.extend(["--workspace-registry-root", str(registry_root), "--workspace-authority-status", "unconfirmed"])
+
+    result = subprocess.run(
+        command,
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    summary = json.loads((output_root / "ql031_status.json").read_text(encoding="utf-8"))
+
+    assert summary["preflight_selection_result"] == "blocked_distinct_surface_collision"
+    assert summary["batch_execution_result"] == "preflight_only"
+    assert summary["failure_stage"] is None
+    assert summary["failure_reason"] is None
+    assert summary["selected_rerun_data_config"] is None
+    assert summary["selected_rerun_candidate"] is None
+    assert len(summary["rerun_candidate_preflights"]) == 2
+    assert all(item["allowed"] is False for item in summary["rerun_candidate_preflights"])
+    assert summary["distinct_surface_preflight_path"] is None
+    assert summary["distinct_surface_preflight_allowed"] is None
+
+
+def test_ql031_batch_script_single_candidate_mode_keeps_backward_compatible_summary_semantics(
+    repo_root: Path,
+    tmp_path: Path,
+    fixture_path: Path,
+    dataset_spec,
+    training_bundle: tuple,
+    reward_spec,
+    evaluation_boundary,
+) -> None:
+    source_root, artifact, report, score, manifest = _build_retained_run_root(
+        tmp_path=tmp_path,
+        fixture_path=fixture_path,
+        dataset_spec=dataset_spec,
+        training_bundle=training_bundle,
+        reward_spec=reward_spec,
+        evaluation_boundary=evaluation_boundary,
+    )
+    registry_root = tmp_path / "retained-single" / "registry"
+    _register_retained_run(
+        registry_root=registry_root,
+        artifact=artifact,
+        manifest=manifest,
+        report=report,
+        score=score,
+    )
+
+    output_root = tmp_path / "analysis" / "single-candidate"
+    script_path = repo_root / "scripts" / "run_ql031_batch.py"
+    config_20260127 = repo_root / "configs" / "data" / "ql031-controlled-remote-day-20260127.yaml"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "--workspace-registry-root",
+            str(registry_root),
+            "--workspace-authority-status",
+            "unconfirmed",
+            "--output-root",
+            str(output_root),
+            "--rerun-data-config",
+            str(config_20260127),
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    summary = json.loads((output_root / "ql031_status.json").read_text(encoding="utf-8"))
+
+    assert summary["status"] == "preflight_passed_no_distinct_retained_surface"
+    assert summary["preflight_selection_result"] == "preflight_passed_no_distinct_retained_surface"
+    assert summary["batch_execution_result"] == "preflight_only"
+    assert summary["rerun_candidate_configs"] == [str(config_20260127.resolve())]
+    assert len(summary["rerun_candidate_preflights"]) == 1
+    assert summary["rerun_candidate_preflights"][0]["rerun_data_config"] == str(config_20260127.resolve())
+    assert summary["selected_rerun_data_config"] == str(config_20260127.resolve())
+    assert summary["selected_rerun_candidate"] == summary["rerun_candidate_preflights"][0]["candidate"]
+    assert summary["distinct_surface_preflight_path"] is not None
+    assert summary["distinct_surface_preflight_allowed"] is True
+    assert (output_root / "distinct_surface_preflight.json").exists()
 
 
 def test_ql031_batch_legacy_status_prefers_execution_failure_over_preflight_result(repo_root: Path) -> None:
@@ -689,11 +1184,110 @@ def _add_incomplete_registry_scaffold(run_root: Path) -> None:
         (run_root / "registry" / directory).mkdir(parents=True, exist_ok=True)
 
 
+def _build_same_root_comparison_chain(
+    *,
+    tmp_path: Path,
+    trajectory_bundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score: PolicyScore,
+    training_bundle: tuple,
+    link_challenger: bool,
+) -> tuple[Path, PolicyArtifact, PolicyArtifact, str | None, str | None]:
+    _, _, training_config = training_bundle
+    registry_root = tmp_path / "same-root-registry"
+    store = LocalRegistryStore(registry_root)
+    reward_hash = hash_payload(trajectory_bundle.reward_spec)
+    training_hash = hash_payload(training_config)
+
+    champion_report = evaluation_report.model_copy(
+        update={
+            "total_net_return": 0.35,
+            "average_net_return": 0.07,
+        }
+    )
+    champion_score = policy_score.model_copy(
+        update={
+            "expected_return_score": 0.07,
+            "composite_rank": max(policy_score.composite_rank, 0.86),
+        }
+    )
+    store.register_candidate(
+        policy_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    store.append_score(policy_artifact.policy_id, champion_score, champion_report)
+
+    champion_export = tmp_path / "champion-inference-artifact.json"
+    champion_export.write_text("{}", encoding="utf-8")
+    champion_paper_sim = tmp_path / "champion-paper-sim.md"
+    champion_paper_sim.write_text("# champion paper sim\n", encoding="utf-8")
+    champion_evidence = store.record_paper_sim_evidence(policy_artifact.policy_id, champion_paper_sim)
+    store.promote_candidate(
+        policy_artifact.policy_id,
+        evidence=_promotion_evidence(
+            policy_artifact,
+            deployment_artifact_path=str(champion_export),
+            paper_sim_evidence_id=champion_evidence.evidence_id,
+        ),
+    )
+
+    challenger_artifact = policy_artifact.model_copy(
+        update={
+            "policy_id": f"{policy_artifact.policy_id}-challenger",
+            "artifact_id": f"{policy_artifact.artifact_id}-challenger",
+            "training_run_id": f"{policy_artifact.training_run_id}-challenger",
+        },
+        deep=True,
+    )
+    challenger_report = evaluation_report.model_copy(
+        update={
+            "policy_id": challenger_artifact.policy_id,
+            "evaluation_id": f"{evaluation_report.evaluation_id}-challenger",
+            "total_net_return": 0.72,
+            "average_net_return": 0.144,
+        }
+    )
+    challenger_score = policy_score.model_copy(
+        update={
+            "policy_id": challenger_artifact.policy_id,
+            "evaluation_id": challenger_report.evaluation_id,
+            "expected_return_score": 0.144,
+            "composite_rank": max(policy_score.composite_rank, 0.94),
+        }
+    )
+    store.register_candidate(
+        challenger_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    store.append_score(challenger_artifact.policy_id, challenger_score, challenger_report)
+
+    comparison_report_id: str | None = None
+    challenger_paper_sim_id: str | None = None
+    if link_challenger:
+        comparison_report = store.record_comparison_report(challenger_artifact.policy_id)
+        comparison_report_id = comparison_report.comparison_report_id
+        challenger_paper_sim = tmp_path / "challenger-paper-sim.md"
+        challenger_paper_sim.write_text("# challenger paper sim\n", encoding="utf-8")
+        challenger_paper_sim_id = store.record_paper_sim_evidence(
+            challenger_artifact.policy_id,
+            challenger_paper_sim,
+            comparison_report_id=comparison_report_id,
+        ).evidence_id
+
+    return registry_root, policy_artifact, challenger_artifact, comparison_report_id, challenger_paper_sim_id
+
+
 def _promotion_evidence(
     policy_artifact: PolicyArtifact,
     *,
     deployment_artifact_path: str,
     paper_sim_evidence_id: str,
+    comparison_report_id: str | None = None,
 ) -> PromotionEvidence:
     return PromotionEvidence(
         preprocessing_fit_on_train_only=True,
@@ -704,7 +1298,7 @@ def _promotion_evidence(
         final_untouched_test_unused_for_selection=True,
         realistic_execution_assumptions=True,
         superiority_not_one_lucky_slice_only=True,
-        comparison_report_id=None,
+        comparison_report_id=comparison_report_id,
         paper_sim_evidence_id=paper_sim_evidence_id,
         deployment_artifact_path=deployment_artifact_path,
         runtime_uses_inference_artifact_only=True,

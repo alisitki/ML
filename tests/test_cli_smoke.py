@@ -7,8 +7,14 @@ import shutil
 from typer.testing import CliRunner
 
 from quantlab_ml.cli.app import app
-from quantlab_ml.common import hash_payload, load_model
-from quantlab_ml.contracts import InferenceArtifactExport, PolicyArtifact, PromotionEvidence, ReproducibilityMetadata
+from quantlab_ml.common import dump_model, hash_payload, load_model
+from quantlab_ml.contracts import (
+    EvaluationReport,
+    InferenceArtifactExport,
+    PolicyArtifact,
+    PromotionEvidence,
+    ReproducibilityMetadata,
+)
 from quantlab_ml.evaluation import EvaluationEngine
 from quantlab_ml.policies import PolicyRuntimeBridge
 from quantlab_ml.registry import LocalRegistryStore
@@ -286,6 +292,257 @@ def test_cli_train_search_writes_manifest_and_registers_all_candidates(
     selected_records = [record for record in records if _tag_map(record.artifact_compatibility_tags)["search_selected"] == "true"]
     assert len(selected_records) == 1
     assert selected_records[0].policy_id == manifest["selected_policy_id"]
+
+
+def test_cli_train_search_supports_same_root_comparison_and_linked_paper_sim_chain(
+    repo_root: Path,
+    fixture_path: Path,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    trajectories = tmp_path / "outputs" / "trajectories.json"
+    selected_policy = tmp_path / "outputs" / "search-policy.json"
+    manifest_path = tmp_path / "outputs" / "search-policy_search.json"
+    registry_root = tmp_path / "registry"
+    candidate_eval_dir = tmp_path / "outputs" / "candidate-evaluations"
+    candidate_score_dir = tmp_path / "outputs" / "candidate-scores"
+    champion_export = tmp_path / "outputs" / "champion-inference-artifact.json"
+    comparison_output = tmp_path / "outputs" / "comparison-report.json"
+    evidence_pack_path = tmp_path / "outputs" / "offline-evidence-pack.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "build-trajectories",
+            "--input",
+            str(fixture_path),
+            "--output",
+            str(trajectories),
+            "--data-config",
+            str(repo_root / "configs" / "data" / "fixture.yaml"),
+            "--training-config",
+            str(repo_root / "configs" / "training" / "search-small.yaml"),
+            "--reward-config",
+            str(repo_root / "configs" / "reward" / "default.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    result = runner.invoke(
+        app,
+        [
+            "train",
+            "--trajectories",
+            str(trajectories),
+            "--output",
+            str(selected_policy),
+            "--training-config",
+            str(repo_root / "configs" / "training" / "search-small.yaml"),
+            "--registry-root",
+            str(registry_root),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert manifest_path.exists()
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    ranked_candidates = sorted(manifest["candidates"], key=lambda candidate: candidate["candidate_rank"])
+    assert len(ranked_candidates) >= 2
+
+    for index, candidate in enumerate(ranked_candidates, start=1):
+        artifact_path = Path(candidate["artifact_path"])
+        evaluation_path = candidate_eval_dir / f"{artifact_path.stem}-evaluation.json"
+        score_path = candidate_score_dir / f"{artifact_path.stem}-score.json"
+
+        result = runner.invoke(
+            app,
+            [
+                "evaluate",
+                "--trajectories",
+                str(trajectories),
+                "--policy",
+                str(artifact_path),
+                "--output",
+                str(evaluation_path),
+                "--evaluation-config",
+                str(repo_root / "configs" / "evaluation" / "default.yaml"),
+            ],
+        )
+        assert result.exit_code == 0, result.stdout
+
+        evaluation_report = load_model(evaluation_path, EvaluationReport)
+        adjusted_report = evaluation_report.model_copy(
+            update={
+                "total_net_return": 0.4 if candidate["candidate_rank"] == 1 else max(0.05, 0.3 - (index * 0.01)),
+                "average_net_return": 0.08 if candidate["candidate_rank"] == 1 else max(0.01, 0.06 - (index * 0.005)),
+            }
+        )
+        if candidate["candidate_rank"] == 2:
+            adjusted_report = adjusted_report.model_copy(
+                update={
+                    "total_net_return": 0.7,
+                    "average_net_return": 0.14,
+                }
+            )
+        dump_model(evaluation_path, adjusted_report)
+
+        result = runner.invoke(
+            app,
+            [
+                "score",
+                "--policy",
+                str(artifact_path),
+                "--evaluation",
+                str(evaluation_path),
+                "--output",
+                str(score_path),
+                "--registry-root",
+                str(registry_root),
+            ],
+        )
+        assert result.exit_code == 0, result.stdout
+
+    champion_candidate = ranked_candidates[0]
+    challenger_candidate = ranked_candidates[1]
+    champion_score_path = candidate_score_dir / f"{Path(champion_candidate['artifact_path']).stem}-score.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "export-policy",
+            "--policy",
+            champion_candidate["artifact_path"],
+            "--score",
+            str(champion_score_path),
+            "--output",
+            str(champion_export),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    champion_report = tmp_path / "outputs" / "champion-paper-sim.md"
+    champion_report.write_text("# champion paper sim\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        [
+            "record-paper-sim",
+            "--registry-root",
+            str(registry_root),
+            "--policy-id",
+            champion_candidate["policy_id"],
+            "--report",
+            str(champion_report),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    champion_artifact = load_model(Path(champion_candidate["artifact_path"]), PolicyArtifact)
+    registry = LocalRegistryStore(registry_root)
+    champion_record = registry.get_record(champion_artifact.policy_id)
+    assert champion_record is not None
+    assert champion_record.paper_sim_evidence_id is not None
+
+    decision = registry.promote_candidate(
+        champion_artifact.policy_id,
+        evidence=PromotionEvidence(
+            preprocessing_fit_on_train_only=True,
+            no_future_features=True,
+            no_future_masks=True,
+            no_future_reward_construction=True,
+            no_cross_split_contamination=True,
+            final_untouched_test_unused_for_selection=True,
+            realistic_execution_assumptions=True,
+            superiority_not_one_lucky_slice_only=True,
+            comparison_report_id=None,
+            paper_sim_evidence_id=champion_record.paper_sim_evidence_id,
+            deployment_artifact_path=str(champion_export),
+            runtime_uses_inference_artifact_only=True,
+            no_live_learning=True,
+            executor_boundary_respected=True,
+            selector_boundary_respected=True,
+            reproducibility=ReproducibilityMetadata(
+                data_snapshot_id=champion_artifact.training_snapshot_id,
+                code_commit_hash=champion_artifact.code_commit_hash,
+                config_hash=champion_artifact.training_config_hash,
+                seed=7,
+                runtime_stack={"python": "3.12", "framework": "pytorch"},
+                reproducible_within_tolerance=True,
+            ),
+        ),
+    )
+    assert decision.decision == "promote"
+    assert registry.load_index().champion_policy_id == champion_artifact.policy_id
+
+    comparison_report_id = None
+    for candidate in ranked_candidates[1:]:
+        candidate_comparison_output = comparison_output.with_name(f"{candidate['policy_id']}-comparison-report.json")
+        result = runner.invoke(
+            app,
+            [
+                "compare-policies",
+                "--registry-root",
+                str(registry_root),
+                "--challenger-policy-id",
+                candidate["policy_id"],
+                "--output",
+                str(candidate_comparison_output),
+            ],
+        )
+        assert result.exit_code == 0, result.stdout
+        candidate_comparison_payload = json.loads(candidate_comparison_output.read_text(encoding="utf-8"))
+        candidate_comparison_report_id = candidate_comparison_payload["comparison_report_id"]
+
+        candidate_report = tmp_path / "outputs" / f"{candidate['policy_id']}-paper-sim.md"
+        candidate_report.write_text(f"# paper sim {candidate['policy_id']}\n", encoding="utf-8")
+        result = runner.invoke(
+            app,
+            [
+                "record-paper-sim",
+                "--registry-root",
+                str(registry_root),
+                "--policy-id",
+                candidate["policy_id"],
+                "--report",
+                str(candidate_report),
+                "--comparison-report-id",
+                candidate_comparison_report_id,
+            ],
+        )
+        assert result.exit_code == 0, result.stdout
+        if candidate["policy_id"] == challenger_candidate["policy_id"]:
+            comparison_report_id = candidate_comparison_report_id
+
+    assert comparison_report_id is not None
+
+    result = runner.invoke(
+        app,
+        [
+            "build-offline-evidence-pack",
+            "--registry-root",
+            str(registry_root),
+            "--inspected-evidence-kind",
+            "external-retained-evidence",
+            "--authority-status",
+            "unconfirmed",
+            "--output",
+            str(evidence_pack_path),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    pack = json.loads(evidence_pack_path.read_text(encoding="utf-8"))
+    source = pack["sources"][0]
+    challenger_record = next(record for record in source["policy_records"] if record["policy_id"] == challenger_candidate["policy_id"])
+
+    assert source["comparison_report_count"] == len(ranked_candidates) - 1
+    assert source["paper_sim_evidence_count"] == len(ranked_candidates)
+    assert source["missing_comparison_policy_ids"] == []
+    assert source["missing_paper_sim_policy_ids"] == []
+    assert challenger_record["comparison_report_id"] == comparison_report_id
+    assert challenger_record["paper_sim_evidence_id"] is not None
+    assert "Scored challengers still require explicit comparison and paper/sim linkage review." not in source["limitations"]
+    assert registry.get_record(champion_candidate["policy_id"]).status == "champion"
+    assert registry.get_record(challenger_candidate["policy_id"]).comparison_report_id == comparison_report_id
 
 
 def test_cli_audit_continuity_reports_core_backend_status(

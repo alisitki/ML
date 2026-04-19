@@ -30,7 +30,10 @@ DEFAULT_DIAGNOSTIC_BUNDLE_ROOTS = [
     Path("outputs/ql021-controlled-remote-rerun-20260417-build-fresh"),
 ]
 DEFAULT_OUTPUT_ROOT = Path("outputs/analysis/ql031")
-DEFAULT_RERUN_DATA_CONFIG = Path("configs/data/ql031-controlled-remote-day-20260126.yaml")
+DEFAULT_RERUN_DATA_CONFIGS = [
+    Path("configs/data/ql031-controlled-remote-day-20260127.yaml"),
+    Path("configs/data/ql031-controlled-remote-day-20260128.yaml"),
+]
 DEFAULT_RERUN_REWARD_CONFIG = Path("configs/reward/default.yaml")
 
 
@@ -73,9 +76,10 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--rerun-data-config",
+        action="append",
         type=Path,
-        default=DEFAULT_RERUN_DATA_CONFIG,
-        help="Candidate rerun data config used only for distinct-surface preflight.",
+        default=[],
+        help="Candidate rerun data config used only for distinct-surface preflight. Repeat to provide ordered fallbacks.",
     )
     parser.add_argument(
         "--reward-config",
@@ -91,6 +95,7 @@ def main() -> int:
     workspace_registry_roots = _normalize_paths(args.workspace_registry_root, DEFAULT_WORKSPACE_REGISTRY_ROOTS)
     diagnostic_bundle_roots = _normalize_paths(args.diagnostic_bundle_root, DEFAULT_DIAGNOSTIC_BUNDLE_ROOTS)
     external_search_roots = _normalize_paths(args.external_search_root, [])
+    rerun_data_configs = _normalize_paths(args.rerun_data_config, DEFAULT_RERUN_DATA_CONFIGS)
     workspace_authority_statuses = _resolve_workspace_authority_statuses(
         roots=workspace_registry_roots,
         raw_statuses=list(args.workspace_authority_status),
@@ -195,6 +200,9 @@ def main() -> int:
 
     preflight_path: str | None = None
     rerun_preflight: dict[str, Any] | None = None
+    rerun_candidate_preflights: list[dict[str, Any]] = []
+    selected_rerun_data_config: str | None = None
+    selected_rerun_candidate: dict[str, Any] | None = None
     checked_registry_roots = _dedupe_paths(
         workspace_registry_roots
         + diagnostic_registry_roots
@@ -205,20 +213,25 @@ def main() -> int:
         ]
     )
     if not distinct_retained_candidates:
-        dataset_spec = DatasetSpec.model_validate(load_yaml(args.rerun_data_config)["dataset"])
         reward_spec = RewardEventSpec.model_validate(load_yaml(args.reward_config)["reward"])
-        rerun_preflight = preflight_distinct_surface(
-            dataset_spec=dataset_spec,
+        candidate_selection = _select_rerun_candidate_preflight(
+            rerun_data_configs=rerun_data_configs,
             reward_spec=reward_spec,
             registry_roots=checked_registry_roots,
         )
-        preflight_output = output_root / "distinct_surface_preflight.json"
-        dump_json_data(preflight_output, rerun_preflight)
-        preflight_path = str(preflight_output)
+        rerun_candidate_preflights = candidate_selection["candidate_preflights"]
+        rerun_preflight = candidate_selection["selected_preflight"]
+        selected_rerun_data_config = candidate_selection["selected_rerun_data_config"]
+        selected_rerun_candidate = candidate_selection["selected_rerun_candidate"]
+        if rerun_preflight is not None:
+            preflight_output = output_root / "distinct_surface_preflight.json"
+            dump_json_data(preflight_output, rerun_preflight)
+            preflight_path = str(preflight_output)
 
     preflight_selection_result = _preflight_selection_result(
         distinct_retained_candidates=distinct_retained_candidates,
         rerun_preflight=rerun_preflight,
+        rerun_candidate_preflights=rerun_candidate_preflights,
     )
     batch_execution_result = _batch_execution_result()
     summary = {
@@ -234,6 +247,10 @@ def main() -> int:
         "workspace_registry_roots": [str(path) for path in workspace_registry_roots],
         "diagnostic_bundle_roots": [str(path) for path in diagnostic_bundle_roots],
         "external_search_roots": [str(path) for path in external_search_roots],
+        "rerun_candidate_configs": [str(path) for path in rerun_data_configs],
+        "rerun_candidate_preflights": rerun_candidate_preflights,
+        "selected_rerun_data_config": selected_rerun_data_config,
+        "selected_rerun_candidate": selected_rerun_candidate,
         "workspace_blocker_inventory": workspace_inventory_paths,
         "workspace_plus_diagnostic_blocker_inventory": workspace_plus_diagnostic_inventory_paths,
         "diagnostic_imports": diagnostic_imports,
@@ -326,13 +343,63 @@ def _is_under(path: Path, parent: Path) -> bool:
     return True
 
 
+def _select_rerun_candidate_preflight(
+    *,
+    rerun_data_configs: list[Path],
+    reward_spec: RewardEventSpec,
+    registry_roots: list[Path],
+) -> dict[str, Any]:
+    candidate_preflights: list[dict[str, Any]] = []
+    full_preflights: list[dict[str, Any]] = []
+    selected_rerun_data_config: str | None = None
+    selected_rerun_candidate: dict[str, Any] | None = None
+    selected_preflight: dict[str, Any] | None = None
+
+    for rerun_data_config in rerun_data_configs:
+        dataset_spec = DatasetSpec.model_validate(load_yaml(rerun_data_config)["dataset"])
+        preflight = preflight_distinct_surface(
+            dataset_spec=dataset_spec,
+            reward_spec=reward_spec,
+            registry_roots=registry_roots,
+        )
+        full_preflights.append(preflight)
+        candidate_preflights.append(
+            {
+                "rerun_data_config": str(rerun_data_config),
+                "allowed": preflight["allowed"],
+                "candidate": preflight["candidate"],
+                "collisions": preflight["collisions"],
+            }
+        )
+        if selected_preflight is None and preflight["allowed"]:
+            selected_preflight = preflight
+            selected_rerun_data_config = str(rerun_data_config)
+            selected_rerun_candidate = preflight["candidate"]
+            break
+
+    if selected_preflight is None and len(rerun_data_configs) == 1 and candidate_preflights:
+        selected_rerun_data_config = str(rerun_data_configs[0])
+        selected_rerun_candidate = candidate_preflights[0]["candidate"]
+        selected_preflight = full_preflights[0]
+
+    return {
+        "candidate_preflights": candidate_preflights,
+        "selected_preflight": selected_preflight,
+        "selected_rerun_data_config": selected_rerun_data_config,
+        "selected_rerun_candidate": selected_rerun_candidate,
+    }
+
+
 def _preflight_selection_result(
     *,
     distinct_retained_candidates: list[dict[str, Any]],
     rerun_preflight: dict[str, Any] | None,
+    rerun_candidate_preflights: list[dict[str, Any]],
 ) -> str:
     if distinct_retained_candidates:
         return "distinct_retained_surface_found"
+    if rerun_candidate_preflights and rerun_preflight is None:
+        return "blocked_distinct_surface_collision"
     if rerun_preflight is None:
         return "no_external_candidates_and_no_rerun_preflight"
     if not rerun_preflight["allowed"]:

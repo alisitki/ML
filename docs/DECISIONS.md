@@ -140,6 +140,7 @@ Status values:
   - do not justify new strategic investment around NumPy/local continuity because of laptop convenience
   - provider choice may vary (Vast.ai or equivalent), but the execution intent remains remote GPU-first for real training
   - runtime inference acceleration choices do not define the training execution target
+  - lack of local disk, local CUDA, or local throughput must not be used to reinterpret a `real_training` task as a local run; provision or use remote GPU instead
 - non_goals:
   - this decision does not require immediate cloud orchestration automation
   - this decision does not force every tiny smoke run onto rented GPU

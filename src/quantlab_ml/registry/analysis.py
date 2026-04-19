@@ -84,11 +84,12 @@ def build_blocker_inventory(
         )
         source_limitations = _source_limitations(
             audit=audit,
-            active_records=active_records,
             comparison_report_count=len(comparison_reports),
             paper_sim_evidence_count=len(paper_sim_records),
             analysis_only=classification["analysis_only"],
             comparison_preflight=comparison_preflight,
+            missing_comparison_policy_ids=_missing_comparison_policy_ids(active_records),
+            missing_paper_sim_policy_ids=_missing_paper_sim_policy_ids(active_records),
         )
         source_summary = {
             "registry_root": str(resolved_root),
@@ -116,6 +117,8 @@ def build_blocker_inventory(
             "eval_windows": sorted(
                 {_format_range(record.eval_window) for record in active_records if record.eval_window is not None}
             ),
+            "missing_comparison_policy_ids": _missing_comparison_policy_ids(active_records),
+            "missing_paper_sim_policy_ids": _missing_paper_sim_policy_ids(active_records),
             "limitations": source_limitations,
             "policy_records": [
                 {
@@ -798,11 +801,12 @@ def _format_range(time_range: Any) -> str:
 def _source_limitations(
     *,
     audit: dict[str, Any],
-    active_records: list[Any],
     comparison_report_count: int,
     paper_sim_evidence_count: int,
     analysis_only: bool,
     comparison_preflight: dict[str, Any],
+    missing_comparison_policy_ids: list[str],
+    missing_paper_sim_policy_ids: list[str],
 ) -> list[str]:
     limitations: list[str] = []
     if audit["inspected_evidence_kind"] != "authoritative_evidence":
@@ -821,9 +825,25 @@ def _source_limitations(
         limitations.append(
             f"Same-root comparison preflight is blocked: {', '.join(comparison_preflight['blocking_reasons'])}"
         )
-    if any(record.status == "challenger" and record.score_history for record in active_records):
+    if missing_comparison_policy_ids or missing_paper_sim_policy_ids:
         limitations.append("Scored challengers still require explicit comparison and paper/sim linkage review.")
     return sorted(set(limitations))
+
+
+def _missing_comparison_policy_ids(active_records: list[Any]) -> list[str]:
+    return sorted(
+        record.policy_id
+        for record in active_records
+        if record.status == "challenger" and record.score_history and record.comparison_report_id is None
+    )
+
+
+def _missing_paper_sim_policy_ids(active_records: list[Any]) -> list[str]:
+    return sorted(
+        record.policy_id
+        for record in active_records
+        if record.status == "challenger" and record.score_history and record.paper_sim_evidence_id is None
+    )
 
 
 def _render_group_section(grouped: dict[str, dict[str, list[str]]]) -> list[str]:
