@@ -1,5 +1,9 @@
 # Remediation Batch 1 Report
 
+> Historical record only.
+> This file preserves batch-time findings and chronology. It does not define current repo truth.
+> Current truth lives in `docs/PROJECT_STATE.md`, `docs/ROADMAP.md`, and `docs/BACKLOG.md`.
+
 **Date:** 2026-04-12  
 **Scope:** Verification-first remediation of audit findings before any new feature work
 

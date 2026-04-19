@@ -77,11 +77,19 @@ Explain the primary business or safety effect:
 
 State the governing docs served by the change.
 
-## 5. Files changed
+## 5. Current-truth and track interpretation
+
+State explicitly:
+- which current-truth docs governed the work
+- whether any missing capability remains a current defect or later-phase work
+- whether this work touched `QL-014`, `QL-031`, or neither
+- if relevant, confirm the change did not create a competing active workstream
+
+## 6. Files changed
 
 List files changed.
 
-## 6. Tests and verification
+## 7. Tests and verification
 
 List:
 - commands run
@@ -89,7 +97,15 @@ List:
 - what was not tested
 - whether evidence is `smoke_debug`, `continuity_baseline`, `shadow_paper`, `real_training`, or `live_path_change`
 
-## 7. Remaining risks
+## 8. Impact statements
+
+State explicitly:
+- offline/online parity impact
+- live-path safety impact
+- venue-semantics impact
+- whether promotion or live-readiness interpretation changed
+
+## 9. Remaining risks
 
 State:
 - blockers
@@ -97,7 +113,7 @@ State:
 - unverified assumptions
 - follow-up risks
 
-## 8. Docs and state updates
+## 10. Docs and state updates
 
 State whether the following were updated:
 - `PROJECT_STATE.md`
@@ -106,7 +122,7 @@ State whether the following were updated:
 - canonical docs
 - runbooks
 
-## 9. Commercial / live-trading interpretation
+## 11. Commercial / live-trading interpretation
 
 State plainly:
 - whether this improves edge discovery,
@@ -114,6 +130,10 @@ State plainly:
 - whether this reduces live-trading risk,
 - whether promotion or live readiness changed.
 
-## 10. Next recommended task
+## 12. Explicit non-goals
+
+State what this change did not attempt to solve.
+
+## 13. Next recommended task
 
 Propose the next task and why it should come next.

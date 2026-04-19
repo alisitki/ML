@@ -1,5 +1,9 @@
 # Remediation Batch 2
 
+> Historical record only.
+> This file preserves batch-time findings and chronology. It does not define current repo truth.
+> Current truth lives in `docs/PROJECT_STATE.md`, `docs/ROADMAP.md`, and `docs/BACKLOG.md`.
+
 ## 1. Verification summary
 
 - Runtime verification before the patch confirmed that `PolicyRuntimeBridge` only enforced adapter consistency, target-asset ownership, required streams, required field families, scale-label presence, and allowed venues.

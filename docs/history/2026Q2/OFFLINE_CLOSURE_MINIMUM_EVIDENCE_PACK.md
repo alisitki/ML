@@ -1,5 +1,9 @@
 # Offline Closure Minimum Evidence Pack
 
+> Historical record only.
+> This file preserves the minimum evidence package as it existed on 2026-04-18. It does not define current closeout truth or current offline-closure status by itself.
+> Current truth lives in `docs/PROJECT_STATE.md`, `docs/BACKLOG.md`, `docs/continuity_closeout/*.yaml`, `docs/OFFLINE_CLOSURE_CRITERIA.md`, and `docs/history/2026Q2/AUTHORITATIVE_CONTINUITY_RERUN_2026-04-18.md`.
+
 **Date:** 2026-04-18  
 **Purpose:** Record the minimum repo-tracked evidence package produced during the Phase 1 closeout sprint without overstating authoritative continuity truth or broader offline closure.
 

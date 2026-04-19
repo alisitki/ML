@@ -149,18 +149,31 @@ When active, answer in this structure:
 2. `rules_touched`
    - relevant documents and contracts
 
-3. `findings`
+3. `current_truth_interpretation`
+   - current-truth docs that govern the task now
+   - whether the task is current-phase hardening, target-state clarification, or next-phase enablement in current repo reality
+   - whether any missing capability is a current defect or later-phase work
+   - whether the task touches `QL-014`, `QL-031`, or neither
+   - if relevant, confirm the task does not invent a competing active workstream
+
+4. `findings`
    - blocker vs non-blocker
    - exact failure mode
    - parity / safety / economic consequence
 
-4. `required_evidence`
+5. `required_evidence`
    - tests
    - replay checks
    - runtime checks
    - what is still unproven
 
-5. `recommendation`
+6. `impact_statement`
+   - parity impact
+   - live-path safety impact
+   - venue-semantics impact
+   - whether promotion or live-readiness interpretation changes
+
+7. `recommendation`
    - proceed / proceed with guardrails / do not proceed yet
    - smallest safe next step
 

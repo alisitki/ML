@@ -1,5 +1,9 @@
 # Authoritative Continuity Rerun Operations 2026-04-18
 
+> Historical record only.
+> This file preserves batch-time evidence and operator chronology. It does not define current repo truth.
+> Current truth lives in `docs/PROJECT_STATE.md`, `docs/ROADMAP.md`, `docs/BACKLOG.md`, and the closeout records under `docs/continuity_closeout/`.
+
 **Status:** complete  
 **Scope:** operational record for the authoritative rerun at `/workspace/runs/ql016-ql004-authoritative-20260418`
 

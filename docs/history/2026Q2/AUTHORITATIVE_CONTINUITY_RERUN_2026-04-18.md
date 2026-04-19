@@ -1,5 +1,9 @@
 # Authoritative Continuity Rerun 2026-04-18
 
+> Historical record only.
+> This file preserves the authoritative rerun evidence path. It does not override current repo truth by itself.
+> Current truth lives in `docs/PROJECT_STATE.md`, `docs/ROADMAP.md`, `docs/BACKLOG.md`, and the closeout records under `docs/continuity_closeout/`.
+
 **Status:** complete  
 **Task:** `QL-016` / `QL-004` fresh authoritative controlled rerun
 

@@ -11,6 +11,9 @@ This is the canonical reference for:
 - scale semantics
 - derived-surface attachment
 
+Canonical version id:
+- observation schema version -> `observation_schema_v1`
+
 ## 1. Core principle
 
 The observation surface must preserve market structure without collapsing:

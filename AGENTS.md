@@ -149,6 +149,39 @@ If active state and requested work conflict, justify the deviation explicitly.
 
 ---
 
+## Authority model
+
+Use these precedence rules explicitly.
+
+Current repo truth surface:
+
+- `docs/PROJECT_STATE.md` defines what current `HEAD` materially is.
+- `docs/ROADMAP.md` defines phase order, gating, and what is planned next versus current.
+- `docs/BACKLOG.md` defines the active execution queue and current priority ordering.
+
+If they disagree, resolve by specificity and recency within that current-truth surface rather than by reaching first for historical material.
+
+Machine-readable continuity-closeout surface:
+
+- `docs/continuity_closeout/*.yaml` are the machine-readable current closeout records.
+- `docs/CONTINUITY_CLOSEOUT_RECORDS.md` defines the record model and interpretation rules.
+- Historical continuity docs may explain how a closeout decision was reached, but they do not override the current YAML decision state.
+
+Historical and target-state surfaces:
+
+- `docs/history/` is evidence and chronology only.
+- Historical docs never override newer current-head truth when `PROJECT_STATE.md`, `ROADMAP.md`, `BACKLOG.md`, or closeout YAMLs disagree.
+- `docs/PRODUCT_THESIS.md`, `docs/ONLINE_RUNTIME_MODEL.md`, and `docs/COMMERCIALIZATION_GATES.md` define destination or later-phase architecture, not current implemented reality.
+- `docs/DECISIONS.md`, canonical contract docs, and relevant runbooks are the constraint/governance surface: they do not define current status by themselves, but they constrain permissible execution and must not be violated.
+
+Active-track rule:
+
+- `QL-014` is the active docs-truth hardening item.
+- `QL-031` is the single active next offline-hardening batch in this workspace.
+- Docs hardening must not be framed as an alternative execution track that overrides `QL-031`.
+
+---
+
 ## Required task classification
 
 For every meaningful task, classify all five fields.

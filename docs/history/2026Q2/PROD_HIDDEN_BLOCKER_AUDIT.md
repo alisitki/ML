@@ -1,5 +1,9 @@
 # QuantLab Prod Path Hidden Blocker Audit
 
+> Historical record only.
+> This file preserves an earlier blocker audit and chronology. It does not define current repo truth.
+> Current truth lives in `docs/PROJECT_STATE.md`, `docs/ROADMAP.md`, and `docs/BACKLOG.md`.
+
 ## A) Yönetici Özeti
 
 - **En büyük gizli risk:** Verinin `TrajectoryRecord` (Pydantic/JSON) ve raw float kopyaları arasında sürekli dönüşüme girmesidir. QL-021 sadece \`train\` sırasındaki darboğazı çözecektir, ancak \`evaluate\` ve \`validation\` fazlarında Pydantic nesneleri ve on-the-fly \`runtime_bridge.decide()\` çağrıları sebebiyle aynı single-threaded GIL darboğazı farklı bir formatta tekrar karşımıza çıkacaktır.

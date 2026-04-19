@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -561,11 +562,32 @@ def test_ql031_batch_script_uses_distinct_default_preflight_surface(
     assert len(workspace_plus_inventory["grouped_by_slice"]) == 1
     assert len(workspace_plus_inventory["grouped_by_train_window"]) == 1
     assert summary["status"] == "preflight_passed_no_distinct_retained_surface"
+    assert summary["preflight_selection_result"] == "preflight_passed_no_distinct_retained_surface"
+    assert summary["batch_execution_result"] == "preflight_only"
+    assert summary["failure_stage"] is None
+    assert summary["failure_reason"] is None
     assert summary["comparison_reports"] == []
     assert summary["distinct_surface_preflight_allowed"] is True
     assert (output_root / "distinct_surface_preflight.json").exists()
     assert (output_root / "retained_root_discovery.json").exists()
     assert (output_root / "diagnostic_imports" / diagnostic_bundle_root.name / "import_classification.json").exists()
+
+
+def test_ql031_batch_legacy_status_prefers_execution_failure_over_preflight_result(repo_root: Path) -> None:
+    script_path = repo_root / "scripts" / "run_ql031_batch.py"
+    spec = importlib.util.spec_from_file_location("run_ql031_batch", script_path)
+
+    assert spec is not None and spec.loader is not None
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    status = module._legacy_status(
+        preflight_selection_result="blocked_distinct_surface_collision",
+        batch_execution_result="failed_evidence_regeneration",
+    )
+
+    assert status == "failed_evidence_regeneration"
 
 
 def test_cli_compare_policies_fails_closed_without_same_root_champion(

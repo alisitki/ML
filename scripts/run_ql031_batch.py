@@ -216,12 +216,20 @@ def main() -> int:
         dump_json_data(preflight_output, rerun_preflight)
         preflight_path = str(preflight_output)
 
-    status = _status_for_batch(
+    preflight_selection_result = _preflight_selection_result(
         distinct_retained_candidates=distinct_retained_candidates,
         rerun_preflight=rerun_preflight,
     )
+    batch_execution_result = _batch_execution_result()
     summary = {
-        "status": status,
+        "status": _legacy_status(
+            preflight_selection_result=preflight_selection_result,
+            batch_execution_result=batch_execution_result,
+        ),
+        "preflight_selection_result": preflight_selection_result,
+        "batch_execution_result": batch_execution_result,
+        "failure_stage": None,
+        "failure_reason": None,
         "output_root": str(output_root),
         "workspace_registry_roots": [str(path) for path in workspace_registry_roots],
         "diagnostic_bundle_roots": [str(path) for path in diagnostic_bundle_roots],
@@ -318,7 +326,7 @@ def _is_under(path: Path, parent: Path) -> bool:
     return True
 
 
-def _status_for_batch(
+def _preflight_selection_result(
     *,
     distinct_retained_candidates: list[dict[str, Any]],
     rerun_preflight: dict[str, Any] | None,
@@ -330,6 +338,16 @@ def _status_for_batch(
     if not rerun_preflight["allowed"]:
         return "blocked_distinct_surface_collision"
     return "preflight_passed_no_distinct_retained_surface"
+
+
+def _batch_execution_result() -> str:
+    return "preflight_only"
+
+
+def _legacy_status(*, preflight_selection_result: str, batch_execution_result: str) -> str:
+    if batch_execution_result != "preflight_only":
+        return batch_execution_result
+    return preflight_selection_result
 
 
 if __name__ == "__main__":

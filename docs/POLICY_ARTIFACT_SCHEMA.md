@@ -11,6 +11,11 @@ A policy artifact is what survives offline training and becomes eligible for:
 - paper/sim evaluation
 - possible deployment
 
+Canonical version ids:
+- current policy artifact schema version -> `policy_artifact_v2`
+- legacy policy artifact schema version -> `policy_artifact_v1`
+- strict runtime contract version -> `runtime_contract_v1`
+
 ## 1. Core principle
 
 Training artifact and deployment artifact are separate.

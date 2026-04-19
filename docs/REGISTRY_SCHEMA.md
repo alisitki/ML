@@ -13,6 +13,9 @@ It is the system of record for:
 - paper/sim linkage
 - deployment eligibility
 
+Version note:
+- no separate registry schema version id is declared on current `HEAD`
+
 ## 1. Core principle
 
 If it is not in the registry, it does not exist for promotion purposes.

@@ -1,5 +1,9 @@
 # QL-031 Distinct Surface Rerun 2026-04-19
 
+> Historical record only.
+> This file preserves the `QL-031` distinct-surface rerun evidence and proof boundary. It does not override current repo truth by itself.
+> Current truth lives in `docs/PROJECT_STATE.md`, `docs/BACKLOG.md`, `docs/OFFLINE_CLOSURE_CRITERIA.md`, and the closeout records under `docs/continuity_closeout/`.
+
 **Status:** complete  
 **Task:** `QL-031` minimal distinct-surface controlled rerun fallback
 

@@ -1,5 +1,9 @@
 # Continuity Authority Discovery Run 2026-04-18
 
+> Historical record only.
+> This file preserves a blocked discovery batch from the 2026-04-18 workspace baseline. It does not define current continuity-closeout truth.
+> Current truth lives in `docs/PROJECT_STATE.md`, `docs/BACKLOG.md`, `docs/continuity_closeout/*.yaml`, and `docs/history/2026Q2/AUTHORITATIVE_CONTINUITY_RERUN_2026-04-18.md`.
+
 **Status:** blocked  
 **Task:** `QL-016` external authority discovery batch
 

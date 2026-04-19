@@ -10,6 +10,9 @@ This is the hard seam between:
 
 The executor should consume execution intent, not raw policy artifacts.
 
+Canonical version id:
+- execution intent schema version -> `execution_intent_v1`
+
 ## 1. Core principle
 
 Execution intent is the narrowed, final, executor-facing decision.

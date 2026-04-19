@@ -11,6 +11,9 @@ It covers:
 - venue/size/leverage dimensions
 - no-trade semantics
 
+Canonical version id:
+- action space version -> `action_space_v1`
+
 ## 1. Core principle
 
 QuantLab policies are inventory-aware and single-asset in action ownership.

@@ -27,6 +27,7 @@ superseded_by: []
 - current implemented repo reality -> `docs/PROJECT_STATE.md`
 - current phase order and gates -> `docs/ROADMAP.md`
 - active execution queue / outstanding work -> `docs/BACKLOG.md`
+- current machine-readable continuity closeout state -> `docs/continuity_closeout/*.yaml`
 - offline closure definition -> `docs/OFFLINE_CLOSURE_CRITERIA.md`
 - continuity audit method -> `docs/CONTINUITY_AUDIT_RUNBOOK.md`
 - continuity authority discovery method -> `docs/CONTINUITY_AUTHORITY_DISCOVERY_RUNBOOK.md`
@@ -37,8 +38,16 @@ superseded_by: []
 - executor / runtime boundary -> `docs/RUNTIME_BOUNDARY.md`
 
 Current implemented reality is governed by `docs/PROJECT_STATE.md`, `docs/ROADMAP.md`, and `docs/BACKLOG.md`.
+Current continuity retirement state is governed by `docs/continuity_closeout/*.yaml` interpreted through `docs/CONTINUITY_CLOSEOUT_RECORDS.md`.
 `docs/PRODUCT_THESIS.md`, `docs/ONLINE_RUNTIME_MODEL.md`, and `docs/COMMERCIALIZATION_GATES.md` describe destination or later-phase architecture and do not override current implemented reality without explicit supersession.
+Historical docs under `docs/history/` preserve chronology and evidence only; they do not override newer current-head truth or the closeout YAML surface.
 If two docs seem to disagree, the more specific authority above wins unless a newer canonical doc explicitly supersedes it.
+
+Current active-track note:
+
+- `QL-014` is the active docs-truth item.
+- `QL-031` is the single active next offline-hardening batch.
+- Docs hardening should clarify that track, not compete with it.
 
 ---
 
@@ -79,6 +88,20 @@ If two docs seem to disagree, the more specific authority above wins unless a ne
 - `docs/REGISTRY_SCHEMA.md`
 - `docs/EXECUTION_INTENT_SCHEMA.md`
 - `docs/PROMOTION_GATE.md`
+
+---
+
+## Canonical version map
+
+- reward -> `reward_v1`
+- split -> `split_v1_walkforward`
+- observation schema -> `observation_schema_v1`
+- action space -> `action_space_v1`
+- policy artifact schema -> `policy_artifact_v2`
+- legacy policy artifact schema -> `policy_artifact_v1`
+- strict runtime contract -> `runtime_contract_v1`
+- execution intent schema -> `execution_intent_v1`
+- registry schema -> no separate version id declared on current `HEAD`
 
 ---
 

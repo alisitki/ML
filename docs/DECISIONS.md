@@ -92,6 +92,10 @@ Status values:
   - do not expand NumPy-specific architecture.
   - do not treat NumPy support as a long-term default.
   - do not widen the runtime adapter or payload family just to complete the training migration.
+- current_state_note:
+  - The NumPy continuity window was retired on `2026-04-18`.
+  - Current closeout state lives in `docs/continuity_closeout/numpy_training_backend.yaml`.
+  - Historical decision evidence lives in `docs/history/2026Q2/AUTHORITATIVE_CONTINUITY_RERUN_2026-04-18.md`.
 
 ## D-012 — Strict runtime contract is default; legacy compat is explicit and temporary
 - status: accepted
@@ -103,6 +107,10 @@ Status values:
   - No new work may be justified primarily by preserving compat.
   - Compat layers require explicit retirement tracking.
   - If no active artifact inventory depends on a compat layer, freeze or retire it instead of expanding it.
+- current_state_note:
+  - The legacy `linear-policy-v1` compat continuity window was retired on `2026-04-18`.
+  - Current closeout state lives in `docs/continuity_closeout/legacy_linear_policy_v1_compat.yaml`.
+  - Historical decision evidence lives in `docs/history/2026Q2/AUTHORITATIVE_CONTINUITY_RERUN_2026-04-18.md`.
 
 ## D-013 — Walk-forward folds are mandatory for candidate selection; exported artifacts are canonically refit afterward
 - status: accepted

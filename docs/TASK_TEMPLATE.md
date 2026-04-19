@@ -79,7 +79,24 @@ List the relevant:
 - runbooks
 - state / backlog / decisions
 
-## 5. Main risks
+## 5. Current-truth and track interpretation
+
+State explicitly:
+- which current-truth docs govern this task now
+- whether the task is aligned with current repo truth or only target-state intent
+- whether any missing capability is a current defect or later-phase work
+- whether the task affects `QL-014`, `QL-031`, or neither
+- if `QL-014` / `QL-031` are relevant, confirm this task does not invent a competing active workstream
+
+## 6. Impact statements
+
+State explicitly:
+- offline/online parity impact
+- live-path safety impact
+- venue-semantics impact
+- whether promotion or live-readiness interpretation changes
+
+## 7. Main risks
 
 State selected `risk_focus` values first, then add brief task-specific notes if needed.
 Canonical `risk_focus` values:
@@ -93,15 +110,15 @@ Canonical `risk_focus` values:
 - `execution_drift`
 - `recovery_corruption`
 
-## 6. Smallest valid plan
+## 8. Smallest valid plan
 
 Give the smallest plan that solves the task without widening scope.
 
-## 7. Files likely touched
+## 9. Files likely touched
 
 List the likely files.
 
-## 8. Definition of done
+## 10. Definition of done
 
 State:
 - tests required
@@ -110,6 +127,10 @@ State:
 - evidence scope
 - remaining unverified assumptions
 
-## 9. Explicit non-goals
+## 11. Explicit non-goals
 
 State what this task must not turn into.
+
+## 12. Next recommended task
+
+State the next task that should follow and why it comes next without overriding the current active track declared by `docs/BACKLOG.md`.

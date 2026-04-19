@@ -1,5 +1,9 @@
 # Continuity Authority Decision
 
+> Historical record only.
+> This file preserves the authority posture recorded on 2026-04-18. It does not define current continuity-closeout truth by itself.
+> Superseded for current operational truth by `docs/PROJECT_STATE.md`, `docs/BACKLOG.md`, `docs/continuity_closeout/*.yaml`, and `docs/history/2026Q2/AUTHORITATIVE_CONTINUITY_RERUN_2026-04-18.md`.
+
 **Date:** 2026-04-18  
 **Status:** active
 
