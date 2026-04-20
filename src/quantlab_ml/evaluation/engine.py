@@ -24,8 +24,11 @@ from quantlab_ml.contracts import (
     TrajectoryRecord,
     TrajectoryStep,
 )
+from quantlab_ml.contracts.evaluation import EvaluationDiagnostics, EvaluationStreakStats
 from quantlab_ml.models import LinearPolicyParameters, RuntimeDecision
 from quantlab_ml.policies import PolicyRuntimeBridge
+from quantlab_ml.registry.bundle_errors import DanglingTensorCacheManifestError
+from quantlab_ml.registry.bundle_integrity import infer_bundle_payload_error_for_directory
 from quantlab_ml.rewards import RewardEngine
 from quantlab_ml.runtime_contract import (
     build_strict_runtime_contract,
@@ -35,9 +38,9 @@ from quantlab_ml.runtime_contract import (
 from quantlab_ml.trajectories.tensor_cache import (
     TENSOR_CACHE_FORMAT_VERSION,
     TensorCacheManifest,
-    has_tensor_cache,
     load_tensor_cache_shard,
     read_tensor_cache_manifest,
+    tensor_cache_payload_status,
     window_row_indices,
 )
 
@@ -119,6 +122,128 @@ class _CompiledLinearPolicy:
         return decisions
 
 
+@dataclass(slots=True)
+class _EvaluationDiagnosticsAccumulator:
+    dwell_lengths: list[int]
+    same_side_streak_lengths: list[int]
+    current_dwell_side: str = "flat"
+    current_dwell_venue: str | None = None
+    current_dwell_length: int = 0
+    current_same_side: str = "flat"
+    current_same_side_length: int = 0
+    entry_count: int = 0
+    exit_count: int = 0
+    flip_count: int = 0
+    venue_switch_count: int = 0
+    non_flat_transition_count: int = 0
+    last_closed_venue: str | None = None
+
+    def observe(self, *, applied, prior_state: PolicyState | None) -> None:
+        previous_side = prior_state.previous_position_side if prior_state is not None else "flat"
+        previous_venue = prior_state.previous_venue if prior_state is not None else None
+        resulting_side = applied.resulting_position_side
+        resulting_venue = (
+            applied.venue if applied.venue is not None else previous_venue
+        ) if resulting_side != "flat" else None
+
+        if previous_side == "flat" and resulting_side != "flat":
+            self.entry_count += 1
+            if self.last_closed_venue is not None and resulting_venue is not None and self.last_closed_venue != resulting_venue:
+                self.venue_switch_count += 1
+        if previous_side != "flat" and resulting_side == "flat":
+            self.exit_count += 1
+            self.last_closed_venue = previous_venue
+        if previous_side != resulting_side and (previous_side != "flat" or resulting_side != "flat"):
+            self.non_flat_transition_count += 1
+        if previous_side != "flat" and resulting_side != "flat" and previous_side != resulting_side:
+            self.flip_count += 1
+
+        if resulting_side == "flat":
+            self._flush_dwell()
+            self._flush_same_side()
+            return
+
+        if self.current_dwell_length > 0 and self.current_dwell_side == resulting_side and self.current_dwell_venue == resulting_venue:
+            self.current_dwell_length += 1
+        else:
+            self._flush_dwell()
+            self.current_dwell_side = resulting_side
+            self.current_dwell_venue = resulting_venue
+            self.current_dwell_length = 1
+
+        if self.current_same_side_length > 0 and self.current_same_side == resulting_side:
+            self.current_same_side_length += 1
+        else:
+            self._flush_same_side()
+            self.current_same_side = resulting_side
+            self.current_same_side_length = 1
+
+    def finalize(
+        self,
+        *,
+        total_steps: int,
+        total_net_return: float,
+        fee_total: float,
+        funding_total: float,
+        slippage_total: float,
+        risk_penalty_total: float,
+        turnover_penalty_total: float,
+        infeasible_penalty_total: float,
+        realized_trade_count: int,
+    ) -> EvaluationDiagnostics:
+        self._flush_dwell()
+        self._flush_same_side()
+        gross_directional_pnl = (
+            total_net_return
+            - fee_total
+            - funding_total
+            - slippage_total
+            - risk_penalty_total
+            - turnover_penalty_total
+            - infeasible_penalty_total
+        )
+        burden_denominator = max(abs(gross_directional_pnl), 1e-9)
+        mean_dwell = (
+            float(np.mean(np.asarray(self.dwell_lengths, dtype=np.float64)))
+            if self.dwell_lengths
+            else 0.0
+        )
+        same_side_mean = (
+            float(np.mean(np.asarray(self.same_side_streak_lengths, dtype=np.float64)))
+            if self.same_side_streak_lengths
+            else 0.0
+        )
+        return EvaluationDiagnostics(
+            gross_directional_pnl=gross_directional_pnl,
+            trade_rate=realized_trade_count / max(total_steps, 1),
+            fee_slippage_burden=abs(fee_total + slippage_total) / burden_denominator,
+            mean_dwell_steps=mean_dwell,
+            flip_rate=self.flip_count / max(self.non_flat_transition_count, 1),
+            venue_switch_rate=self.venue_switch_count / max(self.entry_count, 1),
+            entry_count=self.entry_count,
+            exit_count=self.exit_count,
+            non_flat_transition_count=self.non_flat_transition_count,
+            same_side_streak_stats=EvaluationStreakStats(
+                count=len(self.same_side_streak_lengths),
+                mean=same_side_mean,
+                max=max(self.same_side_streak_lengths) if self.same_side_streak_lengths else 0,
+            ),
+        )
+
+    def _flush_dwell(self) -> None:
+        if self.current_dwell_length > 0:
+            self.dwell_lengths.append(self.current_dwell_length)
+        self.current_dwell_side = "flat"
+        self.current_dwell_venue = None
+        self.current_dwell_length = 0
+
+    def _flush_same_side(self) -> None:
+        if self.current_same_side_length > 0:
+            self.same_side_streak_lengths.append(self.current_same_side_length)
+        self.current_same_side = "flat"
+        self.current_same_side_length = 0
+
+
 class EvaluationEngine:
     def __init__(self, boundary: EvaluationBoundary):
         self.boundary = boundary
@@ -156,6 +281,7 @@ class EvaluationEngine:
         first_step_time = None
         last_step_time = None
         saw_trajectory = False
+        diagnostics = _EvaluationDiagnosticsAccumulator(dwell_lengths=[], same_side_streak_lengths=[])
 
         for trajectory in trajectories:
             saw_trajectory = True
@@ -166,6 +292,7 @@ class EvaluationEngine:
                     first_step_time = step.event_time
                 last_step_time = step.event_time
                 decision = self.runtime_bridge.decide(artifact, step.observation)
+                prior_policy_state = current_policy_state
                 applied = reward_engine.apply_decision(
                     snapshot=step.reward_snapshot,
                     requested_action_key=decision.action_key,
@@ -192,6 +319,7 @@ class EvaluationEngine:
                 slippage_total += applied.slippage
                 if applied.applied_action_key != "abstain":
                     realized_trade_count += 1
+                diagnostics.observe(applied=applied, prior_state=prior_policy_state)
                 current_policy_state = reward_engine.advance_policy_state(current_policy_state, applied)
 
         if not saw_trajectory or first_step_time is None or last_step_time is None:
@@ -224,6 +352,17 @@ class EvaluationEngine:
             coverage_venues=dataset_spec.exchanges,
             coverage_streams=dataset_spec.stream_universe,
             active_date_range=active_range,
+            diagnostics=diagnostics.finalize(
+                total_steps=total_steps,
+                total_net_return=total_net_return,
+                fee_total=fee_total,
+                funding_total=funding_total,
+                slippage_total=slippage_total,
+                risk_penalty_total=risk_penalty_total,
+                turnover_penalty_total=turnover_penalty_total,
+                infeasible_penalty_total=infeasible_penalty_total,
+                realized_trade_count=realized_trade_count,
+            ),
             notes=notes,
         )
 
@@ -240,10 +379,46 @@ class EvaluationEngine:
         cache_manifest: TensorCacheManifest | None = None,
         allow_jsonl_fallback: bool = False,
     ) -> EvaluationReport:
+        from quantlab_ml.trajectories.streaming_store import TrajectoryDirectoryStore
+
         resolved_cache_manifest = cache_manifest
-        if resolved_cache_manifest is None and has_tensor_cache(directory):
+        cache_status = tensor_cache_payload_status(directory)
+        jsonl_split_exists = (
+            TrajectoryDirectoryStore.is_trajectory_directory(directory)
+            and TrajectoryDirectoryStore.split_exists(directory, split_name)
+        )
+        if resolved_cache_manifest is None and cache_status.payload_complete:
             resolved_cache_manifest = read_tensor_cache_manifest(directory)
         if resolved_cache_manifest is not None:
+            if not cache_status.payload_complete:
+                if allow_jsonl_fallback and jsonl_split_exists:
+                    logger.warning(
+                        "evaluation_directory_tensor_cache_dangling path=%s split=%s "
+                        "tensor_cache_used=false jsonl_fallback_used=true "
+                        "path_classification=temporary_compatibility_maintenance",
+                        directory,
+                        split_name,
+                    )
+                    return self.evaluate_records(
+                        manifest.dataset_spec,
+                        manifest.reward_spec,
+                        self._iter_directory_records(
+                            directory=directory,
+                            split_name=split_name,
+                            start=start,
+                            end=end,
+                            exclusive_end=exclusive_end,
+                            store_cls=TrajectoryDirectoryStore,
+                        ),
+                        artifact,
+                    )
+                raise DanglingTensorCacheManifestError(
+                    detail=(
+                        "trajectory directory contains tensor_cache_manifest.json references "
+                        "without readable shard payloads"
+                    ),
+                    bundle_root=directory.expanduser().resolve(),
+                )
             return self._evaluate_tensor_cache(
                 manifest=manifest,
                 directory=directory,
@@ -255,11 +430,20 @@ class EvaluationEngine:
                 exclusive_end=exclusive_end,
             )
         if not allow_jsonl_fallback:
+            typed_error = infer_bundle_payload_error_for_directory(directory)
+            if typed_error is not None:
+                raise typed_error
             raise ValueError(
                 "tensor cache manifest missing for trajectory directory; "
                 "pass allow_jsonl_fallback=True only for temporary compatibility maintenance"
             )
-        from quantlab_ml.trajectories.streaming_store import TrajectoryDirectoryStore
+        if not jsonl_split_exists:
+            typed_error = infer_bundle_payload_error_for_directory(directory)
+            if typed_error is not None:
+                raise typed_error
+            raise ValueError(
+                f"requested JSONL fallback but split file {split_name!r} is unavailable for trajectory directory"
+            )
 
         logger.warning(
             "evaluation_directory_tensor_cache_missing path=%s split=%s tensor_cache_used=false "
@@ -335,6 +519,7 @@ class EvaluationEngine:
         current_policy_state = PolicyState()
         saw_rows = False
         started_at = _time.perf_counter()
+        diagnostics = _EvaluationDiagnosticsAccumulator(dwell_lengths=[], same_side_streak_lengths=[])
 
         for shard in split_manifest.shards:
             loaded = load_tensor_cache_shard(directory, shard)
@@ -367,6 +552,7 @@ class EvaluationEngine:
                     first_step_time = row.event_time
                 last_step_time = row.event_time
                 decision = decisions[local_index]
+                prior_policy_state = current_policy_state
                 applied = reward_engine.apply_decision(
                     snapshot=row.reward_snapshot,
                     requested_action_key=decision.action_key,
@@ -390,6 +576,7 @@ class EvaluationEngine:
                 slippage_total += applied.slippage
                 if applied.applied_action_key != "abstain":
                     realized_trade_count += 1
+                diagnostics.observe(applied=applied, prior_state=prior_policy_state)
                 current_policy_state = reward_engine.advance_policy_state(current_policy_state, applied)
 
         if not saw_rows or first_step_time is None or last_step_time is None:
@@ -433,6 +620,17 @@ class EvaluationEngine:
             coverage_venues=manifest.dataset_spec.exchanges,
             coverage_streams=manifest.dataset_spec.stream_universe,
             active_date_range=active_range,
+            diagnostics=diagnostics.finalize(
+                total_steps=total_steps,
+                total_net_return=total_net_return,
+                fee_total=fee_total,
+                funding_total=funding_total,
+                slippage_total=slippage_total,
+                risk_penalty_total=risk_penalty_total,
+                turnover_penalty_total=turnover_penalty_total,
+                infeasible_penalty_total=infeasible_penalty_total,
+                realized_trade_count=realized_trade_count,
+            ),
             notes=notes,
         )
 

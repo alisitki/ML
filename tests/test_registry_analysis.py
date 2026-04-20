@@ -1172,9 +1172,12 @@ def test_retain_remote_run_bundle_script_records_instance_and_same_root_chain(
     (bundle_root / "trajectories" / "tensor_cache_v1").mkdir(parents=True, exist_ok=True)
     shutil.copytree(registry_root, bundle_root / "registry")
     shutil.copy2(source_root / "manifest.json", bundle_root / "trajectories" / "manifest.json")
-    shutil.copy2(
-        source_root / "tensor_cache_v1" / "tensor_cache_manifest.json",
-        bundle_root / "trajectories" / "tensor_cache_v1" / "tensor_cache_manifest.json",
+    for split_path in source_root.glob("*.jsonl"):
+        shutil.copy2(split_path, bundle_root / "trajectories" / split_path.name)
+    shutil.copytree(
+        source_root / "tensor_cache_v1",
+        bundle_root / "trajectories" / "tensor_cache_v1",
+        dirs_exist_ok=True,
     )
     dump_model(bundle_root / "policy.json", champion_artifact)
     champion_score = load_model(bundle_root / "registry" / "scores" / f"{champion_artifact.policy_id}.json", PolicyScore)
@@ -1302,6 +1305,9 @@ def test_retain_remote_run_bundle_script_records_instance_and_same_root_chain(
     assert manifest["retained_bundle_kind"] == "repo_local_retained_same_root_proof"
     assert manifest["source_run_root"] == "/workspace/runs/ql031-same-root-proof-test"
     assert manifest["source_repo_commit_sha"] == "test-commit-sha"
+    assert manifest["bundle_payload_class"] == "full"
+    assert manifest["replayable"] is True
+    assert manifest["supports_phase0_empirical_closure"] is True
     assert manifest["instance_metadata"]["gpu_model"] == "NVIDIA GeForce RTX 5090"
     assert manifest["instance_metadata"]["disk_gb"] == 500
     assert manifest["registry_summary"]["champion_policy_id"] == champion_artifact.policy_id

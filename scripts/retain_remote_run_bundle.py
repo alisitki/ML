@@ -8,6 +8,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
+from quantlab_ml.registry.bundle_integrity import validate_retained_bundle  # noqa: E402
 from quantlab_ml.registry.retention import write_bundle_sha256sums, write_retained_bundle_manifest  # noqa: E402
 
 
@@ -79,6 +80,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     config_copies = [_parse_config_copy(value) for value in args.config_copy]
+    report = validate_retained_bundle(args.bundle_root)
     manifest_path = write_retained_bundle_manifest(
         bundle_root=args.bundle_root,
         source_run_root=args.source_run_root,
@@ -91,6 +93,13 @@ def main() -> int:
         config_copies=config_copies,
     )
     sha256sums_path = write_bundle_sha256sums(args.bundle_root)
+    if report is not None:
+        print(
+            "validated retained bundle "
+            f"bundle_payload_class={report.bundle_payload_class} "
+            f"replayable={str(report.replayable).lower()} "
+            f"supports_phase0_empirical_closure={str(report.supports_phase0_empirical_closure).lower()}"
+        )
     print(f"wrote retained bundle manifest to {manifest_path}")
     print(f"wrote retained bundle checksums to {sha256sums_path}")
     return 0

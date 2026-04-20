@@ -38,13 +38,15 @@ from quantlab_ml.models.linear_policy import LinearPolicyParameters
 from quantlab_ml.runtime_contract import build_strict_runtime_contract
 from quantlab_ml.scoring import PolicyScorer
 from quantlab_ml.training.config import TrainingConfig
+from quantlab_ml.registry.bundle_errors import DanglingTensorCacheManifestError
+from quantlab_ml.registry.bundle_integrity import infer_bundle_payload_error_for_directory
 from quantlab_ml.trajectories.tensor_cache import (
     TENSOR_CACHE_FORMAT_VERSION,
     TensorCacheManifest,
     best_label_from_step,
-    has_tensor_cache,
     load_tensor_cache_shard,
     read_tensor_cache_manifest,
+    tensor_cache_payload_status,
     window_row_indices,
 )
 from . import compat_matrix_first
@@ -886,17 +888,54 @@ class LinearPolicyTrainer:
         Uses `tensor_cache_v1` shards when present. JSONL streaming remains only
         as an explicit temporary compatibility fallback.
         """
-        if has_tensor_cache(directory):
+        from quantlab_ml.trajectories.streaming_store import TrajectoryDirectoryStore
+
+        cache_status = tensor_cache_payload_status(directory)
+        jsonl_training_ready = (
+            TrajectoryDirectoryStore.is_trajectory_directory(directory)
+            and all(TrajectoryDirectoryStore.split_exists(directory, split_name) for split_name in manifest.split_names)
+        )
+        if cache_status.payload_complete:
             return self._train_search_from_directory_tensor_cache(
                 manifest=manifest,
                 directory=directory,
                 cache_manifest=read_tensor_cache_manifest(directory),
                 parent_policy_id=parent_policy_id,
             )
+        if cache_status.manifest_present and not cache_status.payload_complete:
+            if allow_jsonl_fallback and jsonl_training_ready:
+                logger.warning(
+                    "training_directory_tensor_cache_dangling path=%s tensor_cache_used=false "
+                    "jsonl_fallback_used=true path_classification=temporary_compatibility_maintenance",
+                    directory,
+                )
+                return self._train_search_from_directory_jsonl(
+                    manifest=manifest,
+                    directory=directory,
+                    parent_policy_id=parent_policy_id,
+                )
+            raise DanglingTensorCacheManifestError(
+                detail=(
+                    "trajectory directory contains tensor_cache_manifest.json references "
+                    "without readable shard payloads"
+                ),
+                bundle_root=directory.expanduser().resolve(),
+            )
         if not allow_jsonl_fallback:
+            typed_error = infer_bundle_payload_error_for_directory(directory)
+            if typed_error is not None:
+                raise typed_error
             raise ValueError(
                 "tensor cache manifest missing for trajectory directory; "
                 "pass allow_jsonl_fallback=True only for temporary compatibility maintenance"
+            )
+        if not jsonl_training_ready:
+            typed_error = infer_bundle_payload_error_for_directory(directory)
+            if typed_error is not None:
+                raise typed_error
+            raise ValueError(
+                "requested JSONL fallback but one or more required split files are unavailable "
+                "for trajectory directory training"
             )
         logger.warning(
             "training_directory_tensor_cache_missing path=%s tensor_cache_used=false "

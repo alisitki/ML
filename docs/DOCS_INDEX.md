@@ -110,6 +110,7 @@ Current active-track note:
 - `docs/PROJECT_STATE.md`
 - `docs/ROADMAP.md`
 - `docs/BACKLOG.md`
+- `docs/QL031_MODEL_REDESIGN_PLAN.md`
 - `docs/OFFLINE_CLOSURE_CRITERIA.md`
 - `docs/CONTINUITY_AUDIT_RUNBOOK.md`
 - `docs/CONTINUITY_AUTHORITY_DISCOVERY_RUNBOOK.md`

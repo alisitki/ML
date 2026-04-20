@@ -17,6 +17,25 @@ class EvaluationBoundary(QuantBaseModel):
     infeasible_action_treatment: str
 
 
+class EvaluationStreakStats(QuantBaseModel):
+    count: int = 0
+    mean: float = 0.0
+    max: int = 0
+
+
+class EvaluationDiagnostics(QuantBaseModel):
+    gross_directional_pnl: float
+    trade_rate: float
+    fee_slippage_burden: float
+    mean_dwell_steps: float
+    flip_rate: float
+    venue_switch_rate: float
+    entry_count: int
+    exit_count: int
+    non_flat_transition_count: int
+    same_side_streak_stats: EvaluationStreakStats = Field(default_factory=EvaluationStreakStats)
+
+
 class EvaluationReport(QuantBaseModel):
     policy_id: str
     evaluation_id: str
@@ -39,6 +58,7 @@ class EvaluationReport(QuantBaseModel):
     coverage_venues: list[str]
     coverage_streams: list[str]
     active_date_range: TimeRange
+    diagnostics: EvaluationDiagnostics | None = None
     notes: list[str] = Field(default_factory=list)
 
 

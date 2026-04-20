@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,16 +12,19 @@ from pydantic import Field
 from quantlab_ml.common import ensure_parent_dir
 from quantlab_ml.contracts import (
     ActionFeasibilitySurface,
+    PolicyState,
     RewardSnapshot,
     TrajectoryRecord,
     TrajectoryStep,
 )
 from quantlab_ml.contracts.common import QuantBaseModel
-from quantlab_ml.models.features import observation_feature_array
+from quantlab_ml.models.features import observation_feature_array, observation_feature_segment_manifest
 
 TENSOR_CACHE_FORMAT_VERSION = "tensor_cache_v1"
 TENSOR_CACHE_DIRNAME = TENSOR_CACHE_FORMAT_VERSION
 TENSOR_CACHE_MANIFEST_FILENAME = "tensor_cache_manifest.json"
+TENSOR_CACHE_DIAGNOSTICS_FORMAT_VERSION = "tensor_cache_diagnostics_v1"
+TENSOR_CACHE_DIAGNOSTICS_FILENAME = "tensor_cache_diagnostics.json"
 DEFAULT_TENSOR_CACHE_SHARD_TARGET_BYTES = 512 * 1024 * 1024
 
 
@@ -32,7 +36,11 @@ def tensor_cache_manifest_path(directory: Path) -> Path:
     return tensor_cache_directory(directory) / TENSOR_CACHE_MANIFEST_FILENAME
 
 
-def has_tensor_cache(directory: Path) -> bool:
+def tensor_cache_diagnostics_path(directory: Path) -> Path:
+    return tensor_cache_directory(directory) / TENSOR_CACHE_DIAGNOSTICS_FILENAME
+
+
+def has_tensor_cache_manifest(directory: Path) -> bool:
     return tensor_cache_manifest_path(directory).exists()
 
 
@@ -43,6 +51,7 @@ class TensorCacheReplayRow(QuantBaseModel):
     trajectory_start: bool
     reward_snapshot: RewardSnapshot
     action_feasibility: ActionFeasibilitySurface
+    policy_state: PolicyState | None = None
 
 
 class TensorCacheShardManifest(QuantBaseModel):
@@ -73,6 +82,62 @@ class TensorCacheManifest(QuantBaseModel):
     feature_dim: int
     shard_target_bytes: int
     splits: dict[str, TensorCacheSplitManifest]
+
+
+class TensorCachePayloadStatus(QuantBaseModel):
+    manifest_present: bool
+    payload_complete: bool
+    referenced_payload_count: int = 0
+    existing_payload_count: int = 0
+    missing_payload_count: int = 0
+    missing_payloads: list[str] = Field(default_factory=list)
+
+
+class TensorCacheFeatureSegmentStats(QuantBaseModel):
+    name: str
+    start: int
+    length: int
+    nonzero_ratio: float
+    always_zero_feature_count: int
+    always_zero_ratio: float
+
+
+class TensorCacheEmpiricalSparsitySummary(QuantBaseModel):
+    row_count: int
+    feature_dim: int
+    total_nonzero_count: int
+    total_value_count: int
+    nonzero_ratio: float
+    always_zero_feature_count: int
+    always_zero_ratio: float
+    segments: list[TensorCacheFeatureSegmentStats] = Field(default_factory=list)
+
+
+class TensorCacheLabelHistograms(QuantBaseModel):
+    action_counts: dict[str, int] = Field(default_factory=dict)
+    venue_counts: dict[str, int] = Field(default_factory=dict)
+    action_venue_counts: dict[str, int] = Field(default_factory=dict)
+    trajectory_start_count: int = 0
+
+
+class TensorCachePolicyStateHistograms(QuantBaseModel):
+    previous_position_side_counts: dict[str, int] = Field(default_factory=dict)
+    previous_venue_counts: dict[str, int] = Field(default_factory=dict)
+    hold_age_steps_counts: dict[str, int] = Field(default_factory=dict)
+    turnover_accumulator_counts: dict[str, int] = Field(default_factory=dict)
+    missing_policy_state_count: int = 0
+
+
+class TensorCacheSplitDiagnostics(QuantBaseModel):
+    split_name: str
+    empirical_sparsity: TensorCacheEmpiricalSparsitySummary
+    label_histograms: TensorCacheLabelHistograms
+    policy_state_histograms: TensorCachePolicyStateHistograms
+
+
+class TensorCacheDiagnosticsManifest(QuantBaseModel):
+    format_version: str = TENSOR_CACHE_DIAGNOSTICS_FORMAT_VERSION
+    splits: dict[str, TensorCacheSplitDiagnostics]
 
 
 @dataclass(slots=True)
@@ -125,6 +190,18 @@ class TensorCacheSplitWriter:
         self._pending_rows = 0
         self._total_rows = 0
         self._next_shard_index = 0
+        self._feature_nonzero_counts = np.zeros(feature_dim, dtype=np.int64)
+        self._feature_segments: list[dict[str, int | str]] | None = None
+        self._action_counts: Counter[str] = Counter()
+        self._venue_counts: Counter[str] = Counter()
+        self._action_venue_counts: Counter[str] = Counter()
+        self._previous_position_side_counts: Counter[str] = Counter()
+        self._previous_venue_counts: Counter[str] = Counter()
+        self._hold_age_steps_counts: Counter[str] = Counter()
+        self._turnover_accumulator_counts: Counter[str] = Counter()
+        self._missing_policy_state_count = 0
+        self._trajectory_start_count = 0
+        self._final_diagnostics: TensorCacheSplitDiagnostics | None = None
 
     def consume_record(self, record: TrajectoryRecord) -> None:
         trajectory_start = True
@@ -135,12 +212,18 @@ class TensorCacheSplitWriter:
     def finalize(self) -> TensorCacheSplitManifest:
         if self._pending_rows > 0:
             self._flush()
+        self._final_diagnostics = self._build_split_diagnostics()
         return TensorCacheSplitManifest(
             split_name=self.split_name,
             row_count=self._total_rows,
             shard_count=len(self._shards),
             shards=self._shards,
         )
+
+    def diagnostics(self) -> TensorCacheSplitDiagnostics:
+        if self._final_diagnostics is None:
+            raise ValueError("tensor cache diagnostics requested before finalize()")
+        return self._final_diagnostics
 
     def _append_step(
         self,
@@ -155,6 +238,8 @@ class TensorCacheSplitWriter:
                 f"tensor cache feature_dim mismatch for split={self.split_name!r}: "
                 f"expected={self.feature_dim}, got={features.shape[0]}"
             )
+        if self._feature_segments is None:
+            self._feature_segments = observation_feature_segment_manifest(step.observation)
         action_key, venue = best_label_from_step(step)
         row = self._pending_rows
         self._feature_buffer[row] = features
@@ -163,6 +248,20 @@ class TensorCacheSplitWriter:
         self._venue_label_buffer[row] = self.venue_choices.index(venue) if venue is not None else 0
         self._event_time_buffer[row] = datetime_to_epoch_millis(step.event_time)
         self._trajectory_start_buffer[row] = trajectory_start
+        self._feature_nonzero_counts += np.not_equal(features, 0.0).astype(np.int64, copy=False)
+        self._action_counts[action_key] += 1
+        self._venue_counts[venue or "<none>"] += 1
+        self._action_venue_counts[f"{action_key}::{venue or '<none>'}"] += 1
+        if trajectory_start:
+            self._trajectory_start_count += 1
+        policy_state = step.policy_state
+        if policy_state is None:
+            self._missing_policy_state_count += 1
+        else:
+            self._previous_position_side_counts[policy_state.previous_position_side] += 1
+            self._previous_venue_counts[policy_state.previous_venue or "<none>"] += 1
+            self._hold_age_steps_counts[str(policy_state.hold_age_steps)] += 1
+            self._turnover_accumulator_counts[_format_histogram_float(policy_state.turnover_accumulator)] += 1
         self._replay_rows.append(
             TensorCacheReplayRow(
                 event_time=step.event_time,
@@ -171,6 +270,7 @@ class TensorCacheSplitWriter:
                 trajectory_start=trajectory_start,
                 reward_snapshot=step.reward_snapshot.model_copy(deep=True),
                 action_feasibility=step.action_feasibility.model_copy(deep=True),
+                policy_state=step.policy_state.model_copy(deep=True) if step.policy_state is not None else None,
             )
         )
         self._pending_rows += 1
@@ -220,6 +320,70 @@ class TensorCacheSplitWriter:
         self._pending_rows = 0
         self._replay_rows = []
 
+    def _build_split_diagnostics(self) -> TensorCacheSplitDiagnostics:
+        if self._feature_segments is None:
+            self._feature_segments = []
+        total_value_count = self._total_rows * self.feature_dim
+        total_nonzero_count = int(self._feature_nonzero_counts.sum())
+        always_zero_feature_count = int(np.count_nonzero(self._feature_nonzero_counts == 0))
+        segment_stats: list[TensorCacheFeatureSegmentStats] = []
+        for segment in self._feature_segments:
+            start = int(segment["start"])
+            length = int(segment["length"])
+            if length <= 0:
+                segment_stats.append(
+                    TensorCacheFeatureSegmentStats(
+                        name=str(segment["name"]),
+                        start=start,
+                        length=length,
+                        nonzero_ratio=0.0,
+                        always_zero_feature_count=0,
+                        always_zero_ratio=0.0,
+                    )
+                )
+                continue
+            segment_counts = self._feature_nonzero_counts[start : start + length]
+            segment_nonzero = int(segment_counts.sum())
+            segment_total_values = self._total_rows * length
+            segment_always_zero = int(np.count_nonzero(segment_counts == 0))
+            segment_stats.append(
+                TensorCacheFeatureSegmentStats(
+                    name=str(segment["name"]),
+                    start=start,
+                    length=length,
+                    nonzero_ratio=(segment_nonzero / segment_total_values) if segment_total_values else 0.0,
+                    always_zero_feature_count=segment_always_zero,
+                    always_zero_ratio=(segment_always_zero / length) if length else 0.0,
+                )
+            )
+
+        return TensorCacheSplitDiagnostics(
+            split_name=self.split_name,
+            empirical_sparsity=TensorCacheEmpiricalSparsitySummary(
+                row_count=self._total_rows,
+                feature_dim=self.feature_dim,
+                total_nonzero_count=total_nonzero_count,
+                total_value_count=total_value_count,
+                nonzero_ratio=(total_nonzero_count / total_value_count) if total_value_count else 0.0,
+                always_zero_feature_count=always_zero_feature_count,
+                always_zero_ratio=(always_zero_feature_count / self.feature_dim) if self.feature_dim else 0.0,
+                segments=segment_stats,
+            ),
+            label_histograms=TensorCacheLabelHistograms(
+                action_counts=dict(self._action_counts),
+                venue_counts=dict(self._venue_counts),
+                action_venue_counts=dict(self._action_venue_counts),
+                trajectory_start_count=self._trajectory_start_count,
+            ),
+            policy_state_histograms=TensorCachePolicyStateHistograms(
+                previous_position_side_counts=dict(self._previous_position_side_counts),
+                previous_venue_counts=dict(self._previous_venue_counts),
+                hold_age_steps_counts=dict(self._hold_age_steps_counts),
+                turnover_accumulator_counts=dict(self._turnover_accumulator_counts),
+                missing_policy_state_count=self._missing_policy_state_count,
+            ),
+        )
+
 
 def write_tensor_cache_manifest_atomic(directory: Path, manifest: TensorCacheManifest) -> None:
     path = tensor_cache_manifest_path(directory)
@@ -232,6 +396,68 @@ def write_tensor_cache_manifest_atomic(directory: Path, manifest: TensorCacheMan
 def read_tensor_cache_manifest(directory: Path) -> TensorCacheManifest:
     return TensorCacheManifest.model_validate_json(
         tensor_cache_manifest_path(directory).read_text(encoding="utf-8")
+    )
+
+
+def tensor_cache_payload_status(directory: Path) -> TensorCachePayloadStatus:
+    manifest_path = tensor_cache_manifest_path(directory)
+    if not manifest_path.exists():
+        return TensorCachePayloadStatus(
+            manifest_present=False,
+            payload_complete=False,
+        )
+    cache_manifest = read_tensor_cache_manifest(directory)
+    referenced_paths: list[str] = []
+    for split_manifest in cache_manifest.splits.values():
+        for shard in split_manifest.shards:
+            referenced_paths.extend(
+                [
+                    shard.feature_path,
+                    shard.action_label_path,
+                    shard.venue_label_path,
+                    shard.venue_mask_path,
+                    shard.event_time_path,
+                    shard.trajectory_start_path,
+                    shard.replay_path,
+                ]
+            )
+    missing_payloads = sorted(
+        {
+            relative_path
+            for relative_path in referenced_paths
+            if not (directory / relative_path).exists()
+        }
+    )
+    referenced_payload_count = len(referenced_paths)
+    existing_payload_count = referenced_payload_count - len(missing_payloads)
+    return TensorCachePayloadStatus(
+        manifest_present=True,
+        payload_complete=len(missing_payloads) == 0,
+        referenced_payload_count=referenced_payload_count,
+        existing_payload_count=existing_payload_count,
+        missing_payload_count=len(missing_payloads),
+        missing_payloads=missing_payloads,
+    )
+
+
+def has_tensor_cache(directory: Path) -> bool:
+    return tensor_cache_payload_status(directory).payload_complete
+
+
+def write_tensor_cache_diagnostics_atomic(
+    directory: Path,
+    diagnostics: TensorCacheDiagnosticsManifest,
+) -> None:
+    path = tensor_cache_diagnostics_path(directory)
+    ensure_parent_dir(path)
+    tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+    tmp_path.write_text(diagnostics.model_dump_json(indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def read_tensor_cache_diagnostics(directory: Path) -> TensorCacheDiagnosticsManifest:
+    return TensorCacheDiagnosticsManifest.model_validate_json(
+        tensor_cache_diagnostics_path(directory).read_text(encoding="utf-8")
     )
 
 
@@ -298,6 +524,10 @@ def best_label_from_step(step: TrajectoryStep) -> tuple[str, str | None]:
     return best_directional.action_key, best_directional.venue
 
 
+def _format_histogram_float(value: float) -> str:
+    return f"{value:.6g}"
+
+
 def _relative_cache_path(directory: Path, path: Path) -> str:
     return str(path.relative_to(directory))
 
@@ -348,21 +578,35 @@ __all__ = [
     "DEFAULT_TENSOR_CACHE_SHARD_TARGET_BYTES",
     "LoadedTensorCacheShard",
     "TENSOR_CACHE_DIRNAME",
+    "TENSOR_CACHE_DIAGNOSTICS_FILENAME",
+    "TENSOR_CACHE_DIAGNOSTICS_FORMAT_VERSION",
     "TENSOR_CACHE_FORMAT_VERSION",
     "TENSOR_CACHE_MANIFEST_FILENAME",
+    "TensorCacheDiagnosticsManifest",
+    "TensorCacheEmpiricalSparsitySummary",
+    "TensorCacheFeatureSegmentStats",
+    "TensorCacheLabelHistograms",
     "TensorCacheManifest",
+    "TensorCachePayloadStatus",
+    "TensorCachePolicyStateHistograms",
     "TensorCacheReplayRow",
     "TensorCacheShardManifest",
+    "TensorCacheSplitDiagnostics",
     "TensorCacheSplitManifest",
     "TensorCacheSplitWriter",
     "best_label_from_step",
     "datetime_to_epoch_millis",
     "epoch_millis_to_datetime",
     "has_tensor_cache",
+    "has_tensor_cache_manifest",
     "load_tensor_cache_shard",
+    "read_tensor_cache_diagnostics",
     "read_tensor_cache_manifest",
     "tensor_cache_directory",
+    "tensor_cache_diagnostics_path",
     "tensor_cache_manifest_path",
+    "tensor_cache_payload_status",
     "window_row_indices",
+    "write_tensor_cache_diagnostics_atomic",
     "write_tensor_cache_manifest_atomic",
 ]

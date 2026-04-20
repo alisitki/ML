@@ -98,6 +98,9 @@ CLI surfaces:
 - `quantlab-ml promote-policy`
 - `quantlab-ml build-offline-evidence-pack`
 - `quantlab-ml inspect-s3-compact --env-file .env`
+- `quantlab-ml inspect-sparsity --trajectories <dir>`
+- `quantlab-ml inspect-policy-state --trajectories <dir>`
+- `quantlab-ml inspect-eval-diagnostics --evaluation <report.json>`
 - `quantlab-ml audit-continuity --registry-root outputs/registry`
 
 `outputs/` is a local ignored workspace path in this repo. An audit run under `outputs/` is neither a repo-tracked artifact nor authoritative evidence by itself.
@@ -132,3 +135,4 @@ When the task touches offline closure or continuity authority, follow the releva
 - `docs/QUANTLAB_CONSTITUTION.md`
 - `docs/RUNTIME_BOUNDARY.md`
 - `docs/REMOTE_GPU_RUNBOOK.md`
+- `docs/QL031_MODEL_REDESIGN_PLAN.md`

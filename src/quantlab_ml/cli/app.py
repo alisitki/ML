@@ -28,10 +28,23 @@ from quantlab_ml.registry import (
     build_offline_evidence_pack,
     render_offline_evidence_pack_markdown,
 )
+from quantlab_ml.registry.bundle_errors import BundlePayloadError
+from quantlab_ml.registry.bundle_integrity import (
+    infer_bundle_payload_error_for_directory,
+    infer_bundle_payload_error_for_evaluation,
+)
 from quantlab_ml.registry.analysis import preflight_same_root_comparison
 from quantlab_ml.scoring import PolicyScorer
 from quantlab_ml.training import LinearPolicyTrainer, TrainingConfig, TrainingSearchResult
 from quantlab_ml.trajectories import TrajectoryBuilder, TrajectoryDirectoryStore, TrajectoryStore
+from quantlab_ml.trajectories.builder import (
+    read_trajectory_build_diagnostics,
+    trajectory_build_diagnostics_path,
+)
+from quantlab_ml.trajectories.tensor_cache import (
+    read_tensor_cache_diagnostics,
+    tensor_cache_diagnostics_path,
+)
 
 app = typer.Typer(
     help="QuantLab ML CLI for canonical data, offline training/evaluation, and runtime artifact workflows."
@@ -79,6 +92,93 @@ def inspect_s3_compact(
     typer.echo(json.dumps(summary, indent=2))
 
 
+@app.command("inspect-sparsity")
+def inspect_sparsity(
+    trajectories: Path = typer.Option(..., exists=True, readable=True),
+    output: Path | None = typer.Option(None, help="Optional JSON output path."),
+) -> None:
+    if not TrajectoryDirectoryStore.is_trajectory_directory(trajectories):
+        raise typer.BadParameter("inspect-sparsity requires a trajectory directory")
+
+    bundle_error = infer_bundle_payload_error_for_directory(trajectories)
+    if bundle_error is not None:
+        raise _bundle_bad_parameter(bundle_error)
+    build_diag_path = trajectory_build_diagnostics_path(trajectories)
+    cache_diag_path = tensor_cache_diagnostics_path(trajectories)
+    if not build_diag_path.exists() and not cache_diag_path.exists():
+        raise typer.BadParameter("no build or tensor-cache diagnostics found for the trajectory directory")
+
+    payload: dict[str, object] = {}
+    if build_diag_path.exists():
+        payload["structural_sparsity"] = read_trajectory_build_diagnostics(trajectories)
+    if cache_diag_path.exists():
+        payload["empirical_sparsity"] = read_tensor_cache_diagnostics(trajectories).model_dump(mode="json")
+
+    if output is not None:
+        dump_json_data(output, payload)
+        typer.echo(f"wrote sparsity diagnostics to {output}")
+        return
+    typer.echo(json.dumps(payload, indent=2))
+
+
+@app.command("inspect-policy-state")
+def inspect_policy_state(
+    trajectories: Path = typer.Option(..., exists=True, readable=True),
+    split: str | None = typer.Option(None, help="Optional split name filter."),
+    output: Path | None = typer.Option(None, help="Optional JSON output path."),
+) -> None:
+    if not TrajectoryDirectoryStore.is_trajectory_directory(trajectories):
+        raise typer.BadParameter("inspect-policy-state requires a trajectory directory")
+    bundle_error = infer_bundle_payload_error_for_directory(trajectories)
+    if bundle_error is not None:
+        raise _bundle_bad_parameter(bundle_error)
+    diagnostics = read_tensor_cache_diagnostics(trajectories)
+    if split is not None:
+        split_diag = diagnostics.splits.get(split)
+        if split_diag is None:
+            raise typer.BadParameter(f"tensor-cache diagnostics missing split {split!r}")
+        payload: dict[str, object] = {
+            "split": split,
+            "policy_state_histograms": split_diag.policy_state_histograms.model_dump(mode="json"),
+        }
+    else:
+        payload = {
+            "splits": {
+                split_name: split_diag.policy_state_histograms.model_dump(mode="json")
+                for split_name, split_diag in diagnostics.splits.items()
+            }
+        }
+
+    if output is not None:
+        dump_json_data(output, payload)
+        typer.echo(f"wrote policy-state diagnostics to {output}")
+        return
+    typer.echo(json.dumps(payload, indent=2))
+
+
+@app.command("inspect-eval-diagnostics")
+def inspect_eval_diagnostics(
+    evaluation: Path = typer.Option(..., exists=True, readable=True),
+    output: Path | None = typer.Option(None, help="Optional JSON output path."),
+) -> None:
+    report = load_model(evaluation, EvaluationReport)
+    if report.diagnostics is None:
+        bundle_error = infer_bundle_payload_error_for_evaluation(evaluation)
+        if bundle_error is not None:
+            raise _bundle_bad_parameter(bundle_error)
+        raise typer.BadParameter("evaluation report does not contain diagnostics")
+    payload = {
+        "policy_id": report.policy_id,
+        "evaluation_id": report.evaluation_id,
+        "diagnostics": report.diagnostics.model_dump(mode="json"),
+    }
+    if output is not None:
+        dump_json_data(output, payload)
+        typer.echo(f"wrote evaluation diagnostics to {output}")
+        return
+    typer.echo(json.dumps(payload, indent=2))
+
+
 @app.command("train")
 def train(
     trajectories: Path = typer.Option(..., exists=True, readable=True),
@@ -97,12 +197,15 @@ def train(
     if TrajectoryDirectoryStore.is_trajectory_directory(trajectories):
         # PRODUCTION PATH: tensor-cache directory train; JSONL fallback is explicit compat only.
         manifest = TrajectoryDirectoryStore.read_manifest(trajectories)
-        search_result = trainer.train_search_from_directory(
-            manifest,
-            trajectories,
-            parent_policy_id=parent_policy_id,
-            allow_jsonl_fallback=allow_jsonl_fallback,
-        )
+        try:
+            search_result = trainer.train_search_from_directory(
+                manifest,
+                trajectories,
+                parent_policy_id=parent_policy_id,
+                allow_jsonl_fallback=allow_jsonl_fallback,
+            )
+        except BundlePayloadError as exc:
+            raise _bundle_bad_parameter(exc) from exc
         dump_model(output, search_result.selected_artifact)
         if len(search_result.candidate_results) > 1:
             _write_search_artifacts(output, search_result)
@@ -146,13 +249,16 @@ def evaluate(
     if TrajectoryDirectoryStore.is_trajectory_directory(trajectories):
         # PRODUCTION PATH: tensor-cache evaluation from the trajectory directory.
         manifest = TrajectoryDirectoryStore.read_manifest(trajectories)
-        report = engine.evaluate_directory(
-            manifest=manifest,
-            directory=trajectories,
-            artifact=artifact,
-            split_name="final_untouched_test",
-            allow_jsonl_fallback=allow_jsonl_fallback,
-        )
+        try:
+            report = engine.evaluate_directory(
+                manifest=manifest,
+                directory=trajectories,
+                artifact=artifact,
+                split_name="final_untouched_test",
+                allow_jsonl_fallback=allow_jsonl_fallback,
+            )
+        except BundlePayloadError as exc:
+            raise _bundle_bad_parameter(exc) from exc
     else:
         # FIXTURE / TEST COMPAT PATH
         bundle = TrajectoryStore.read(trajectories)
@@ -479,3 +585,7 @@ def _register_training_candidates_from_manifest(
             training_config_hash=candidate.artifact.training_config_hash,
             trajectory_directory=trajectory_directory,
         )
+
+
+def _bundle_bad_parameter(error: BundlePayloadError) -> typer.BadParameter:
+    return typer.BadParameter(error.to_message())

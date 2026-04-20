@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import json
 import logging
 import math
 from collections import defaultdict
@@ -8,10 +9,11 @@ from collections.abc import Iterable, Iterator
 from datetime import datetime, timedelta, timezone
 from itertools import combinations
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 
+from quantlab_ml.common import dump_json_data
 from quantlab_ml.contracts import (
     ActionFeasibilitySurface,
     ActionSpaceSpec,
@@ -45,11 +47,24 @@ from quantlab_ml.rewards import RewardEngine
 from quantlab_ml.runtime_contract import expected_feature_dim
 from quantlab_ml.trajectories.tensor_cache import (
     DEFAULT_TENSOR_CACHE_SHARD_TARGET_BYTES,
+    TensorCacheDiagnosticsManifest,
     TensorCacheManifest,
     TensorCacheSplitManifest,
     TensorCacheSplitWriter,
+    write_tensor_cache_diagnostics_atomic,
     write_tensor_cache_manifest_atomic,
 )
+
+TRAJECTORY_BUILD_DIAGNOSTICS_FILENAME = "trajectory_build_diagnostics.json"
+
+
+def trajectory_build_diagnostics_path(directory: Path) -> Path:
+    return directory / TRAJECTORY_BUILD_DIAGNOSTICS_FILENAME
+
+
+def read_trajectory_build_diagnostics(directory: Path) -> dict[str, Any]:
+    return json.loads(trajectory_build_diagnostics_path(directory).read_text(encoding="utf-8"))
+
 
 class _CompactEvent:
     """Minimum event representation for the build-time index.
@@ -120,6 +135,7 @@ class TrajectoryBuilder:
             field_axis=field_axis,
             availability_by_contract=availability,
         )
+        self._reset_diagnostics()
 
     # ------------------------------------------------------------------
     # Public API
@@ -132,6 +148,7 @@ class TrajectoryBuilder:
         production-profile snapshots (tens of thousands of steps).  Use
         build_to_directory() for production builds.
         """
+        self._reset_diagnostics()
         indexed, event_count, history_start_from_events = self._index_events(events)
         history_start = history_start_from_events or self.dataset_spec.train_range.start
         logger.info(
@@ -202,6 +219,7 @@ class TrajectoryBuilder:
             - At most max_episode_steps TrajectoryStep objects in RAM at a time.
             - No full TrajectoryBundle assembly.
         """
+        self._reset_diagnostics()
         # Avoid circular import (streaming_store imports contracts, not builder)
         from quantlab_ml.trajectories.streaming_store import TrajectoryDirectoryStore
 
@@ -240,6 +258,7 @@ class TrajectoryBuilder:
         total_steps = 0
         feature_dim = expected_feature_dim(self.observation_schema)
         split_write_stats: dict[str, TrajectorySplitStats] = {}
+        tensor_cache_diagnostics: dict[str, Any] = {}
         tensor_cache_splits: dict[str, TensorCacheSplitManifest] = {}
         for split_name, split_range in zip(split_names, split_ranges):
             logger.info("building_split split=%s", split_name)
@@ -268,6 +287,7 @@ class TrajectoryBuilder:
                     f"cache_rows={split_cache_manifest.row_count}, split_steps={step_count}"
                 )
             tensor_cache_splits[split_name] = split_cache_manifest
+            tensor_cache_diagnostics[split_name] = tensor_writer.diagnostics()
             split_write_stats[split_name] = TrajectorySplitStats(
                 record_count=rec_count,
                 step_count=step_count,
@@ -281,6 +301,7 @@ class TrajectoryBuilder:
 
         manifest = manifest.model_copy(update={"split_write_stats": split_write_stats})
         TrajectoryDirectoryStore.write_manifest(output_dir, manifest)
+        dump_json_data(trajectory_build_diagnostics_path(output_dir), self._build_diagnostics_manifest())
 
         write_tensor_cache_manifest_atomic(
             output_dir,
@@ -290,6 +311,10 @@ class TrajectoryBuilder:
                 shard_target_bytes=DEFAULT_TENSOR_CACHE_SHARD_TARGET_BYTES,
                 splits=tensor_cache_splits,
             ),
+        )
+        write_tensor_cache_diagnostics_atomic(
+            output_dir,
+            TensorCacheDiagnosticsManifest(splits=tensor_cache_diagnostics),
         )
         logger.info(
             "trajectory_build_completed slice_id=%s total_records=%d total_steps=%d "
@@ -319,6 +344,7 @@ class TrajectoryBuilder:
         history_start: datetime,
     ) -> list[TrajectoryRecord]:
         timestamps = self._timestamps(split_range)
+        self._record_split_window_eligibility(split_name, len(timestamps))
         if len(timestamps) <= self.reward_spec.horizon_steps:
             return []
 
@@ -331,7 +357,7 @@ class TrajectoryBuilder:
             for step_index in range(usable_count):
                 event_time = timestamps[step_index]
 
-                observation = self._build_observation(indexed, symbol, event_time, history_start)
+                observation = self._build_observation(indexed, symbol, event_time, history_start, split_name)
                 action_feasibility = self._build_action_feasibility(indexed, symbol, event_time)
                 reward_context = self._build_reward_context(indexed, symbol, event_time)
                 reward_timeline = self._build_reward_timeline(indexed, symbol, timestamps, step_index)
@@ -390,6 +416,7 @@ class TrajectoryBuilder:
         TrajectoryStep objects) per iteration.
         """
         timestamps = self._timestamps(split_range)
+        self._record_split_window_eligibility(split_name, len(timestamps))
         if len(timestamps) <= self.reward_spec.horizon_steps:
             return
 
@@ -404,7 +431,7 @@ class TrajectoryBuilder:
             for step_index in range(usable_count):
                 event_time = timestamps[step_index]
 
-                observation = self._build_observation(indexed, symbol, event_time, history_start)
+                observation = self._build_observation(indexed, symbol, event_time, history_start, split_name)
                 action_feasibility = self._build_action_feasibility(indexed, symbol, event_time)
                 reward_context = self._build_reward_context(indexed, symbol, event_time)
                 reward_timeline = self._build_reward_timeline(indexed, symbol, timestamps, step_index)
@@ -562,11 +589,20 @@ class TrajectoryBuilder:
         target_symbol: str,
         event_time: datetime,
         history_start: datetime,
+        split_name: str,
     ) -> ObservationContext:
         raw_surface: dict[str, RawScaleTensor] = {}
+        self._split_observation_counts[split_name] += 1
 
         for scale_spec in self.trajectory_spec.scale_preset:
-            tensor = self._build_scale_tensor(indexed, target_symbol, event_time, history_start, scale_spec)
+            tensor = self._build_scale_tensor(
+                indexed,
+                target_symbol,
+                event_time,
+                history_start,
+                scale_spec,
+                split_name,
+            )
             raw_surface[scale_spec.label] = tensor
 
         derived = self._build_derived_surface(indexed, target_symbol, event_time)
@@ -588,6 +624,7 @@ class TrajectoryBuilder:
         event_time: datetime,
         history_start: datetime,
         scale_spec: ScaleSpec,
+        split_name: str,
     ) -> RawScaleTensor:
         symbols = self.dataset_spec.symbols
         exchanges = self.dataset_spec.exchanges
@@ -679,6 +716,18 @@ class TrajectoryBuilder:
                             missing[idx] = math.isnan(raw_val)
 
         shape = [n_t, n_sym, n_exc, n_str, total_fields]
+        self._record_scale_tensor_diagnostics(
+            split_name=split_name,
+            scale_spec=scale_spec,
+            shape=shape,
+            streams=streams,
+            field_axis=field_axis,
+            stream_field_offsets=stream_field_offsets,
+            padding=padding,
+            unavailable_by_contract=unavailable_by_contract,
+            missing=missing,
+            stale=stale,
+        )
         return RawScaleTensor(
             scale_label=scale_spec.label,
             shape=shape,
@@ -1042,6 +1091,144 @@ class TrajectoryBuilder:
             else None
         )
         return indexed, count, min_time
+
+    def _reset_diagnostics(self) -> None:
+        self._split_window_eligibility: dict[str, dict[str, Any]] = {}
+        self._split_observation_counts: dict[str, int] = defaultdict(int)
+        self._raw_surface_mask_counts: dict[str, dict[str, dict[str, dict[str, int]]]] = defaultdict(
+            lambda: defaultdict(lambda: defaultdict(dict))
+        )
+
+    def _record_split_window_eligibility(self, split_name: str, timestamp_count: int) -> None:
+        usable_steps = max(timestamp_count - self.reward_spec.horizon_steps, 0)
+        tail_dropped = min(self.reward_spec.horizon_steps, timestamp_count)
+        self._split_window_eligibility[split_name] = {
+            "timestamp_count": timestamp_count,
+            "reward_horizon_steps": self.reward_spec.horizon_steps,
+            "usable_steps_per_symbol": usable_steps,
+            "tail_dropped_steps_per_symbol": tail_dropped,
+            "symbol_count": len(self.dataset_spec.symbols),
+            "total_usable_steps": usable_steps * len(self.dataset_spec.symbols),
+            "total_tail_dropped_steps": tail_dropped * len(self.dataset_spec.symbols),
+        }
+
+    def _record_scale_tensor_diagnostics(
+        self,
+        *,
+        split_name: str,
+        scale_spec: ScaleSpec,
+        shape: list[int],
+        streams: list[str],
+        field_axis: dict[str, list[str]],
+        stream_field_offsets: dict[str, int],
+        padding: np.ndarray,
+        unavailable_by_contract: np.ndarray,
+        missing: np.ndarray,
+        stale: np.ndarray,
+    ) -> None:
+        padding_view = padding.reshape(shape)
+        unavailable_view = unavailable_by_contract.reshape(shape)
+        missing_view = missing.reshape(shape)
+        stale_view = stale.reshape(shape)
+
+        for stream_index, stream in enumerate(streams):
+            field_count = len(field_axis.get(stream, []))
+            if field_count <= 0:
+                continue
+            field_start = stream_field_offsets[stream]
+            field_end = field_start + field_count
+            stream_padding = padding_view[:, :, :, stream_index, field_start:field_end]
+            stream_unavailable = unavailable_view[:, :, :, stream_index, field_start:field_end]
+            stream_missing = missing_view[:, :, :, stream_index, field_start:field_end]
+            stream_stale = stale_view[:, :, :, stream_index, field_start:field_end]
+            any_mask = stream_padding | stream_unavailable | stream_missing | stream_stale
+            overlap = (
+                stream_padding.astype(np.int8)
+                + stream_unavailable.astype(np.int8)
+                + stream_missing.astype(np.int8)
+                + stream_stale.astype(np.int8)
+            ) > 1
+
+            summary = self._raw_surface_mask_counts[split_name][scale_spec.label][stream]
+            if not summary:
+                summary.update(
+                    {
+                        "field_count": field_count,
+                        "total_real_cells": 0,
+                        "padding_count": 0,
+                        "unavailable_count": 0,
+                        "missing_count": 0,
+                        "stale_count": 0,
+                        "valid_count": 0,
+                        "overlap_count": 0,
+                    }
+                )
+            summary["total_real_cells"] += int(stream_padding.size)
+            summary["padding_count"] += int(np.count_nonzero(stream_padding))
+            summary["unavailable_count"] += int(np.count_nonzero(stream_unavailable))
+            summary["missing_count"] += int(np.count_nonzero(stream_missing))
+            summary["stale_count"] += int(np.count_nonzero(stream_stale))
+            summary["valid_count"] += int(np.count_nonzero(~any_mask))
+            summary["overlap_count"] += int(np.count_nonzero(overlap))
+
+    def _structural_sparsity_manifest(self) -> dict[str, Any]:
+        field_total = sum(
+            len(self.observation_schema.field_axis.get(stream, []))
+            for stream in self.dataset_spec.stream_universe
+        )
+        scales: dict[str, Any] = {}
+        for scale_spec in self.trajectory_spec.scale_preset:
+            scales[scale_spec.label] = {
+                "shape": list(self.observation_schema.shape_for_scale(scale_spec.label)),
+                "streams": {},
+            }
+            for stream in self.dataset_spec.stream_universe:
+                field_count = len(self.observation_schema.field_axis.get(stream, []))
+                occupancy_ratio = field_count / field_total if field_total else 0.0
+                scales[scale_spec.label]["streams"][stream] = {
+                    "field_count": field_count,
+                    "field_total": field_total,
+                    "occupancy_ratio": occupancy_ratio,
+                    "structural_dead_space_slots_per_coordinate": max(field_total - field_count, 0),
+                    "structural_dead_space_ratio": 1.0 - occupancy_ratio if field_total else 0.0,
+                }
+        return {
+            "field_total": field_total,
+            "scale_count": len(self.trajectory_spec.scale_preset),
+            "scales": scales,
+        }
+
+    def _build_diagnostics_manifest(self) -> dict[str, Any]:
+        raw_surface_mask_summary: dict[str, Any] = {}
+        for split_name, scales in self._raw_surface_mask_counts.items():
+            scale_summary: dict[str, Any] = {}
+            for scale_label, streams in scales.items():
+                scale_summary[scale_label] = {"streams": {}}
+                for stream, counts in streams.items():
+                    total_real_cells = int(counts["total_real_cells"])
+                    scale_summary[scale_label]["streams"][stream] = {
+                        **counts,
+                        "padding_ratio": counts["padding_count"] / total_real_cells if total_real_cells else 0.0,
+                        "unavailable_ratio": counts["unavailable_count"] / total_real_cells if total_real_cells else 0.0,
+                        "missing_ratio": counts["missing_count"] / total_real_cells if total_real_cells else 0.0,
+                        "stale_ratio": counts["stale_count"] / total_real_cells if total_real_cells else 0.0,
+                        "valid_ratio": counts["valid_count"] / total_real_cells if total_real_cells else 0.0,
+                        "overlap_ratio": counts["overlap_count"] / total_real_cells if total_real_cells else 0.0,
+                    }
+            raw_surface_mask_summary[split_name] = {
+                "observation_count": self._split_observation_counts.get(split_name, 0),
+                "scales": scale_summary,
+            }
+
+        return {
+            "slice_id": self.dataset_spec.slice_id,
+            "dataset_hash": self.dataset_spec.dataset_hash,
+            "sampling_interval_seconds": self.dataset_spec.sampling_interval_seconds,
+            "reward_horizon_steps": self.reward_spec.horizon_steps,
+            "structural_sparsity": self._structural_sparsity_manifest(),
+            "split_window_eligibility": self._split_window_eligibility,
+            "raw_surface_mask_summary": raw_surface_mask_summary,
+        }
 
 
 def _chunked(items: list[TrajectoryStep], chunk_size: int) -> Iterable[list[TrajectoryStep]]:

@@ -11,6 +11,51 @@ def observation_feature_vector(observation: ObservationContext) -> list[float]:
     return observation_feature_array(observation, dtype=np.float32).tolist()
 
 
+def observation_feature_segment_manifest(observation: ObservationContext) -> list[dict[str, int | str]]:
+    segments: list[dict[str, int | str]] = []
+    cursor = 0
+
+    for scale in observation.observation_schema.scale_axis:
+        tensor = observation.raw_surface[scale.label]
+        for block_name, values in (
+            ("values", tensor.values),
+            ("age", tensor.age),
+            ("padding", tensor.padding),
+            ("unavailable_by_contract", tensor.unavailable_by_contract),
+            ("missing", tensor.missing),
+            ("stale", tensor.stale),
+        ):
+            length = int(len(values))
+            segments.append(
+                {
+                    "name": f"raw/{scale.label}/{block_name}",
+                    "start": cursor,
+                    "length": length,
+                }
+            )
+            cursor += length
+
+    derived_length = 0
+    if observation.derived_surface is not None:
+        derived_length = sum(len(channel.values) for channel in observation.derived_surface.channels)
+    segments.append(
+        {
+            "name": "derived",
+            "start": cursor,
+            "length": int(derived_length),
+        }
+    )
+    cursor += int(derived_length)
+    segments.append(
+        {
+            "name": "target_asset_index",
+            "start": cursor,
+            "length": 1,
+        }
+    )
+    return segments
+
+
 def observation_feature_array(
     observation: ObservationContext,
     *,

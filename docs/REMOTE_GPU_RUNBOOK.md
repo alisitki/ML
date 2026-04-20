@@ -241,47 +241,80 @@ Repo-local retained bundles remain retained copies and are not the active author
 ## Official command flow
 
 ```bash
-quantlab-ml build-trajectories \
-  --source s3-compact \
-  --s3-env-file .env \
-  --data-config configs/data/controlled-remote-day.yaml \
-  --training-config configs/training/production.yaml \
-  --reward-config configs/reward/default.yaml \
-  --output "$RUN_ROOT/trajectories" \
-  2>&1 | tee "$RUN_ROOT/build.log"
+export RUN_ID="$(basename "$RUN_ROOT")"
+
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase BUILD_STARTED \
+  --log "$RUN_ROOT/build.log" \
+  --exit-file "$RUN_ROOT/build.exit" \
+  -- \
+  quantlab-ml build-trajectories \
+    --source s3-compact \
+    --s3-env-file .env \
+    --data-config configs/data/controlled-remote-day.yaml \
+    --training-config configs/training/production.yaml \
+    --reward-config configs/reward/default.yaml \
+    --output "$RUN_ROOT/trajectories"
 
 # NOTE: --output is a directory.
 # The directory will contain canonical JSONL plus a tensor_cache_v1 sidecar.
 # The prod train/evaluate commands auto-detect the directory format and
 # must use tensor-cache fast paths unless explicit compat fallback is requested.
 
-quantlab-ml train \
-  --trajectories "$RUN_ROOT/trajectories" \
-  --training-config configs/training/production.yaml \
-  --registry-root "$RUN_ROOT/registry" \
-  --output "$RUN_ROOT/policy.json" \
-  2>&1 | tee "$RUN_ROOT/train.log"
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase TRAIN_STARTED \
+  --log "$RUN_ROOT/train.log" \
+  --exit-file "$RUN_ROOT/train.exit" \
+  -- \
+  quantlab-ml train \
+    --trajectories "$RUN_ROOT/trajectories" \
+    --training-config configs/training/production.yaml \
+    --registry-root "$RUN_ROOT/registry" \
+    --output "$RUN_ROOT/policy.json"
 
-quantlab-ml evaluate \
-  --trajectories "$RUN_ROOT/trajectories" \
-  --policy "$RUN_ROOT/policy.json" \
-  --evaluation-config configs/evaluation/default.yaml \
-  --output "$RUN_ROOT/evaluation.json" \
-  2>&1 | tee "$RUN_ROOT/evaluate.log"
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase EVAL_STARTED \
+  --log "$RUN_ROOT/evaluate.log" \
+  --exit-file "$RUN_ROOT/evaluate.exit" \
+  -- \
+  quantlab-ml evaluate \
+    --trajectories "$RUN_ROOT/trajectories" \
+    --policy "$RUN_ROOT/policy.json" \
+    --evaluation-config configs/evaluation/default.yaml \
+    --output "$RUN_ROOT/evaluation.json"
 
-quantlab-ml score \
-  --policy "$RUN_ROOT/policy.json" \
-  --evaluation "$RUN_ROOT/evaluation.json" \
-  --registry-root "$RUN_ROOT/registry" \
-  --output "$RUN_ROOT/score.json" \
-  2>&1 | tee "$RUN_ROOT/score.log"
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase SCORE_STARTED \
+  --log "$RUN_ROOT/score.log" \
+  --exit-file "$RUN_ROOT/score.exit" \
+  -- \
+  quantlab-ml score \
+    --policy "$RUN_ROOT/policy.json" \
+    --evaluation "$RUN_ROOT/evaluation.json" \
+    --registry-root "$RUN_ROOT/registry" \
+    --output "$RUN_ROOT/score.json"
 
-quantlab-ml export-policy \
-  --policy "$RUN_ROOT/policy.json" \
-  --score "$RUN_ROOT/score.json" \
-  --output "$RUN_ROOT/inference_artifact.json" \
-  2>&1 | tee "$RUN_ROOT/export.log"
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase EXPORT_STARTED \
+  --log "$RUN_ROOT/export.log" \
+  --exit-file "$RUN_ROOT/export.exit" \
+  -- \
+  quantlab-ml export-policy \
+    --policy "$RUN_ROOT/policy.json" \
+    --score "$RUN_ROOT/score.json" \
+    --output "$RUN_ROOT/inference_artifact.json"
 ```
+
+Operational requirement:
+- `build.log` must be created immediately at stage launch.
+- the first visible line must appear within a few seconds and begin with `[STARTED]`
+- the wrapper forces unbuffered child execution and emits `[HEARTBEAT]` lines during otherwise silent phases
+- stage markers such as `BUILD_STARTED`, `EVAL_STARTED`, `COMPLETED`, and `FAILED` must remain visible in the stage log
 
 ## QL-031 same-root proof chain overlay
 
@@ -296,65 +329,110 @@ Command deltas:
 Required same-root chain after the initial `train`:
 
 ```bash
-quantlab-ml evaluate \
-  --trajectories "$RUN_ROOT/trajectories" \
-  --policy "$RUN_ROOT/policy.json" \
-  --evaluation-config configs/evaluation/default.yaml \
-  --output "$RUN_ROOT/evaluation.json" \
-  2>&1 | tee "$RUN_ROOT/evaluate.log"
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase EVAL_STARTED \
+  --log "$RUN_ROOT/evaluate.log" \
+  --exit-file "$RUN_ROOT/evaluate.exit" \
+  -- \
+  quantlab-ml evaluate \
+    --trajectories "$RUN_ROOT/trajectories" \
+    --policy "$RUN_ROOT/policy.json" \
+    --evaluation-config configs/evaluation/default.yaml \
+    --output "$RUN_ROOT/evaluation.json"
 
-quantlab-ml score \
-  --policy "$RUN_ROOT/policy.json" \
-  --evaluation "$RUN_ROOT/evaluation.json" \
-  --registry-root "$RUN_ROOT/registry" \
-  --output "$RUN_ROOT/score.json" \
-  2>&1 | tee "$RUN_ROOT/score.log"
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase SCORE_STARTED \
+  --log "$RUN_ROOT/score.log" \
+  --exit-file "$RUN_ROOT/score.exit" \
+  -- \
+  quantlab-ml score \
+    --policy "$RUN_ROOT/policy.json" \
+    --evaluation "$RUN_ROOT/evaluation.json" \
+    --registry-root "$RUN_ROOT/registry" \
+    --output "$RUN_ROOT/score.json"
 
-quantlab-ml export-policy \
-  --policy "$RUN_ROOT/policy.json" \
-  --score "$RUN_ROOT/score.json" \
-  --output "$RUN_ROOT/inference_artifact.json" \
-  2>&1 | tee "$RUN_ROOT/export.log"
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase EXPORT_STARTED \
+  --log "$RUN_ROOT/export.log" \
+  --exit-file "$RUN_ROOT/export.exit" \
+  -- \
+  quantlab-ml export-policy \
+    --policy "$RUN_ROOT/policy.json" \
+    --score "$RUN_ROOT/score.json" \
+    --output "$RUN_ROOT/inference_artifact.json"
 
-quantlab-ml record-paper-sim \
-  --registry-root "$RUN_ROOT/registry" \
-  --policy-id <selected-policy-id> \
-  --report "$RUN_ROOT/champion-paper-sim.md" \
-  2>&1 | tee "$RUN_ROOT/champion-paper-sim.log"
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase PAPER_SIM_STARTED \
+  --log "$RUN_ROOT/champion-paper-sim.log" \
+  --exit-file "$RUN_ROOT/champion-paper-sim.exit" \
+  -- \
+  quantlab-ml record-paper-sim \
+    --registry-root "$RUN_ROOT/registry" \
+    --policy-id <selected-policy-id> \
+    --report "$RUN_ROOT/champion-paper-sim.md"
 
-quantlab-ml promote-policy \
-  --registry-root "$RUN_ROOT/registry" \
-  --policy-id <selected-policy-id> \
-  --evidence "$RUN_ROOT/champion-promotion-evidence.yaml" \
-  --output "$RUN_ROOT/champion-promotion-decision.json" \
-  2>&1 | tee "$RUN_ROOT/champion-promotion.log"
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase PROMOTION_STARTED \
+  --log "$RUN_ROOT/champion-promotion.log" \
+  --exit-file "$RUN_ROOT/champion-promotion.exit" \
+  -- \
+  quantlab-ml promote-policy \
+    --registry-root "$RUN_ROOT/registry" \
+    --policy-id <selected-policy-id> \
+    --evidence "$RUN_ROOT/champion-promotion-evidence.yaml" \
+    --output "$RUN_ROOT/champion-promotion-decision.json"
 
-quantlab-ml evaluate \
-  --trajectories "$RUN_ROOT/trajectories" \
-  --policy "$RUN_ROOT/policy_candidates/<challenger-policy-id>.json" \
-  --evaluation-config configs/evaluation/default.yaml \
-  --output "$RUN_ROOT/challenger-evaluation.json" \
-  2>&1 | tee "$RUN_ROOT/challenger-evaluate.log"
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase EVAL_STARTED \
+  --log "$RUN_ROOT/challenger-evaluate.log" \
+  --exit-file "$RUN_ROOT/challenger-evaluate.exit" \
+  -- \
+  quantlab-ml evaluate \
+    --trajectories "$RUN_ROOT/trajectories" \
+    --policy "$RUN_ROOT/policy_candidates/<challenger-policy-id>.json" \
+    --evaluation-config configs/evaluation/default.yaml \
+    --output "$RUN_ROOT/challenger-evaluation.json"
 
-quantlab-ml score \
-  --policy "$RUN_ROOT/policy_candidates/<challenger-policy-id>.json" \
-  --evaluation "$RUN_ROOT/challenger-evaluation.json" \
-  --registry-root "$RUN_ROOT/registry" \
-  --output "$RUN_ROOT/challenger-score.json" \
-  2>&1 | tee "$RUN_ROOT/challenger-score.log"
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase SCORE_STARTED \
+  --log "$RUN_ROOT/challenger-score.log" \
+  --exit-file "$RUN_ROOT/challenger-score.exit" \
+  -- \
+  quantlab-ml score \
+    --policy "$RUN_ROOT/policy_candidates/<challenger-policy-id>.json" \
+    --evaluation "$RUN_ROOT/challenger-evaluation.json" \
+    --registry-root "$RUN_ROOT/registry" \
+    --output "$RUN_ROOT/challenger-score.json"
 
-quantlab-ml compare-policies \
-  --registry-root "$RUN_ROOT/registry" \
-  --challenger-policy-id <challenger-policy-id> \
-  --output "$RUN_ROOT/challenger-comparison-report.json" \
-  2>&1 | tee "$RUN_ROOT/challenger-compare.log"
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase COMPARE_STARTED \
+  --log "$RUN_ROOT/challenger-compare.log" \
+  --exit-file "$RUN_ROOT/challenger-compare.exit" \
+  -- \
+  quantlab-ml compare-policies \
+    --registry-root "$RUN_ROOT/registry" \
+    --challenger-policy-id <challenger-policy-id> \
+    --output "$RUN_ROOT/challenger-comparison-report.json"
 
-quantlab-ml record-paper-sim \
-  --registry-root "$RUN_ROOT/registry" \
-  --policy-id <challenger-policy-id> \
-  --report "$RUN_ROOT/challenger-paper-sim.md" \
-  --comparison-report-id <comparison-report-id> \
-  2>&1 | tee "$RUN_ROOT/challenger-paper-sim.log"
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase PAPER_SIM_STARTED \
+  --log "$RUN_ROOT/challenger-paper-sim.log" \
+  --exit-file "$RUN_ROOT/challenger-paper-sim.exit" \
+  -- \
+  quantlab-ml record-paper-sim \
+    --registry-root "$RUN_ROOT/registry" \
+    --policy-id <challenger-policy-id> \
+    --report "$RUN_ROOT/challenger-paper-sim.md" \
+    --comparison-report-id <comparison-report-id>
 ```
 
 Evidence-file rule:
@@ -445,9 +523,19 @@ Inside the logs, confirm:
 
 ## Shutdown retention for authoritative reruns
 
+Retained bundles are now explicitly classified:
+- `full`: replayable retained bundle with split JSONL and tensor-cache payloads intact
+- `slim`: audit-only retained bundle that is non-replayable and does not support Phase 0 empirical closure
+
+Integrity rule:
+- a `slim` bundle must not keep `trajectories/tensor_cache_v1/tensor_cache_manifest.json` if the referenced shard payloads are absent
+- if tensor-cache summary metadata is needed in a `slim` bundle, keep a non-dangling summary artifact such as `tensor_cache_manifest.summary.json` instead
+- retained manifests must declare `bundle_payload_class`, `replayable`, and `supports_phase0_empirical_closure`
+- legacy dangling bundles must be normalized into a sibling copy or an explicitly receipted in-place form; the original defect trail must remain auditable via `normalization_receipt.json`
+
 Before instance termination, retain the minimum evidence bundle needed to support future truth, audit, closeout, and docs verification.
 
-Retain:
+Retain for `slim` bundles:
 - `continuity_audit_authoritative.json`
 - `continuity_authority_discovery.json`
 - `inspect_s3.json`
@@ -456,7 +544,7 @@ Retain:
 - `score.json`
 - `inference_artifact.json`
 - `trajectories/manifest.json`
-- `trajectories/tensor_cache_v1/tensor_cache_manifest.json`
+- `trajectories/tensor_cache_v1/tensor_cache_manifest.summary.json` when tensor-cache summary metadata is needed
 - `registry/index.json`
 - active `registry/records/*`
 - active `registry/evaluations/*`
@@ -481,10 +569,18 @@ Required retained manifest instance metadata:
 
 Do not copy:
 - raw market data
-- full split JSONL payloads
-- full tensor-cache shard payloads
+- full split JSONL payloads when intentionally producing a `slim` bundle
+- full tensor-cache shard payloads when intentionally producing a `slim` bundle
 - temporary transfer files
 - duplicate large artifacts that carry no additional decision evidence
+
+Retain for `full` bundles:
+- everything required by the `slim` bundle
+- full split JSONL payloads
+- full tensor-cache shard payloads and replay JSONL sidecars
+- `trajectories/tensor_cache_v1/tensor_cache_manifest.json`
+
+Use a `full` bundle when replay, JSONL fallback, empirical diagnostics re-materialization, or Phase 0 closure evidence may be needed later.
 
 Retention honesty:
 - the retained-local bundle is a preserved copy derived from an authoritative rerun

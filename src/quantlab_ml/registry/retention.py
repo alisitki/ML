@@ -16,11 +16,13 @@ from quantlab_ml.contracts import (
     PolicyScore,
     PromotionDecisionRecord,
 )
+from quantlab_ml.registry.bundle_integrity import inspect_retained_bundle
 from quantlab_ml.registry.store import LocalRegistryStore
 from quantlab_ml.trajectories.tensor_cache import read_tensor_cache_manifest
 
 _MANIFEST_FILENAME = "bundle_manifest.json"
 _SHA256SUMS_FILENAME = "SHA256SUMS"
+_TENSOR_CACHE_SUMMARY_FILENAME = "tensor_cache_manifest.summary.json"
 _DEFAULT_AUTHORITY_NOTE = (
     "derived from a controlled remote run; retained copy remains external-retained-evidence "
     "and is not relabeled authoritative evidence"
@@ -93,6 +95,7 @@ def build_retained_bundle_manifest(
         "copied_files": _copied_files(resolved_bundle_root),
         "hardlink_map": _hardlink_map(resolved_bundle_root),
     }
+    manifest = _attach_bundle_integrity_metadata(manifest, resolved_bundle_root)
     return {key: value for key, value in manifest.items() if value not in (None, [], {})}
 
 
@@ -134,6 +137,24 @@ def write_bundle_sha256sums(bundle_root: Path) -> Path:
         lines.append(f"{_sha256(path)}  {path.relative_to(resolved_bundle_root).as_posix()}")
     output_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     return output_path
+
+
+def refresh_existing_retained_bundle_manifest(
+    bundle_root: Path,
+    *,
+    extra_updates: dict[str, Any] | None = None,
+) -> Path | None:
+    resolved_bundle_root = bundle_root.expanduser().resolve()
+    manifest_path = resolved_bundle_root / _MANIFEST_FILENAME
+    if not manifest_path.exists():
+        return None
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["trajectory_summary"] = _trajectory_summary(resolved_bundle_root / "trajectories")
+    if extra_updates:
+        payload.update(extra_updates)
+    payload = _attach_bundle_integrity_metadata(payload, resolved_bundle_root)
+    dump_json_data(manifest_path, {key: value for key, value in payload.items() if value not in (None, [], {})})
+    return manifest_path
 
 
 def _copy_config_files(*, bundle_root: Path, config_copies: list[tuple[Path, str]]) -> list[dict[str, Any]]:
@@ -229,6 +250,7 @@ def _trajectory_summary(trajectories_root: Path) -> dict[str, Any] | None:
         "split_write_stats": payload.get("split_write_stats", {}),
     }
     cache_manifest_path = trajectories_root / "tensor_cache_v1" / "tensor_cache_manifest.json"
+    cache_summary_path = trajectories_root / "tensor_cache_v1" / _TENSOR_CACHE_SUMMARY_FILENAME
     if cache_manifest_path.exists():
         cache_manifest = read_tensor_cache_manifest(trajectories_root)
         summary["tensor_cache_feature_dtype"] = cache_manifest.feature_dtype
@@ -239,7 +261,26 @@ def _trajectory_summary(trajectories_root: Path) -> dict[str, Any] | None:
         summary["tensor_cache_split_row_counts"] = {
             split_name: split_manifest.row_count for split_name, split_manifest in cache_manifest.splits.items()
         }
+    elif cache_summary_path.exists():
+        cache_summary = json.loads(cache_summary_path.read_text(encoding="utf-8"))
+        summary["tensor_cache_feature_dtype"] = cache_summary.get("feature_dtype")
+        summary["tensor_cache_feature_dim"] = cache_summary.get("feature_dim")
+        summary["tensor_cache_split_shard_counts"] = cache_summary.get("split_shard_counts", {})
+        summary["tensor_cache_split_row_counts"] = cache_summary.get("split_row_counts", {})
     return summary
+
+
+def _attach_bundle_integrity_metadata(manifest: dict[str, Any], bundle_root: Path) -> dict[str, Any]:
+    report = inspect_retained_bundle(bundle_root)
+    if report is None:
+        return manifest
+    manifest["bundle_payload_class"] = report.bundle_payload_class
+    manifest["replayable"] = report.replayable
+    manifest["supports_phase0_empirical_closure"] = report.supports_phase0_empirical_closure
+    manifest["known_partial"] = not report.replayable
+    manifest["non_replayable"] = not report.replayable
+    manifest["bundle_integrity"] = report.model_dump(mode="json")
+    return manifest
 
 
 def _registry_summary(store: LocalRegistryStore) -> dict[str, Any]:
