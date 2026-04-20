@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -11,9 +12,10 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from quantlab_ml.cli.app import app
-from quantlab_ml.common import dump_model, hash_payload, load_yaml
+from quantlab_ml.common import dump_model, hash_payload, load_model, load_yaml
 from quantlab_ml.contracts import (
     DatasetSpec,
+    EvaluationReport,
     PolicyArtifact,
     PolicyScore,
     PromotionEvidence,
@@ -22,6 +24,7 @@ from quantlab_ml.contracts import (
 )
 from quantlab_ml.data import LocalFixtureSource
 from quantlab_ml.evaluation import EvaluationEngine
+from quantlab_ml.policies import PolicyRuntimeBridge
 from quantlab_ml.registry import LocalRegistryStore, build_offline_evidence_pack
 from quantlab_ml.registry.analysis import (
     build_blocker_inventory,
@@ -220,6 +223,7 @@ def test_blocker_inventory_keeps_linked_same_root_challenger_out_of_generic_link
     challenger_record = next(record for record in source["policy_records"] if record["policy_id"] == challenger_artifact.policy_id)
 
     assert source["comparison_preflight"]["allowed"] is True
+    assert source["comparison_preflight"]["blocking_reasons"] == []
     assert source["comparison_report_count"] == 1
     assert source["paper_sim_evidence_count"] == 2
     assert source["missing_comparison_policy_ids"] == []
@@ -1127,6 +1131,194 @@ def test_cli_compare_policies_fails_closed_without_same_root_champion(
         if part
     )
     assert "same-root champion" in error_text
+
+
+def test_retain_remote_run_bundle_script_records_instance_and_same_root_chain(
+    repo_root: Path,
+    tmp_path: Path,
+    fixture_path: Path,
+    dataset_spec,
+    training_bundle: tuple,
+    reward_spec,
+    evaluation_boundary,
+    trajectory_bundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report: EvaluationReport,
+    policy_score: PolicyScore,
+) -> None:
+    source_root, _, _, _, _ = _build_retained_run_root(
+        tmp_path=tmp_path,
+        fixture_path=fixture_path,
+        dataset_spec=dataset_spec,
+        training_bundle=training_bundle,
+        reward_spec=reward_spec,
+        evaluation_boundary=evaluation_boundary,
+    )
+    registry_root, champion_artifact, challenger_artifact, comparison_report_id, challenger_paper_sim_id = (
+        _build_same_root_comparison_chain(
+            tmp_path=tmp_path,
+            trajectory_bundle=trajectory_bundle,
+            policy_artifact=policy_artifact,
+            evaluation_report=evaluation_report,
+            policy_score=policy_score,
+            training_bundle=training_bundle,
+            link_challenger=True,
+        )
+    )
+    assert comparison_report_id is not None
+    assert challenger_paper_sim_id is not None
+
+    bundle_root = tmp_path / "ql031-same-root-proof-bundle"
+    (bundle_root / "trajectories" / "tensor_cache_v1").mkdir(parents=True, exist_ok=True)
+    shutil.copytree(registry_root, bundle_root / "registry")
+    shutil.copy2(source_root / "manifest.json", bundle_root / "trajectories" / "manifest.json")
+    shutil.copy2(
+        source_root / "tensor_cache_v1" / "tensor_cache_manifest.json",
+        bundle_root / "trajectories" / "tensor_cache_v1" / "tensor_cache_manifest.json",
+    )
+    dump_model(bundle_root / "policy.json", champion_artifact)
+    champion_score = load_model(bundle_root / "registry" / "scores" / f"{champion_artifact.policy_id}.json", PolicyScore)
+    champion_evaluation = load_model(
+        bundle_root / "registry" / "evaluations" / f"{champion_artifact.policy_id}.json",
+        EvaluationReport,
+    )
+    dump_model(bundle_root / "score.json", champion_score)
+    dump_model(bundle_root / "evaluation.json", champion_evaluation)
+    dump_model(bundle_root / "inference_artifact.json", PolicyRuntimeBridge().export(champion_artifact, champion_score))
+
+    (bundle_root / "inspect_s3.json").write_text(
+        json.dumps(
+            {
+                "matched_partition_count": 133,
+                "successful_day_count": 1,
+                "successful_days_sample_first": ["20260125"],
+                "exchange_counts": {"binance": 38, "bybit": 45, "okx": 50},
+                "stream_counts": {"bbo": 28, "funding": 29, "mark_price": 29, "trade": 28, "open_interest": 19},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (bundle_root / "build.log").write_text("2026-04-19 08:00:00,000 INFO build started\n", encoding="utf-8")
+    (bundle_root / "train.log").write_text("2026-04-19 08:10:00,000 INFO train started\n", encoding="utf-8")
+    (bundle_root / "export.log").write_text(
+        "wrote inference artifact export to /workspace/runs/ql031-same-root-proof-test/inference_artifact.json\n",
+        encoding="utf-8",
+    )
+    for stage in ("build", "train", "evaluate", "score", "export"):
+        (bundle_root / f"{stage}.exit").write_text("0\n", encoding="utf-8")
+
+    artifact_link = bundle_root / "registry" / "artifacts" / f"{champion_artifact.policy_id}.json"
+    artifact_link.unlink()
+    os.link(bundle_root / "policy.json", artifact_link)
+
+    instance_metadata_path = tmp_path / "vast-instance.json"
+    instance_metadata_path.write_text(
+        json.dumps(
+            {
+                "gpu_model": "NVIDIA GeForce RTX 5090",
+                "vcpu_count": 32,
+                "ram_gb": 128,
+                "disk_gb": 500,
+                "storage_note": "advertised 10000 MB/s-class NVMe write throughput",
+                "offer_id": "vast-offer-123",
+                "host_label": "secure-cloud-1",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    ql031_status_path = tmp_path / "ql031_status.json"
+    ql031_status_path.write_text(
+        json.dumps(
+            {
+                "status": "same_root_proof_chain_ready",
+                "output_root": str(tmp_path / "analysis" / "ql031"),
+                "external_search_roots": [str(bundle_root)],
+                "distinct_retained_candidates": [
+                    {
+                        "surface_identity": {
+                            "evaluation_surface_id": champion_artifact.evaluation_surface_id,
+                            "slice_id": trajectory_bundle.dataset_spec.slice_id,
+                            "train_window": (
+                                f"{trajectory_bundle.dataset_spec.train_range.start.isoformat()} -> "
+                                f"{trajectory_bundle.dataset_spec.train_range.end.isoformat()}"
+                            ),
+                        }
+                    }
+                ],
+                "comparison_reports": [
+                    {
+                        "comparison_report_id": comparison_report_id,
+                        "challenger_policy_id": challenger_artifact.policy_id,
+                        "champion_policy_id": champion_artifact.policy_id,
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    script_path = repo_root / "scripts" / "retain_remote_run_bundle.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "--bundle-root",
+            str(bundle_root),
+            "--source-run-root",
+            "/workspace/runs/ql031-same-root-proof-test",
+            "--retained-bundle-kind",
+            "repo_local_retained_same_root_proof",
+            "--retained-bundle-authority-note",
+            "derived from a same-root proof run; retained copy remains external-retained-evidence",
+            "--source-repo-commit-sha",
+            "test-commit-sha",
+            "--instance-metadata",
+            str(instance_metadata_path),
+            "--ql031-status-path",
+            str(ql031_status_path),
+            "--config-copy",
+            f"{repo_root / 'configs' / 'data' / 'controlled-remote-day.yaml'}:configs/data/controlled-remote-day.yaml",
+            "--config-copy",
+            f"{repo_root / 'configs' / 'training' / 'production-ql031-search.yaml'}:configs/training/production-ql031-search.yaml",
+            "--config-copy",
+            f"{repo_root / 'configs' / 'reward' / 'default.yaml'}:configs/reward/default.yaml",
+            "--config-copy",
+            f"{repo_root / 'configs' / 'evaluation' / 'default.yaml'}:configs/evaluation/default.yaml",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    manifest = json.loads((bundle_root / "bundle_manifest.json").read_text(encoding="utf-8"))
+    sha256sums = (bundle_root / "SHA256SUMS").read_text(encoding="utf-8")
+
+    assert manifest["retained_bundle_kind"] == "repo_local_retained_same_root_proof"
+    assert manifest["source_run_root"] == "/workspace/runs/ql031-same-root-proof-test"
+    assert manifest["source_repo_commit_sha"] == "test-commit-sha"
+    assert manifest["instance_metadata"]["gpu_model"] == "NVIDIA GeForce RTX 5090"
+    assert manifest["instance_metadata"]["disk_gb"] == 500
+    assert manifest["registry_summary"]["champion_policy_id"] == champion_artifact.policy_id
+    assert manifest["registry_summary"]["comparison_report_count"] == 1
+    assert manifest["registry_summary"]["paper_sim_evidence_count"] == 2
+    assert manifest["registry_summary"]["promotion_decision_count"] == 1
+    assert manifest["same_root_proof_summary"]["linked_challenger_policy_ids"] == [challenger_artifact.policy_id]
+    assert manifest["same_root_proof_summary"]["comparison_report_ids"] == [comparison_report_id]
+    assert challenger_paper_sim_id in manifest["same_root_proof_summary"]["paper_sim_evidence_ids"]
+    assert manifest["ql031_integration_summary"]["ql031_status"] == "same_root_proof_chain_ready"
+    assert any(
+        copy["bundle_relative_path"] == "configs/training/production-ql031-search.yaml"
+        for copy in manifest["config_copies"]
+    )
+    assert manifest["hardlink_map"][f"registry/artifacts/{champion_artifact.policy_id}.json"] == "policy.json"
+    assert "bundle_manifest.json" in sha256sums
+    assert f"registry/artifacts/{champion_artifact.policy_id}.json" in sha256sums
 
 
 def _build_retained_run_root(

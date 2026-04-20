@@ -154,6 +154,7 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "configs/training/production.yaml" in readme
     assert "compare-policies" in readme
     assert "record-paper-sim" in readme
+    assert "promote-policy" in readme
     assert "build-offline-evidence-pack" in readme
     assert "inspect-s3-compact" in readme
     assert "audit-continuity" in readme
@@ -256,6 +257,7 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "retained evidence" in remote_gpu_runbook.lower()
     assert "audit-continuity" in remote_gpu_runbook
     assert "quantlab-ml compare-policies" in (repo_root / "docs" / "EVALUATION_RUNBOOK.md").read_text(encoding="utf-8")
+    assert "quantlab-ml promote-policy" in (repo_root / "docs" / "EVALUATION_RUNBOOK.md").read_text(encoding="utf-8")
     assert "comparison report record" in (repo_root / "docs" / "REGISTRY_SCHEMA.md").read_text(encoding="utf-8")
 
     assert "only a confirmed external active registry root" in continuity_authority_decision.lower()

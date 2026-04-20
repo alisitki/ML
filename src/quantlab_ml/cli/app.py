@@ -13,6 +13,7 @@ from quantlab_ml.contracts import (
     EvaluationReport,
     PolicyArtifact,
     PolicyScore,
+    PromotionEvidence,
     RewardEventSpec,
     TrajectoryBundle,
     TrajectoryManifest,
@@ -240,6 +241,23 @@ def compare_policies(
     typer.echo(f"recorded comparison report {report.comparison_report_id}")
 
 
+@app.command("promote-policy")
+def promote_policy(
+    registry_root: Path = typer.Option(..., help="Registry root."),
+    policy_id: str = typer.Option(..., help="Registered policy id."),
+    evidence: Path = typer.Option(..., exists=True, readable=True, help="Promotion evidence path (.json/.yaml)."),
+    output: Path | None = typer.Option(None, help="Optional promotion decision output path."),
+) -> None:
+    registry = LocalRegistryStore(registry_root)
+    promotion_evidence = _load_promotion_evidence(evidence)
+    decision = registry.promote_candidate(policy_id, evidence=promotion_evidence)
+    if output is not None:
+        dump_model(output, decision)
+        typer.echo(f"wrote promotion decision to {output}")
+        return
+    typer.echo(f"evaluated promotion decision {decision.decision_id} ({decision.decision})")
+
+
 @app.command("build-offline-evidence-pack")
 def build_offline_evidence_pack_command(
     registry_root: list[Path] = typer.Option(..., help="Registry root. Repeat for multiple retained surfaces."),
@@ -360,6 +378,15 @@ def _load_dataset_spec(path: Path) -> DatasetSpec:
 
 def _load_reward_spec(path: Path) -> RewardEventSpec:
     return RewardEventSpec.model_validate(load_yaml(path)["reward"])
+
+
+def _load_promotion_evidence(path: Path) -> PromotionEvidence:
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return load_model(path, PromotionEvidence)
+    if suffix in {".yaml", ".yml"}:
+        return PromotionEvidence.model_validate(load_yaml(path))
+    raise typer.BadParameter("promotion evidence must use a .json, .yaml, or .yml file")
 
 
 def _load_evaluation_boundary(path: Path) -> EvaluationBoundary:

@@ -23,8 +23,9 @@ QuantLab is currently `offline operational but not professionally closed`.
 - Current HEAD does not include repo-tracked QL-021 retained bundles under `outputs/`; any such bundle must be treated as external retained evidence until its provenance and authority are confirmed.
 - Historical local authority discovery was blocked in this workspace baseline, but fresh authoritative evidence was produced by a controlled rerun on April 18, 2026 at `/workspace/runs/ql016-ql004-authoritative-20260418`.
 - NumPy and legacy `linear-policy-v1` continuity windows are now retired on that authoritative external scope.
+- Current HEAD now also carries a retained same-root `QL-031` proof run at `outputs/ql031-same-root-proof-20260419`; it produced four scored same-surface finalists, one linked paper/sim record, and a rejected promotion decision, but no promotable champion because every evaluated finalist remained post-cost negative on the governing final test.
 - Current HEAD can now persist registry-backed comparison reports and reusable offline evidence-pack summaries, but those support surfaces do not by themselves create broader offline closure evidence.
-- Offline closure is still incomplete because broader evidence packaging, multi-window proof, and champion/challenger comparison discipline remain partial.
+- Offline closure is still incomplete because broader evidence packaging is still partial and the same-root champion/challenger chain remains blocked by the absence of a post-cost-positive promotable champion on the retained `2026-01-25` surface.
 - In this workspace, the next active repo batch is broader offline evidence expansion rather than more local historical-root discovery.
 - Until those blockers are cleared or explicitly frozen, live/runtime buildout is a planned next phase, not the current main focus.
 
@@ -94,6 +95,7 @@ CLI surfaces:
 - `quantlab-ml export-policy`
 - `quantlab-ml compare-policies`
 - `quantlab-ml record-paper-sim`
+- `quantlab-ml promote-policy`
 - `quantlab-ml build-offline-evidence-pack`
 - `quantlab-ml inspect-s3-compact --env-file .env`
 - `quantlab-ml audit-continuity --registry-root outputs/registry`

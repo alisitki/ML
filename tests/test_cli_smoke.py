@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 
 from typer.testing import CliRunner
+import yaml
 
 from quantlab_ml.cli.app import app
 from quantlab_ml.common import dump_model, hash_payload, load_model
@@ -173,6 +174,339 @@ def test_cli_smoke(repo_root: Path, fixture_path: Path, tmp_path: Path) -> None:
         assert registry.load_index().champion_policy_id == exported_policy.policy_id
     else:
         assert decision.failure_reasons
+
+
+def test_cli_promote_policy_promotes_scored_candidate_from_yaml_evidence(
+    tmp_path: Path,
+    trajectory_bundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score,
+    training_bundle: tuple,
+) -> None:
+    runner = CliRunner()
+    _, _, training_config = training_bundle
+    reward_hash = hash_payload(trajectory_bundle.reward_spec)
+    training_hash = hash_payload(training_config)
+    registry_root = tmp_path / "registry"
+    registry = LocalRegistryStore(registry_root)
+    deployment_artifact = tmp_path / "candidate-inference-artifact.json"
+    deployment_artifact.write_text("{}", encoding="utf-8")
+    champion_report = evaluation_report.model_copy(
+        update={
+            "total_net_return": 0.35,
+            "average_net_return": 0.07,
+        }
+    )
+    champion_score = policy_score.model_copy(
+        update={
+            "expected_return_score": 0.07,
+            "composite_rank": max(policy_score.composite_rank, 0.86),
+        }
+    )
+
+    registry.register_candidate(
+        policy_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    registry.append_score(policy_artifact.policy_id, champion_score, champion_report)
+    paper_sim_report = tmp_path / "candidate-paper-sim.md"
+    paper_sim_report.write_text("# paper sim\n", encoding="utf-8")
+    paper_sim_evidence = registry.record_paper_sim_evidence(policy_artifact.policy_id, paper_sim_report)
+
+    evidence_path = tmp_path / "promotion-evidence.yaml"
+    _write_promotion_evidence(
+        evidence_path,
+        _promotion_evidence(
+            policy_artifact,
+            deployment_artifact_path=str(deployment_artifact),
+            paper_sim_evidence_id=paper_sim_evidence.evidence_id,
+        ),
+    )
+    decision_path = tmp_path / "promotion-decision.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "promote-policy",
+            "--registry-root",
+            str(registry_root),
+            "--policy-id",
+            policy_artifact.policy_id,
+            "--evidence",
+            str(evidence_path),
+            "--output",
+            str(decision_path),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    decision = json.loads(decision_path.read_text(encoding="utf-8"))
+    record = registry.get_record(policy_artifact.policy_id)
+
+    assert decision["decision"] == "promote"
+    assert decision["failure_reasons"] == []
+    assert registry.load_index().champion_policy_id == policy_artifact.policy_id
+    assert record is not None
+    assert record.status == "champion"
+
+
+def test_cli_promote_policy_rejects_missing_paper_sim_evidence(
+    tmp_path: Path,
+    trajectory_bundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score,
+    training_bundle: tuple,
+) -> None:
+    runner = CliRunner()
+    _, _, training_config = training_bundle
+    reward_hash = hash_payload(trajectory_bundle.reward_spec)
+    training_hash = hash_payload(training_config)
+    registry_root = tmp_path / "registry"
+    registry = LocalRegistryStore(registry_root)
+    deployment_artifact = tmp_path / "candidate-inference-artifact.json"
+    deployment_artifact.write_text("{}", encoding="utf-8")
+    champion_report = evaluation_report.model_copy(
+        update={
+            "total_net_return": 0.35,
+            "average_net_return": 0.07,
+        }
+    )
+    champion_score = policy_score.model_copy(
+        update={
+            "expected_return_score": 0.07,
+            "composite_rank": max(policy_score.composite_rank, 0.86),
+        }
+    )
+
+    registry.register_candidate(
+        policy_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    registry.append_score(policy_artifact.policy_id, champion_score, champion_report)
+
+    evidence_path = tmp_path / "promotion-evidence.json"
+    _write_promotion_evidence(
+        evidence_path,
+        _promotion_evidence(
+            policy_artifact,
+            deployment_artifact_path=str(deployment_artifact),
+            paper_sim_evidence_id="paper-sim-missing",
+        ),
+    )
+    decision_path = tmp_path / "promotion-decision.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "promote-policy",
+            "--registry-root",
+            str(registry_root),
+            "--policy-id",
+            policy_artifact.policy_id,
+            "--evidence",
+            str(evidence_path),
+            "--output",
+            str(decision_path),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    decision = json.loads(decision_path.read_text(encoding="utf-8"))
+    assert decision["decision"] == "reject"
+    assert "artifacts.paper_sim_report_exists" in decision["failure_reasons"]
+    assert "artifacts.paper_sim_linked_to_evaluation" in decision["failure_reasons"]
+    assert "artifacts.deployment_artifact_exists" not in decision["failure_reasons"]
+
+
+def test_cli_promote_policy_rejects_missing_deployment_artifact(
+    tmp_path: Path,
+    trajectory_bundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score,
+    training_bundle: tuple,
+) -> None:
+    runner = CliRunner()
+    _, _, training_config = training_bundle
+    reward_hash = hash_payload(trajectory_bundle.reward_spec)
+    training_hash = hash_payload(training_config)
+    registry_root = tmp_path / "registry"
+    registry = LocalRegistryStore(registry_root)
+    champion_report = evaluation_report.model_copy(
+        update={
+            "total_net_return": 0.35,
+            "average_net_return": 0.07,
+        }
+    )
+    champion_score = policy_score.model_copy(
+        update={
+            "expected_return_score": 0.07,
+            "composite_rank": max(policy_score.composite_rank, 0.86),
+        }
+    )
+
+    registry.register_candidate(
+        policy_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    registry.append_score(policy_artifact.policy_id, champion_score, champion_report)
+    paper_sim_report = tmp_path / "candidate-paper-sim.md"
+    paper_sim_report.write_text("# paper sim\n", encoding="utf-8")
+    paper_sim_evidence = registry.record_paper_sim_evidence(policy_artifact.policy_id, paper_sim_report)
+
+    evidence_path = tmp_path / "promotion-evidence.json"
+    _write_promotion_evidence(
+        evidence_path,
+        _promotion_evidence(
+            policy_artifact,
+            deployment_artifact_path=str(tmp_path / "missing-inference-artifact.json"),
+            paper_sim_evidence_id=paper_sim_evidence.evidence_id,
+        ),
+    )
+    decision_path = tmp_path / "promotion-decision.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "promote-policy",
+            "--registry-root",
+            str(registry_root),
+            "--policy-id",
+            policy_artifact.policy_id,
+            "--evidence",
+            str(evidence_path),
+            "--output",
+            str(decision_path),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    decision = json.loads(decision_path.read_text(encoding="utf-8"))
+    assert decision["decision"] == "reject"
+    assert "artifacts.deployment_artifact_exists" in decision["failure_reasons"]
+    assert "artifacts.paper_sim_report_exists" not in decision["failure_reasons"]
+
+
+def test_cli_promote_policy_rejects_challenger_without_comparison_evidence(
+    tmp_path: Path,
+    trajectory_bundle,
+    policy_artifact: PolicyArtifact,
+    evaluation_report,
+    policy_score,
+    training_bundle: tuple,
+) -> None:
+    runner = CliRunner()
+    _, _, training_config = training_bundle
+    reward_hash = hash_payload(trajectory_bundle.reward_spec)
+    training_hash = hash_payload(training_config)
+    registry_root = tmp_path / "registry"
+    registry = LocalRegistryStore(registry_root)
+
+    champion_report = evaluation_report.model_copy(
+        update={
+            "total_net_return": 0.4,
+            "average_net_return": 0.08,
+        }
+    )
+    champion_score = policy_score.model_copy(
+        update={
+            "expected_return_score": 0.08,
+            "composite_rank": max(policy_score.composite_rank, 0.85),
+        }
+    )
+    registry.register_candidate(
+        policy_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    registry.append_score(policy_artifact.policy_id, champion_score, champion_report)
+    champion_export = tmp_path / "champion-inference-artifact.json"
+    champion_export.write_text("{}", encoding="utf-8")
+    champion_paper_sim = tmp_path / "champion-paper-sim.md"
+    champion_paper_sim.write_text("# champion paper sim\n", encoding="utf-8")
+    champion_evidence = registry.record_paper_sim_evidence(policy_artifact.policy_id, champion_paper_sim)
+    registry.promote_candidate(
+        policy_artifact.policy_id,
+        evidence=_promotion_evidence(
+            policy_artifact,
+            deployment_artifact_path=str(champion_export),
+            paper_sim_evidence_id=champion_evidence.evidence_id,
+        ),
+    )
+
+    challenger_artifact = policy_artifact.model_copy(
+        update={
+            "policy_id": f"{policy_artifact.policy_id}-challenger",
+            "artifact_id": f"{policy_artifact.artifact_id}-challenger",
+            "training_run_id": f"{policy_artifact.training_run_id}-challenger",
+        },
+        deep=True,
+    )
+    challenger_report = evaluation_report.model_copy(
+        update={
+            "policy_id": challenger_artifact.policy_id,
+            "evaluation_id": f"{evaluation_report.evaluation_id}-challenger",
+            "total_net_return": 0.9,
+            "average_net_return": 0.18,
+        }
+    )
+    challenger_score = policy_score.model_copy(
+        update={
+            "policy_id": challenger_artifact.policy_id,
+            "evaluation_id": challenger_report.evaluation_id,
+            "expected_return_score": 0.18,
+            "composite_rank": max(policy_score.composite_rank, 0.95),
+        }
+    )
+    registry.register_candidate(
+        challenger_artifact,
+        trajectory_bundle,
+        reward_config_hash=reward_hash,
+        training_config_hash=training_hash,
+    )
+    registry.append_score(challenger_artifact.policy_id, challenger_score, challenger_report)
+
+    challenger_export = tmp_path / "challenger-inference-artifact.json"
+    challenger_export.write_text("{}", encoding="utf-8")
+    evidence_path = tmp_path / "challenger-promotion-evidence.json"
+    _write_promotion_evidence(
+        evidence_path,
+        _promotion_evidence(
+            challenger_artifact,
+            deployment_artifact_path=str(challenger_export),
+            paper_sim_evidence_id=champion_evidence.evidence_id,
+        ),
+    )
+    decision_path = tmp_path / "challenger-promotion-decision.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "promote-policy",
+            "--registry-root",
+            str(registry_root),
+            "--policy-id",
+            challenger_artifact.policy_id,
+            "--evidence",
+            str(evidence_path),
+            "--output",
+            str(decision_path),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    decision = json.loads(decision_path.read_text(encoding="utf-8"))
+    assert decision["decision"] == "reject"
+    assert "comparison.report_attached" in decision["failure_reasons"]
 
 
 def test_cli_train_search_writes_manifest_and_registers_all_candidates(
@@ -1029,3 +1363,44 @@ def _tag_map(tags: list[str]) -> dict[str, str]:
         key, value = tag.split(":", 1)
         tag_map[key] = value
     return tag_map
+
+
+def _promotion_evidence(
+    policy_artifact: PolicyArtifact,
+    *,
+    deployment_artifact_path: str,
+    paper_sim_evidence_id: str,
+    comparison_report_id: str | None = None,
+) -> PromotionEvidence:
+    return PromotionEvidence(
+        preprocessing_fit_on_train_only=True,
+        no_future_features=True,
+        no_future_masks=True,
+        no_future_reward_construction=True,
+        no_cross_split_contamination=True,
+        final_untouched_test_unused_for_selection=True,
+        realistic_execution_assumptions=True,
+        superiority_not_one_lucky_slice_only=True,
+        comparison_report_id=comparison_report_id,
+        paper_sim_evidence_id=paper_sim_evidence_id,
+        deployment_artifact_path=deployment_artifact_path,
+        runtime_uses_inference_artifact_only=True,
+        no_live_learning=True,
+        executor_boundary_respected=True,
+        selector_boundary_respected=True,
+        reproducibility=ReproducibilityMetadata(
+            data_snapshot_id=policy_artifact.training_snapshot_id,
+            code_commit_hash=policy_artifact.code_commit_hash,
+            config_hash=policy_artifact.training_config_hash,
+            seed=7,
+            runtime_stack={"python": "3.12", "framework": "pytorch"},
+            reproducible_within_tolerance=True,
+        ),
+    )
+
+
+def _write_promotion_evidence(path: Path, evidence: PromotionEvidence) -> None:
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        path.write_text(yaml.safe_dump(evidence.model_dump(mode="json"), sort_keys=False), encoding="utf-8")
+        return
+    dump_model(path, evidence)

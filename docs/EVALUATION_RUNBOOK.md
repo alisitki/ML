@@ -71,6 +71,12 @@ If candidate passes evaluation:
 - if a current champion exists, `quantlab-ml record-paper-sim` requires a valid `comparison_report_id`
 - do not promote directly from offline evaluation alone
 
+### Step 6 — Promotion decision
+- promotion evidence must be explicit and file-backed; do not rely on implicit defaults
+- `quantlab-ml promote-policy` is the official CLI surface for evaluating the promotion gate from JSON/YAML evidence
+- for `QL-031` same-root proof chains, promote the selected same-root champion before comparing a scored same-surface challenger
+- challenger paper/sim linkage must reference the exact same-root `comparison_report_id`
+
 ## 4. Failure handling
 
 If official evaluation fails:
@@ -90,6 +96,7 @@ A completed official evaluation should leave behind:
 - evaluation report
 - comparison report
 - paper/sim evidence record once paper/sim is completed
+- promotion decision record once the promotion gate is evaluated
 - registry updates
 - linked artifact ids
 - search-budget summary
@@ -103,4 +110,5 @@ Promotion additionally requires:
 - champion superiority on the same surface
 - complete artifact record
 - paper/sim evidence
+- explicit promotion evidence captured in JSON/YAML and evaluated through `quantlab-ml promote-policy`
 - acceptable-tolerance reproducibility

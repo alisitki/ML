@@ -48,8 +48,9 @@ Why:
 - current HEAD now also carries a fresh authoritative controlled rerun at `/workspace/runs/ql016-ql004-authoritative-20260418` with a confirmed external active registry root
 - current HEAD now carries decided continuity closeout records that retire the NumPy and legacy compat windows on that authoritative scope
 - current HEAD does not include repo-tracked QL-021 retained bundles under `outputs/`; any such bundle is external retained evidence until its provenance and authority are confirmed
+- current HEAD now also carries a retained same-root `QL-031` proof run at `outputs/ql031-same-root-proof-20260419`; that run produced four scored same-surface finalists, one linked paper/sim record, and a rejected promotion decision on `economics.post_cost_positive`
 - current HEAD can now persist registry-backed comparison reports and reusable offline evidence-pack summaries, but those surfaces do not by themselves prove broader offline closure
-- offline closure is still incomplete because broader evidence packaging discipline, multi-window proof, and champion/challenger comparison surfaces remain partial
+- offline closure is still incomplete because the retained same-root `2026-01-25` surface still has no promotable champion and therefore no valid same-root comparison-report chain, even though the retained proof set is now broader than the earlier single-surface baseline
 
 ---
 
@@ -94,8 +95,8 @@ These missing layers are planned later-phase work, not current defects by defaul
 
 ## Blocked before live-path focus
 
-- broader multi-window and champion/challenger offline evidence remains partial; the current minimum evidence pack is no longer same-surface only, but it is still narrow and not enough to move offline closure to `PASS`
-- comparison-report and paper/sim linkage remain incomplete on the retained proof surfaces used for offline-closure arguments, even though current HEAD can now persist those links cleanly
+- broader multi-window evidence remains partial; the retained proof set now includes the same-root `2026-01-25` run plus the distinct `2026-01-26` retained surface, but it is still not enough to move offline closure to `PASS`
+- the retained same-root `2026-01-25` run still has no current champion because the promotion gate rejected the selected finalist on `economics.post_cost_positive`; as a result, same-root comparison-report linkage is still blocked by `no_current_champion`
 - commercialization-grade evidence packaging still depends on broader offline proof than the single authoritative continuity rerun
 
 Until those are explicit, Phase 2 is still planned next work but not the main execution focus.
@@ -127,6 +128,7 @@ The following remain visible but are not the current main focus:
 - Fresh authoritative evidence has now been produced by a controlled rerun at `/workspace/runs/ql016-ql004-authoritative-20260418`.
 - The repo-tracked continuity closeout records are now decision records for retired windows. They still do not, by themselves, prove live readiness.
 - The repo-tracked minimum offline-closure evidence pack now includes one distinct external retained surface on `2026-01-26`; it remains evidence of progress rather than evidence that multi-window closure or champion/challenger proof is complete.
+- The retained same-root `QL-031` bundle at `outputs/ql031-same-root-proof-20260419` remains `external_retained_evidence`; it sharpens the blocker from generic missing linkage to an exact failure mode: every evaluated finalist on the retained `2026-01-25` surface remained post-cost negative, so promotion was rejected and no current champion was created.
 - Comparison-report and offline evidence-pack tooling exist on current HEAD; neither one, by itself, upgrades offline closure to `PASS`.
 - Runtime and executor contracts exist as governance and artifact surfaces. They are not the same thing as a live selector daemon plus executor loop.
 - Commercialization gates are defined, but no gate above the offline side is currently operationally evidenced in this repository.

@@ -77,6 +77,11 @@ Non-goals:
 - promotion evidence
 - paper/sim
 
+For `QL-031` same-root proof runs, the scope is intentionally narrower than broad research but broader than the first controlled acceptance rerun:
+- candidate search is allowed when it stays inside the same retained root
+- promotion evidence is required for the selected same-root champion
+- paper/sim linkage is required for both the same-root champion and the compared challenger
+
 Risk posture:
 - leakage tolerance remains zero
 - walk-forward selection, purge, and final untouched test discipline remain unchanged
@@ -95,23 +100,34 @@ It pins a single full successful day that is currently readable from the compact
 bucket. If that day becomes operationally unsuitable, replace all split windows
 together with another single full successful day rather than widening scope.
 
+For `QL-031` same-root proof runs:
+- keep `configs/data/controlled-remote-day.yaml` as the default `2026-01-25` proof surface
+- switch the training config to `configs/training/production-ql031-search.yaml`
+- keep the run inside one external registry root until champion promotion, challenger comparison, and paper/sim linkage are all recorded
+- keep every retained summary explicit that the resulting local bundle is still `external_retained_evidence`
+
 ## Vast instance guidance
 
 Start with:
 - verified or secure-cloud offer
 - direct SSH
 - on-demand instance
-- 250 GB disk
 - high reliability score
+- high-end CPU host with strong single-node throughput for trajectory build and tensor-cache writes
 
-Preferred GPU class:
-- `24 GB`-class single card such as `L4`, `A10`, `A5000`, or `RTX 4090`
+For `QL-031` same-root proof runs, treat the instance filter as performance-first rather than price-first:
+- minimum GPU floor: `RTX 5090 Ti`-class single GPU or stronger
+- minimum disk capacity: `500 GB`
+- prefer the highest write-throughput NVMe host available; target `~10000 MB/s`-class sequential write performance when the listing exposes that signal
+- if the listing does not expose an exact write-throughput figure, prefer the host with the strongest storage-performance evidence available
+- prefer higher-vCPU hosts to reduce `build-trajectories`, tensor-cache write, and evaluation wall-clock time
 
 Avoid for the first run:
 - multi-GPU
 - interruptible instances
 - A100/H100-class cost
-- candidate search
+
+If the Vast listing does not literally spell the GPU as `5090 Ti`, do not step down below that floor; select the nearest equivalent or stronger single-card option and record the exact booked model in the retained manifest.
 
 ## Operational planning minimum
 
@@ -130,7 +146,7 @@ This is an operational planning minimum, not a retained-bundle size estimate.
 The retained minimum evidence bundle for the authoritative rerun was only `192M`.
 
 Provider-level rule:
-- request `250 GB` instance disk for this workflow so the instance still has headroom for the repo, venv, logs, and shutdown-time evidence handling
+- request `500 GB` instance disk for `QL-031` same-root proof runs so the instance still has headroom for the repo, venv, search sidecars, logs, and shutdown-time evidence handling
 
 ## Bootstrap
 
@@ -267,6 +283,85 @@ quantlab-ml export-policy \
   2>&1 | tee "$RUN_ROOT/export.log"
 ```
 
+## QL-031 same-root proof chain overlay
+
+Use this overlay only for the `QL-031` closure batch.
+
+Command deltas:
+- replace `configs/training/production.yaml` with `configs/training/production-ql031-search.yaml`
+- keep `RUN_ROOT` external, for example `/workspace/runs/ql031-same-root-proof-<date>`
+- keep one registry root for the selected champion and the compared challenger
+- evaluate and score the selected artifact plus at least one non-selected candidate from the same `policy_search.json`
+
+Required same-root chain after the initial `train`:
+
+```bash
+quantlab-ml evaluate \
+  --trajectories "$RUN_ROOT/trajectories" \
+  --policy "$RUN_ROOT/policy.json" \
+  --evaluation-config configs/evaluation/default.yaml \
+  --output "$RUN_ROOT/evaluation.json" \
+  2>&1 | tee "$RUN_ROOT/evaluate.log"
+
+quantlab-ml score \
+  --policy "$RUN_ROOT/policy.json" \
+  --evaluation "$RUN_ROOT/evaluation.json" \
+  --registry-root "$RUN_ROOT/registry" \
+  --output "$RUN_ROOT/score.json" \
+  2>&1 | tee "$RUN_ROOT/score.log"
+
+quantlab-ml export-policy \
+  --policy "$RUN_ROOT/policy.json" \
+  --score "$RUN_ROOT/score.json" \
+  --output "$RUN_ROOT/inference_artifact.json" \
+  2>&1 | tee "$RUN_ROOT/export.log"
+
+quantlab-ml record-paper-sim \
+  --registry-root "$RUN_ROOT/registry" \
+  --policy-id <selected-policy-id> \
+  --report "$RUN_ROOT/champion-paper-sim.md" \
+  2>&1 | tee "$RUN_ROOT/champion-paper-sim.log"
+
+quantlab-ml promote-policy \
+  --registry-root "$RUN_ROOT/registry" \
+  --policy-id <selected-policy-id> \
+  --evidence "$RUN_ROOT/champion-promotion-evidence.yaml" \
+  --output "$RUN_ROOT/champion-promotion-decision.json" \
+  2>&1 | tee "$RUN_ROOT/champion-promotion.log"
+
+quantlab-ml evaluate \
+  --trajectories "$RUN_ROOT/trajectories" \
+  --policy "$RUN_ROOT/policy_candidates/<challenger-policy-id>.json" \
+  --evaluation-config configs/evaluation/default.yaml \
+  --output "$RUN_ROOT/challenger-evaluation.json" \
+  2>&1 | tee "$RUN_ROOT/challenger-evaluate.log"
+
+quantlab-ml score \
+  --policy "$RUN_ROOT/policy_candidates/<challenger-policy-id>.json" \
+  --evaluation "$RUN_ROOT/challenger-evaluation.json" \
+  --registry-root "$RUN_ROOT/registry" \
+  --output "$RUN_ROOT/challenger-score.json" \
+  2>&1 | tee "$RUN_ROOT/challenger-score.log"
+
+quantlab-ml compare-policies \
+  --registry-root "$RUN_ROOT/registry" \
+  --challenger-policy-id <challenger-policy-id> \
+  --output "$RUN_ROOT/challenger-comparison-report.json" \
+  2>&1 | tee "$RUN_ROOT/challenger-compare.log"
+
+quantlab-ml record-paper-sim \
+  --registry-root "$RUN_ROOT/registry" \
+  --policy-id <challenger-policy-id> \
+  --report "$RUN_ROOT/challenger-paper-sim.md" \
+  --comparison-report-id <comparison-report-id> \
+  2>&1 | tee "$RUN_ROOT/challenger-paper-sim.log"
+```
+
+Evidence-file rule:
+- `champion-promotion-evidence.yaml` must be explicit; do not synthesize defaults at invocation time
+- record exact `paper_sim_evidence_id`, `deployment_artifact_path`, reproducibility metadata, and runtime-boundary booleans in that file
+- if the selected challenger is later promoted inside the same root, create a second explicit promotion-evidence file that references the exact same-root `comparison_report_id`
+
 ## Expected outputs
 
 The first controlled run should leave behind:
@@ -280,6 +375,8 @@ The first controlled run should leave behind:
 - `trajectories/tensor_cache_v1/tensor_cache_manifest.json`
 - split-scoped tensor cache shard files and replay sidecars under `trajectories/tensor_cache_v1/`
 - `policy.json`
+- `policy_search.json` when `production-ql031-search.yaml` is used
+- `policy_candidates/` when `production-ql031-search.yaml` is used
 - `evaluation.json`
 - `score.json`
 - `inference_artifact.json`
@@ -290,6 +387,33 @@ The first controlled run should leave behind:
 - `export.log`
 - `registry/`
 - optional `acceptance_evidence.json` derived from the retained run files above
+
+For `QL-031` same-root proof runs, also retain:
+- `champion-paper-sim.md`
+- `champion-promotion-evidence.yaml`
+- `champion-promotion-decision.json`
+- `challenger-evaluation.json`
+- `challenger-score.json`
+- `challenger-comparison-report.json`
+- `challenger-paper-sim.md`
+- comparison, paper/sim, and promotion JSONs under `registry/`
+- retained manifest metadata that records the exact Vast.ai instance details used for the run
+
+After copying the retained bundle locally, build `bundle_manifest.json` and `SHA256SUMS` directly from the copied bundle:
+
+```bash
+python scripts/retain_remote_run_bundle.py \
+  --bundle-root outputs/ql031-same-root-proof-bundle \
+  --source-run-root /workspace/runs/ql031-same-root-proof-20260419 \
+  --instance-metadata outputs/ql031-same-root-proof-bundle/vast-instance.json \
+  --ql031-status-path outputs/ql031-analysis/ql031_status.json \
+  --config-copy configs/data/controlled-remote-day.yaml:configs/data/controlled-remote-day.yaml \
+  --config-copy configs/training/production-ql031-search.yaml:configs/training/production-ql031-search.yaml \
+  --config-copy configs/reward/default.yaml:configs/reward/default.yaml \
+  --config-copy configs/evaluation/default.yaml:configs/evaluation/default.yaml
+```
+
+The retained manifest must keep the `external_retained_evidence` interpretation explicit, include the same-root comparison and paper/sim linkage summary, and record the exact Vast.ai instance details rather than generic capacity labels.
 
 Inside `training_summary`, confirm:
 - `training_backend = pytorch`
@@ -338,11 +462,22 @@ Retain:
 - active `registry/evaluations/*`
 - active `registry/scores/*`
 - active `registry/artifacts/*` with duplicate bytes avoided when a hardlink to `policy.json` is sufficient
+- active `registry/comparisons/*` for same-root comparison runs
+- active `registry/paper_sim/*` for same-root proof runs
+- active `registry/promotions/*` for same-root proof runs
 - `build.log`, `train.log`, `evaluate.log`, `score.log`, `export.log`
 - `build.exit`, `train.exit`, `evaluate.exit`, `score.exit`, `export.exit`
 - exact copies of the data, training, reward, and evaluation config files used for the run
-- retained manifest metadata with source commit SHA, run root, timestamps, training summary, and authority summary
+- retained manifest metadata with source commit SHA, run root, timestamps, training summary, authority summary, and instance metadata
 - retained checksums such as `SHA256SUMS`
+
+Required retained manifest instance metadata:
+- exact booked Vast.ai GPU model
+- vCPU count
+- RAM size
+- disk size
+- advertised storage or host-throughput note when the listing exposes it
+- exact host label / offer identifier used for booking
 
 Do not copy:
 - raw market data

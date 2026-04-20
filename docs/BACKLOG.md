@@ -57,21 +57,19 @@ Result:
 - why_open:
   - this is now the single active next batch in this workspace because historical local authority discovery is closed here
   - current HEAD now has a repo-tracked minimum evidence pack that indexes one inspected-scope continuity audit and one same-surface current-head retained-run comparison
-  - current HEAD now also has one distinct-surface external retained rerun on `2026-01-26`, plus registry-backed comparison-report and offline evidence-pack tooling, but the retained proof surfaces are still narrow and not yet enough for offline closure `PASS`
-  - broader multi-window or multi-slice evidence remains incomplete even after the comparison and paper/sim linkage surfaces became first-class
+  - current HEAD now also has one distinct-surface external retained rerun on `2026-01-26` and one same-root retained run on `2026-01-25`, plus registry-backed comparison-report and offline evidence-pack tooling, but the retained proof surfaces are still not enough for offline closure `PASS`
+  - the retained same-root `2026-01-25` run produced four scored finalists, one linked paper/sim record, and a rejected promotion decision on `economics.post_cost_positive`; no current champion was created, so same-root comparison remains blocked by `no_current_champion`
 - next_action:
-  - build a QL-031 blocker-inventory artifact from currently visible registry-backed retained surfaces before claiming broader closure evidence
-  - import bundle-complete retained runs with no usable registry state, including empty or incomplete `registry/` scaffolds, only as analysis-only diagnostic roots; they are never promotion or comparison registries
-  - search for additional external retained surfaces before scheduling any rerun
-  - open `compare-policies` only when a single root already contains a current champion plus a scored same-surface challenger
-  - use `build-offline-evidence-pack` only after blocker inventory is explicit and only on retained surfaces whose evidence class and authority status are still stated directly
-  - run distinct-surface preflight before any minimal controlled rerun fallback; the default fallback preflight target is `configs/data/ql031-controlled-remote-day-20260126.yaml`, and if `evaluation_surface_id`, `slice_id`, or `train_window` collide with existing surfaces, stop
-  - produce broader multi-window or multi-slice offline evidence without claiming authoritative continuity closure
-  - keep the new `2026-01-26` retained rerun explicitly labeled `external-retained-evidence` / `unconfirmed` in every summary or evidence pack
+  - preserve the retained failure-state same-root bundle at `outputs/ql031-same-root-proof-20260419` as the exact blocker record rather than flattening it into a generic missing-linkage story
+  - do not fabricate a champion by manual registry edits; `compare-policies` remains blocked until a same-root run yields a promotable post-cost-positive candidate
+  - keep using `build-offline-evidence-pack` only on retained surfaces whose evidence class and authority status are stated directly; do not use it to blur a failed same-root retained run into closure evidence
+  - if another same-root rerun is attempted, require the rerun to produce at least one post-cost-positive promotable finalist before treating compare/paper-sim linkage as the remaining blocker
+  - otherwise explicitly freeze `QL-031` with the current failure mode if the retained `2026-01-25` surface is not expected to yield a promotable champion under the current reward/search regime
+  - keep the retained `2026-01-25` and `2026-01-26` bundles explicitly labeled `external-retained-evidence` / `unconfirmed` in every summary or evidence pack
   - keep evidence class and authority status explicit in every retained-surface summary
 - evidence_needed:
   - multi-window or multi-slice offline evaluation packs
-  - current-head champion/challenger comparison surfaces
+  - a same-root retained surface with a promotable champion plus same-root comparison-report linkage
   - comparison-report and paper/sim linkage for any surface that is used to argue promotion readiness
 - done_when:
   - offline closure criteria move from `PARTIAL` to `PASS` on evidence areas that are currently unproven
