@@ -123,3 +123,38 @@ def test_remote_run_stage_emits_failed_marker(repo_root: Path, tmp_path: Path) -
     assert "[EVAL_STARTED]" in payload
     assert "[FAILED]" in payload
     assert exit_path.read_text(encoding="utf-8").strip() == "3"
+
+
+def test_remote_run_stage_reemits_progress_markers(repo_root: Path, tmp_path: Path) -> None:
+    script_path = repo_root / "scripts" / "remote_run_stage.py"
+    log_path = tmp_path / "materialize.log"
+    exit_path = tmp_path / "materialize.exit"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "--run-id",
+            "ql031-progress",
+            "--phase",
+            "MATERIALIZE_STARTED",
+            "--log",
+            str(log_path),
+            "--exit-file",
+            str(exit_path),
+            "--",
+            sys.executable,
+            "-c",
+            "print('[PROGRESS] marker=materialization_completed rows=42')",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    payload = log_path.read_text(encoding="utf-8")
+    assert "[PROGRESS] marker=materialization_completed rows=42" in payload
+    assert "run_id=ql031-progress" in payload
+    assert "phase=MATERIALIZE_STARTED" in payload
+    assert exit_path.read_text(encoding="utf-8").strip() == "0"

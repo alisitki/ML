@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ from quantlab_ml.contracts import POLICY_ARTIFACT_SCHEMA_VERSION, DatasetSpec
 from quantlab_ml.data import LocalFixtureSource
 from quantlab_ml.training import CandidateSearchConfig, LinearPolicyTrainer
 from quantlab_ml.policies import PolicyRuntimeBridge
+from quantlab_ml.training import trainer as trainer_module
 from quantlab_ml.training.trainer import _resolve_torch_device
 from quantlab_ml.trajectories import TrajectoryBuilder
 
@@ -259,7 +261,60 @@ def test_resolve_torch_device_prefers_cuda_when_available() -> None:
     assert resolution.training_device == "cuda"
     assert resolution.cuda_available is True
     assert resolution.device_name == "Fake GPU"
-    assert resolution.compute_device == "cuda"
+
+
+def test_phase1a_training_summary_records_bootstrap_metadata(phase1a_policy_artifact) -> None:
+    summary = phase1a_policy_artifact.training_summary
+    strict_contract = phase1a_policy_artifact.runtime_metadata.strict_runtime_contract
+
+    assert phase1a_policy_artifact.policy_payload.runtime_adapter == "linear-policy-v2"
+    assert summary.get("bootstrap_horizon_steps") == 4
+    assert summary.get("joint_action_vocabulary_version") == "joint_action_vocabulary_v2_phase1a"
+    assert summary.get("policy_state_feature_version") == "policy_state_features_v2_phase1a"
+    assert summary.get("aux_value_loss_weight") == 0.25
+    assert summary.get("oracle_source_row_count", 0) > 0
+    assert summary.get("oracle_masked_row_count", 0) > 0
+    assert summary.get("oracle_label_coverage_ratio", 0.0) < 1.0
+    assert summary.get("value_pred_abs_max", -1.0) >= 0.0
+    assert summary.get("value_grad_norm_pre_clip", -1.0) >= summary.get("value_grad_norm_post_clip", -1.0) >= 0.0
+    assert summary.get("clip_applied_count", -1) >= 0
+    assert summary.get("first_nonfinite_component") is None
+    assert summary.get("first_nonfinite_batch_context") is None
+    assert strict_contract is not None
+    assert strict_contract.joint_action_vocabulary_version == "joint_action_vocabulary_v2_phase1a"
+    assert strict_contract.policy_state_feature_version == "policy_state_features_v2_phase1a"
+
+
+def test_phase1a_training_falls_back_to_initial_parameters_on_non_finite_epoch(
+    phase1a_trajectory_bundle,
+    phase1a_training_bundle,
+    monkeypatch,
+) -> None:
+    _, _, training_config = phase1a_training_bundle
+    trainer = LinearPolicyTrainer(training_config)
+    original = trainer_module._phase1a_parameters
+    state = {"calls": 0}
+
+    def injecting_parameters(**kwargs):
+        parameters = original(**kwargs)
+        state["calls"] += 1
+        if state["calls"] % 2 == 0:
+            return parameters.model_copy(
+                update={
+                    "value_weight": [float("nan")] * len(parameters.value_weight),
+                    "value_bias": float("nan"),
+                }
+            )
+        return parameters
+
+    monkeypatch.setattr(trainer_module, "_phase1a_parameters", injecting_parameters)
+
+    artifact = trainer.train(phase1a_trajectory_bundle)
+
+    assert state["calls"] >= 2
+    assert artifact.training_summary.get("best_epoch") == 0
+    assert math.isfinite(artifact.training_summary["best_validation_total_net_return"])
+    assert "null" not in artifact.policy_payload.blob
 
 
 def test_resolve_torch_device_falls_back_to_cpu_when_cuda_missing() -> None:

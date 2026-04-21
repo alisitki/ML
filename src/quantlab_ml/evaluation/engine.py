@@ -9,8 +9,9 @@ from typing import Any
 
 import numpy as np
 
-from quantlab_ml.common import utcnow
+from quantlab_ml.common import hash_payload, utcnow
 from quantlab_ml.contracts import (
+    ACTION_SPACE_VERSION_V2_PHASE1A,
     DYNAMIC_TARGET_ASSET,
     DatasetSpec,
     EvaluationBoundary,
@@ -25,7 +26,7 @@ from quantlab_ml.contracts import (
     TrajectoryStep,
 )
 from quantlab_ml.contracts.evaluation import EvaluationDiagnostics, EvaluationStreakStats
-from quantlab_ml.models import LinearPolicyParameters, RuntimeDecision
+from quantlab_ml.models import CompiledLinearPolicyV2, LinearPolicyParameters, RuntimeDecision
 from quantlab_ml.policies import PolicyRuntimeBridge
 from quantlab_ml.registry.bundle_errors import DanglingTensorCacheManifestError
 from quantlab_ml.registry.bundle_integrity import infer_bundle_payload_error_for_directory
@@ -34,6 +35,10 @@ from quantlab_ml.runtime_contract import (
     build_strict_runtime_contract,
     canonical_raw_surface_shapes,
     scale_specs_match,
+)
+from quantlab_ml.training.phase1a_supervision import (
+    phase1a_supervision_payload_status,
+    read_phase1a_supervision_manifest,
 )
 from quantlab_ml.trajectories.tensor_cache import (
     TENSOR_CACHE_FORMAT_VERSION,
@@ -248,8 +253,10 @@ class EvaluationEngine:
     def __init__(self, boundary: EvaluationBoundary):
         self.boundary = boundary
         self.runtime_bridge = PolicyRuntimeBridge()
+        self.last_phase1a_profile_report: dict[str, object] | None = None
 
     def evaluate(self, bundle: TrajectoryBundle, artifact: PolicyArtifact, split: str = "validation") -> EvaluationReport:
+        self.last_phase1a_profile_report = None
         return self.evaluate_records(
             bundle.dataset_spec,
             bundle.reward_spec,
@@ -264,6 +271,7 @@ class EvaluationEngine:
         trajectories: Iterable[TrajectoryRecord],
         artifact: PolicyArtifact,
     ) -> EvaluationReport:
+        self.last_phase1a_profile_report = None
         self._validate_boundary(reward_spec)
         reward_engine = RewardEngine(reward_spec, artifact.action_space)
         rewards: list[float] = []
@@ -291,7 +299,15 @@ class EvaluationEngine:
                 if first_step_time is None:
                     first_step_time = step.event_time
                 last_step_time = step.event_time
-                decision = self.runtime_bridge.decide(artifact, step.observation)
+                if artifact.policy_payload.runtime_adapter == "linear-policy-v2":
+                    decision = self.runtime_bridge.decide(
+                        artifact,
+                        step.observation,
+                        action_feasibility=step.action_feasibility,
+                        policy_state=current_policy_state,
+                    )
+                else:
+                    decision = self.runtime_bridge.decide(artifact, step.observation)
                 prior_policy_state = current_policy_state
                 applied = reward_engine.apply_decision(
                     snapshot=step.reward_snapshot,
@@ -317,7 +333,10 @@ class EvaluationEngine:
                 fee_total += applied.fee
                 funding_total += applied.funding
                 slippage_total += applied.slippage
-                if applied.applied_action_key != "abstain":
+                if _is_realized_trade(
+                    applied_action_key=applied.applied_action_key,
+                    action_space_version=artifact.action_space.action_space_version,
+                ):
                     realized_trade_count += 1
                 diagnostics.observe(applied=applied, prior_state=prior_policy_state)
                 current_policy_state = reward_engine.advance_policy_state(current_policy_state, applied)
@@ -389,6 +408,65 @@ class EvaluationEngine:
         )
         if resolved_cache_manifest is None and cache_status.payload_complete:
             resolved_cache_manifest = read_tensor_cache_manifest(directory)
+        if artifact.policy_payload.runtime_adapter == "linear-policy-v2":
+            supervision_status = phase1a_supervision_payload_status(directory)
+            if not cache_status.payload_complete:
+                if not allow_jsonl_fallback:
+                    typed_error = infer_bundle_payload_error_for_directory(directory)
+                    if typed_error is not None:
+                        raise typed_error
+                    raise ValueError(
+                        "linear-policy-v2 phase1a directory evaluation requires payload-complete tensor_cache_v1"
+                    )
+                if not jsonl_split_exists:
+                    typed_error = infer_bundle_payload_error_for_directory(directory)
+                    if typed_error is not None:
+                        raise typed_error
+                    raise ValueError(
+                        "linear-policy-v2 phase1a JSONL fallback requires readable split records"
+                    )
+                logger.warning(
+                    "evaluation_directory_phase1a_v2_jsonl_fallback path=%s split=%s tensor_cache_used=false "
+                    "phase1a_supervision_used=false compiled_v2_eval_used=false jsonl_fallback_used=true "
+                    "evaluation_mode=sequential_record_runtime",
+                    directory,
+                    split_name,
+                )
+                self.last_phase1a_profile_report = {
+                    "compiled_v2_eval_used": False,
+                    "evaluation_rows_per_sec": 0.0,
+                    "tensor_cache_used": False,
+                    "phase1a_supervision_used": False,
+                    "jsonl_fallback_used": True,
+                    "evaluation_split": split_name,
+                }
+                return self.evaluate_records(
+                    manifest.dataset_spec,
+                    manifest.reward_spec,
+                    self._iter_directory_records(
+                        directory=directory,
+                        split_name=split_name,
+                        start=start,
+                        end=end,
+                        exclusive_end=exclusive_end,
+                        store_cls=TrajectoryDirectoryStore,
+                    ),
+                    artifact,
+                )
+            if not supervision_status.payload_complete:
+                raise ValueError(
+                    "linear-policy-v2 phase1a directory evaluation requires phase1a_supervision_v1 payloads"
+                )
+            return self._evaluate_tensor_cache_phase1a(
+                manifest=manifest,
+                directory=directory,
+                artifact=artifact,
+                cache_manifest=resolved_cache_manifest or read_tensor_cache_manifest(directory),
+                split_name=split_name,
+                start=start,
+                end=end,
+                exclusive_end=exclusive_end,
+            )
         if resolved_cache_manifest is not None:
             if not cache_status.payload_complete:
                 if allow_jsonl_fallback and jsonl_split_exists:
@@ -574,7 +652,10 @@ class EvaluationEngine:
                 fee_total += applied.fee
                 funding_total += applied.funding
                 slippage_total += applied.slippage
-                if applied.applied_action_key != "abstain":
+                if _is_realized_trade(
+                    applied_action_key=applied.applied_action_key,
+                    action_space_version=artifact.action_space.action_space_version,
+                ):
                     realized_trade_count += 1
                 diagnostics.observe(applied=applied, prior_state=prior_policy_state)
                 current_policy_state = reward_engine.advance_policy_state(current_policy_state, applied)
@@ -593,6 +674,186 @@ class EvaluationEngine:
             total_steps / max(wall_sec, 1e-9),
         )
 
+        active_range = TimeRange(
+            start=first_step_time,
+            end=last_step_time + timedelta(seconds=manifest.dataset_spec.sampling_interval_seconds),
+        )
+        total_net_return = sum(rewards)
+        return EvaluationReport(
+            policy_id=artifact.policy_id,
+            evaluation_id=f"eval-{artifact.policy_id}",
+            created_at=utcnow(),
+            boundary=self.boundary,
+            total_steps=total_steps,
+            realized_trade_count=realized_trade_count,
+            infeasible_action_count=infeasible_action_count,
+            infeasible_penalty_total=infeasible_penalty_total,
+            total_net_return=total_net_return,
+            average_net_return=total_net_return / max(total_steps, 1),
+            risk_penalty_total=risk_penalty_total,
+            turnover_penalty_total=turnover_penalty_total,
+            fee_total=fee_total,
+            funding_total=funding_total,
+            slippage_total=slippage_total,
+            action_counts=action_counts,
+            step_reward_std=np.std(np.asarray(rewards, dtype=np.float64)).item() if len(rewards) > 1 else 0.0,
+            coverage_symbols=manifest.dataset_spec.symbols,
+            coverage_venues=manifest.dataset_spec.exchanges,
+            coverage_streams=manifest.dataset_spec.stream_universe,
+            active_date_range=active_range,
+            diagnostics=diagnostics.finalize(
+                total_steps=total_steps,
+                total_net_return=total_net_return,
+                fee_total=fee_total,
+                funding_total=funding_total,
+                slippage_total=slippage_total,
+                risk_penalty_total=risk_penalty_total,
+                turnover_penalty_total=turnover_penalty_total,
+                infeasible_penalty_total=infeasible_penalty_total,
+                realized_trade_count=realized_trade_count,
+            ),
+            notes=notes,
+        )
+
+    def _evaluate_tensor_cache_phase1a(
+        self,
+        *,
+        manifest: TrajectoryManifest,
+        directory: Path,
+        artifact: PolicyArtifact,
+        cache_manifest: TensorCacheManifest,
+        split_name: str,
+        start: datetime | None,
+        end: datetime | None,
+        exclusive_end: datetime | None,
+    ) -> EvaluationReport:
+        import time as _time
+
+        self._validate_boundary(manifest.reward_spec)
+        compiled_policy = CompiledLinearPolicyV2.from_artifact(artifact.policy_payload.blob)
+        self._validate_tensor_cache_contract_phase1a(
+            manifest=manifest,
+            artifact=artifact,
+            cache_manifest=cache_manifest,
+            compiled_policy=compiled_policy,
+            directory=directory,
+        )
+        split_manifest = cache_manifest.splits.get(split_name)
+        if split_manifest is None:
+            raise ValueError(f"tensor cache is missing split {split_name!r}")
+        logger.info(
+            "tensor_cache_phase1a_evaluation_started split=%s tensor_cache_format=%s tensor_cache_used=true "
+            "phase1a_supervision_used=true jsonl_fallback_used=false compiled_v2_eval_used=true "
+            "tensor_cache_shard_count=%d cache_feature_dim=%d",
+            split_name,
+            cache_manifest.format_version,
+            split_manifest.shard_count,
+            cache_manifest.feature_dim,
+        )
+        reward_engine = RewardEngine(manifest.reward_spec, artifact.action_space)
+        rewards: list[float] = []
+        total_steps = 0
+        realized_trade_count = 0
+        infeasible_action_count = 0
+        infeasible_penalty_total = 0.0
+        risk_penalty_total = 0.0
+        turnover_penalty_total = 0.0
+        fee_total = 0.0
+        funding_total = 0.0
+        slippage_total = 0.0
+        action_counts = {action.key: 0 for action in artifact.action_space.actions}
+        notes: list[str] = []
+        first_step_time = None
+        last_step_time = None
+        current_policy_state = PolicyState()
+        saw_rows = False
+        started_at = _time.perf_counter()
+        diagnostics = _EvaluationDiagnosticsAccumulator(dwell_lengths=[], same_side_streak_lengths=[])
+
+        for shard in split_manifest.shards:
+            loaded = load_tensor_cache_shard(directory, shard)
+            row_idx = window_row_indices(
+                loaded.event_time_ms,
+                start=start,
+                end=end,
+                exclusive_end=exclusive_end,
+            )
+            if row_idx.size == 0:
+                continue
+            selected_rows = [loaded.replay_rows[int(index)] for index in row_idx]
+            observation_logits = compiled_policy.observation_logits_batch(loaded.features[row_idx])
+            for local_index, row in enumerate(selected_rows):
+                absolute_index = int(row_idx[local_index])
+                if bool(loaded.trajectory_start[absolute_index]) != row.trajectory_start:
+                    raise ValueError(
+                        "tensor cache trajectory_start mismatch between metadata and replay sidecar: "
+                        f"split={split_name!r}, shard={shard.shard_index}, row={absolute_index}"
+                    )
+                if row.trajectory_start:
+                    current_policy_state = PolicyState()
+                if artifact.target_asset != DYNAMIC_TARGET_ASSET and row.target_symbol != artifact.target_asset:
+                    raise ValueError("artifact target_asset is incompatible with tensor-cache target_symbol")
+                saw_rows = True
+                total_steps += 1
+                if first_step_time is None:
+                    first_step_time = row.event_time
+                last_step_time = row.event_time
+                decision = compiled_policy.decide_from_observation_logits(
+                    observation_logits[local_index],
+                    policy_state=current_policy_state,
+                    action_feasibility=row.action_feasibility,
+                )
+                prior_policy_state = current_policy_state
+                applied = reward_engine.apply_decision(
+                    snapshot=row.reward_snapshot,
+                    requested_action_key=decision.action_key,
+                    action_feasibility=row.action_feasibility,
+                    infeasible_action_treatment=self.boundary.infeasible_action_treatment,
+                    venue=decision.venue,
+                    size_band_key=decision.size_band_key,
+                    leverage_band_key=decision.leverage_band_key,
+                    policy_state=current_policy_state,
+                )
+                if applied.infeasible:
+                    infeasible_action_count += 1
+                    infeasible_penalty_total += applied.infeasible_penalty
+                    notes.append(f"infeasible:{decision.action_key}:{row.event_time.isoformat()}")
+                rewards.append(applied.net_reward)
+                action_counts[applied.applied_action_key] = action_counts.get(applied.applied_action_key, 0) + 1
+                risk_penalty_total += applied.risk_penalty
+                turnover_penalty_total += applied.turnover_penalty
+                fee_total += applied.fee
+                funding_total += applied.funding
+                slippage_total += applied.slippage
+                if _is_realized_trade(
+                    applied_action_key=applied.applied_action_key,
+                    action_space_version=artifact.action_space.action_space_version,
+                ):
+                    realized_trade_count += 1
+                diagnostics.observe(applied=applied, prior_state=prior_policy_state)
+                current_policy_state = reward_engine.advance_policy_state(current_policy_state, applied)
+
+        if not saw_rows or first_step_time is None or last_step_time is None:
+            raise ValueError("evaluation trajectories are empty")
+        wall_sec = _time.perf_counter() - started_at
+        evaluation_rows_per_sec = total_steps / max(wall_sec, 1e-9)
+        logger.info(
+            "tensor_cache_phase1a_evaluation_completed split=%s total_steps=%d wall_sec=%.1f "
+            "evaluation_rows_per_sec=%.2f tensor_cache_used=true phase1a_supervision_used=true "
+            "compiled_v2_eval_used=true jsonl_fallback_used=false",
+            split_name,
+            total_steps,
+            wall_sec,
+            evaluation_rows_per_sec,
+        )
+        self.last_phase1a_profile_report = {
+            "compiled_v2_eval_used": True,
+            "evaluation_rows_per_sec": evaluation_rows_per_sec,
+            "tensor_cache_used": True,
+            "phase1a_supervision_used": True,
+            "jsonl_fallback_used": False,
+            "evaluation_split": split_name,
+        }
         active_range = TimeRange(
             start=first_step_time,
             end=last_step_time + timedelta(seconds=manifest.dataset_spec.sampling_interval_seconds),
@@ -723,6 +984,60 @@ class EvaluationEngine:
                 f"cache_feature_dim={cache_manifest.feature_dim}, expected_feature_dim={strict_contract.expected_feature_dim}"
             )
 
+    def _validate_tensor_cache_contract_phase1a(
+        self,
+        *,
+        manifest: TrajectoryManifest,
+        artifact: PolicyArtifact,
+        cache_manifest: TensorCacheManifest,
+        compiled_policy: CompiledLinearPolicyV2,
+        directory: Path,
+    ) -> None:
+        if cache_manifest.format_version != TENSOR_CACHE_FORMAT_VERSION:
+            raise ValueError(f"unsupported tensor cache format: {cache_manifest.format_version!r}")
+        strict_contract = artifact.runtime_metadata.strict_runtime_contract or build_strict_runtime_contract(
+            manifest.observation_schema,
+            policy_kind=artifact.policy_payload.runtime_adapter,
+        )
+        expected_contract = build_strict_runtime_contract(
+            manifest.observation_schema,
+            policy_kind=artifact.policy_payload.runtime_adapter,
+        )
+        if artifact.reward_version != manifest.reward_spec.reward_version:
+            raise ValueError("artifact reward version does not match evaluation reward surface")
+        if artifact.runtime_metadata.observation_schema_version != manifest.observation_schema.schema_version:
+            raise ValueError("artifact observation schema version does not match evaluation surface")
+        if artifact.allowed_venues != manifest.dataset_spec.exchanges:
+            raise ValueError("artifact allowed_venues do not match evaluation venue set")
+        if artifact.runtime_metadata.required_streams != manifest.dataset_spec.stream_universe:
+            raise ValueError("artifact required_streams do not match evaluation stream universe")
+        if strict_contract.required_raw_surface_shapes != canonical_raw_surface_shapes(manifest.observation_schema):
+            raise ValueError("artifact strict runtime raw surface shapes do not match evaluation surface")
+        if strict_contract.derived_contract_version != expected_contract.derived_contract_version:
+            raise ValueError("artifact strict runtime derived contract does not match evaluation surface")
+        if strict_contract.derived_channel_template_signature != expected_contract.derived_channel_template_signature:
+            raise ValueError("artifact strict runtime derived channel signature does not match evaluation surface")
+        if compiled_policy.feature_dim != strict_contract.expected_feature_dim:
+            raise ValueError(
+                "artifact payload feature dimension does not match runtime contract: "
+                f"payload_feature_dim={compiled_policy.feature_dim}, expected_feature_dim={strict_contract.expected_feature_dim}"
+            )
+        if cache_manifest.feature_dim + compiled_policy.policy_state_feature_mean.shape[0] != strict_contract.expected_feature_dim:
+            raise ValueError(
+                "tensor cache feature dimension plus policy-state feature dimension does not match runtime contract"
+            )
+        supervision_manifest = read_phase1a_supervision_manifest(directory)
+        if supervision_manifest.tensor_cache_manifest_hash != hash_payload(cache_manifest):
+            raise ValueError("phase1a supervision tensor cache manifest hash mismatch")
+        if supervision_manifest.reward_version != manifest.reward_spec.reward_version:
+            raise ValueError("phase1a supervision reward version mismatch")
+        if supervision_manifest.action_space_version != manifest.action_space.action_space_version:
+            raise ValueError("phase1a supervision action space version mismatch")
+        if supervision_manifest.policy_state_feature_version != strict_contract.policy_state_feature_version:
+            raise ValueError("phase1a supervision policy_state_feature_version mismatch")
+        if supervision_manifest.joint_action_vocabulary_version != strict_contract.joint_action_vocabulary_version:
+            raise ValueError("phase1a supervision joint_action_vocabulary_version mismatch")
+
     def _window_includes(
         self,
         step: TrajectoryStep,
@@ -754,6 +1069,12 @@ class EvaluationEngine:
             raise ValueError("unsupported terminal_semantics for v1 replay surface")
         if self.boundary.timeout_semantics != "force_terminal_at_data_end":
             raise ValueError("unsupported timeout_semantics for v1 replay surface")
+
+
+def _is_realized_trade(*, applied_action_key: str, action_space_version: str) -> bool:
+    if action_space_version == ACTION_SPACE_VERSION_V2_PHASE1A:
+        return applied_action_key in {"enter_long", "enter_short", "exit"}
+    return applied_action_key != "abstain"
 
 
 def _softmax_matrix(logits: np.ndarray) -> np.ndarray:

@@ -125,6 +125,15 @@ That strict contract must include:
 - `derived_channel_templates`
 - `derived_channel_template_signature`
 - `expected_feature_dim`
+- `policy_state_feature_version` when policy-state features are required
+- `expected_policy_state_dim` when policy-state features are required
+- `joint_action_vocabulary_version` when runtime action decoding uses an internal expanded vocabulary
+
+For `Phase 1A` specifically:
+
+- config-level base actions remain generic
+- the internal `linear-policy-v2` runtime vocabulary is the 9-logit venue-expanded joint action vocabulary
+- `linear-policy-v1` remains backward-compatible and does not require `policy_state`
 
 ## 7. Compatibility requirements
 

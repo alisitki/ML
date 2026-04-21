@@ -9,12 +9,17 @@ from quantlab_ml.contracts import (
     ActionFeasibilitySurface,
     EvaluationBoundary,
     FeasibilityCell,
+    PolicyState,
 )
 from quantlab_ml.data import LocalFixtureSource
 from quantlab_ml.evaluation import EvaluationEngine
 from quantlab_ml.models import RuntimeDecision
 from quantlab_ml.policies import PolicyRuntimeBridge
 from quantlab_ml.rewards import RewardEngine
+from quantlab_ml.training.phase1a_supervision import (
+    materialize_phase1a_supervision,
+    phase1a_supervision_directory,
+)
 from quantlab_ml.trajectories import TrajectoryBuilder, TrajectoryDirectoryStore
 from quantlab_ml.trajectories.tensor_cache import tensor_cache_directory
 
@@ -254,6 +259,65 @@ def test_evaluation_force_abstain_keeps_infeasible_penalty(
     assert report.realized_trade_count == 0
 
 
+def test_phase1a_evaluation_counts_hold_as_non_trade(
+    phase1a_trajectory_bundle,
+    phase1a_policy_artifact,
+    evaluation_boundary: EvaluationBoundary,
+) -> None:
+    engine = EvaluationEngine(evaluation_boundary)
+    engine.runtime_bridge = _Phase1AHoldBridge()
+
+    report = engine.evaluate(phase1a_trajectory_bundle, phase1a_policy_artifact)
+
+    assert report.action_counts["hold"] > 0
+    assert report.realized_trade_count == report.action_counts["enter_long"] + report.action_counts["exit"]
+
+
+def test_phase1a_directory_evaluation_uses_compiled_tensor_cache_runtime(
+    tmp_path: Path,
+    phase1a_dataset_spec,
+    phase1a_events,
+    phase1a_training_bundle,
+    reward_spec,
+    phase1a_policy_artifact,
+    evaluation_boundary: EvaluationBoundary,
+) -> None:
+    trajectory_spec, action_space, training_config = phase1a_training_bundle
+    builder = TrajectoryBuilder(phase1a_dataset_spec, trajectory_spec, action_space, reward_spec)
+    builder.build_to_directory(phase1a_events, tmp_path)
+    manifest = TrajectoryDirectoryStore.read_manifest(tmp_path)
+    materialize_phase1a_supervision(
+        trajectories_directory=tmp_path,
+        output_directory=phase1a_supervision_directory(tmp_path),
+        manifest=manifest,
+        training_config=training_config,
+    )
+
+    engine = EvaluationEngine(evaluation_boundary)
+    report = engine.evaluate_directory(
+        manifest=manifest,
+        directory=tmp_path,
+        artifact=phase1a_policy_artifact,
+        split_name="validation",
+    )
+
+    record_report = EvaluationEngine(evaluation_boundary).evaluate_records(
+        manifest.dataset_spec,
+        manifest.reward_spec,
+        TrajectoryDirectoryStore.iter_records(tmp_path, "validation"),
+        phase1a_policy_artifact,
+    )
+    assert engine.last_phase1a_profile_report is not None
+    assert engine.last_phase1a_profile_report["compiled_v2_eval_used"] is True
+    assert engine.last_phase1a_profile_report["tensor_cache_used"] is True
+    assert engine.last_phase1a_profile_report["phase1a_supervision_used"] is True
+    assert engine.last_phase1a_profile_report["jsonl_fallback_used"] is False
+    assert report.total_steps > 0
+    assert report.total_steps == record_report.total_steps
+    assert report.total_net_return == pytest.approx(record_report.total_net_return)
+    assert report.action_counts == record_report.action_counts
+
+
 class _AlwaysLongBridge:
     def decide(self, artifact, observation) -> RuntimeDecision:
         return RuntimeDecision(
@@ -275,3 +339,26 @@ class _ExplicitVenueBridge:
             size_band_key="micro",
             leverage_band_key="low",
         )
+
+
+class _Phase1AHoldBridge:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def decide(
+        self,
+        artifact,
+        observation,
+        *,
+        action_feasibility=None,
+        policy_state: PolicyState | None = None,
+    ) -> RuntimeDecision:
+        self.call_count += 1
+        if policy_state is None or policy_state.previous_position_side == "flat":
+            return RuntimeDecision(
+                action_key="enter_long",
+                venue="binance",
+                size_band_key="micro",
+                leverage_band_key="low",
+            )
+        return RuntimeDecision(action_key="hold")

@@ -176,6 +176,75 @@ def test_cli_smoke(repo_root: Path, fixture_path: Path, tmp_path: Path) -> None:
         assert decision.failure_reasons
 
 
+def test_cli_evaluate_accepts_explicit_split_for_directory(
+    repo_root: Path,
+    fixture_path: Path,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    trajectories = tmp_path / "outputs" / "trajectories.json"
+    policy = tmp_path / "outputs" / "policy.json"
+    evaluation = tmp_path / "outputs" / "validation-evaluation.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "build-trajectories",
+            "--input",
+            str(fixture_path),
+            "--output",
+            str(trajectories),
+            "--data-config",
+            str(repo_root / "configs" / "data" / "fixture.yaml"),
+            "--training-config",
+            str(repo_root / "configs" / "training" / "default.yaml"),
+            "--reward-config",
+            str(repo_root / "configs" / "reward" / "default.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    result = runner.invoke(
+        app,
+        [
+            "train",
+            "--trajectories",
+            str(trajectories),
+            "--output",
+            str(policy),
+            "--training-config",
+            str(repo_root / "configs" / "training" / "default.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "--trajectories",
+            str(trajectories),
+            "--policy",
+            str(policy),
+            "--output",
+            str(evaluation),
+            "--evaluation-config",
+            str(repo_root / "configs" / "evaluation" / "default.yaml"),
+            "--split",
+            "validation",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    report = load_model(evaluation, EvaluationReport)
+    expected_steps = sum(
+        len(record.steps)
+        for record in TrajectoryDirectoryStore.iter_records(trajectories, "validation")
+    )
+
+    assert report.total_steps == expected_steps
+
+
 def test_cli_promote_policy_promotes_scored_candidate_from_yaml_evidence(
     tmp_path: Path,
     trajectory_bundle,
@@ -1231,10 +1300,12 @@ def test_cli_evaluate_directory_uses_tensor_cache_api(
     assert result.exit_code == 0, result.stdout
 
     called = {"count": 0}
+    seen = {"split_name": None}
     original = EvaluationEngine._evaluate_tensor_cache
 
     def wrapped(self, *args, **kwargs):
         called["count"] += 1
+        seen["split_name"] = kwargs.get("split_name")
         return original(self, *args, **kwargs)
 
     def _boom(*args, **kwargs):
@@ -1259,10 +1330,13 @@ def test_cli_evaluate_directory_uses_tensor_cache_api(
             str(evaluation),
             "--evaluation-config",
             str(repo_root / "configs" / "evaluation" / "default.yaml"),
+            "--split",
+            "validation",
         ],
     )
     assert result.exit_code == 0, result.stdout
     assert called["count"] == 1
+    assert seen["split_name"] == "validation"
 
 
 def test_cli_evaluate_directory_requires_explicit_jsonl_fallback_when_cache_missing(

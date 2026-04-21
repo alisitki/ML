@@ -112,7 +112,7 @@ This run therefore did not contain a promotable same-root champion under the cur
 
 This retained same-root bundle proves:
 
-- the exact same-root retained run existed and completed through training on `2026-01-25`
+- the exact retained blocker surface from the `2026-01-25` same-root attempt existed and completed through training
 - the exact finalist registry state, paper/sim record, and rejected promotion decision can be audited locally
 - the retained blocker is not generic missing linkage; it is specifically the absence of any post-cost-positive promotable finalist on the governing final test
 - the `2026-01-26` retained rerun still exists as a distinct second surface

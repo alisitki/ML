@@ -4,11 +4,27 @@ from typing import Any
 
 import numpy as np
 
-from quantlab_ml.contracts import ObservationContext
+from quantlab_ml.contracts import ObservationContext, PolicyState
+
+PHASE1A_POLICY_STATE_FEATURE_DIM = 9
 
 
 def observation_feature_vector(observation: ObservationContext) -> list[float]:
     return observation_feature_array(observation, dtype=np.float32).tolist()
+
+
+def phase1a_feature_vector(
+    observation: ObservationContext,
+    policy_state: PolicyState | None,
+    *,
+    venue_choices: list[str],
+) -> list[float]:
+    return phase1a_feature_array(
+        observation,
+        policy_state,
+        venue_choices=venue_choices,
+        dtype=np.float32,
+    ).tolist()
 
 
 def observation_feature_segment_manifest(observation: ObservationContext) -> list[dict[str, int | str]]:
@@ -97,6 +113,53 @@ def observation_feature_array(
     asset_count = max(len(observation.observation_schema.asset_axis), 1)
     features[cursor] = observation.target_asset_index / float(asset_count)
     return features
+
+
+def policy_state_feature_array(
+    policy_state: PolicyState | None,
+    *,
+    venue_choices: list[str],
+    dtype: np.dtype[Any] | type[np.generic] = np.float32,
+) -> np.ndarray:
+    resolved_dtype = np.dtype(dtype)
+    features = np.zeros(3 + len(venue_choices) + 1 + 2, dtype=resolved_dtype)
+    state = policy_state or PolicyState()
+
+    side_to_index = {"flat": 0, "long": 1, "short": 2}
+    features[side_to_index[state.previous_position_side]] = 1.0
+
+    venue_offset = 3
+    none_index = venue_offset + len(venue_choices)
+    if state.previous_venue is None:
+        features[none_index] = 1.0
+    else:
+        for venue_index, venue in enumerate(venue_choices):
+            if venue == state.previous_venue:
+                features[venue_offset + venue_index] = 1.0
+                break
+        else:
+            features[none_index] = 1.0
+
+    tail_offset = none_index + 1
+    features[tail_offset] = min(float(state.hold_age_steps), 32.0) / 32.0
+    features[tail_offset + 1] = min(float(state.turnover_accumulator), 32.0) / 32.0
+    return features
+
+
+def phase1a_feature_array(
+    observation: ObservationContext,
+    policy_state: PolicyState | None,
+    *,
+    venue_choices: list[str],
+    dtype: np.dtype[Any] | type[np.generic] = np.float32,
+) -> np.ndarray:
+    observation_features = observation_feature_array(observation, dtype=dtype)
+    policy_features = policy_state_feature_array(
+        policy_state,
+        venue_choices=venue_choices,
+        dtype=dtype,
+    )
+    return np.concatenate((observation_features, policy_features), axis=0)
 
 
 def _to_float_list(values: np.ndarray | list[float]) -> list[float]:

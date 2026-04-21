@@ -57,19 +57,20 @@ Result:
 - why_open:
   - this is now the single active next batch in this workspace because historical local authority discovery is closed here
   - current HEAD now has a repo-tracked minimum evidence pack that indexes one inspected-scope continuity audit and one same-surface current-head retained-run comparison
-  - current HEAD now also has one distinct-surface external retained rerun on `2026-01-26` and one same-root retained run on `2026-01-25`, plus registry-backed comparison-report and offline evidence-pack tooling, but the retained proof surfaces are still not enough for offline closure `PASS`
+  - current HEAD now also has one distinct-surface external retained rerun on `2026-01-26` and one retained blocker surface on `2026-01-25`, plus registry-backed comparison-report and offline evidence-pack tooling, but the retained proof surfaces are still not enough for offline closure `PASS`
   - the retained same-root `2026-01-25` run produced four scored finalists, one linked paper/sim record, and a rejected promotion decision on `economics.post_cost_positive`; no current champion was created, so same-root comparison remains blocked by `no_current_champion`
 - next_action:
   - preserve the retained failure-state same-root bundle at `outputs/ql031-same-root-proof-20260419` as the exact blocker record rather than flattening it into a generic missing-linkage story
-  - do not fabricate a champion by manual registry edits; `compare-policies` remains blocked until a same-root run yields a promotable post-cost-positive candidate
-  - keep using `build-offline-evidence-pack` only on retained surfaces whose evidence class and authority status are stated directly; do not use it to blur a failed same-root retained run into closure evidence
-  - if another same-root rerun is attempted, require the rerun to produce at least one post-cost-positive promotable finalist before treating compare/paper-sim linkage as the remaining blocker
+  - do not fabricate a champion by manual registry edits; `compare-policies` remains blocked until a `fresh full same-root run` or `payload-complete same-root run` yields a promotable post-cost-positive candidate
+  - allow only `Parallel V2 Phase 1A` under `docs/QL031_PHASE1A_PARTIAL_CLOSURE_EXCEPTION.md`
+  - keep using `build-offline-evidence-pack` only on retained surfaces whose evidence class and authority status are stated directly; do not use it to blur a failed slim blocker bundle into closure evidence
+  - if another same-root rerun is attempted, require a `fresh full same-root run` or `payload-complete same-root run` to produce at least one post-cost-positive promotable finalist before treating compare/paper-sim linkage as the remaining blocker
   - otherwise explicitly freeze `QL-031` with the current failure mode if the retained `2026-01-25` surface is not expected to yield a promotable champion under the current reward/search regime
   - keep the retained `2026-01-25` and `2026-01-26` bundles explicitly labeled `external-retained-evidence` / `unconfirmed` in every summary or evidence pack
   - keep evidence class and authority status explicit in every retained-surface summary
 - evidence_needed:
   - multi-window or multi-slice offline evaluation packs
-  - a same-root retained surface with a promotable champion plus same-root comparison-report linkage
+  - a `fresh full same-root run` or `payload-complete same-root run` with a promotable champion plus same-root comparison-report linkage
   - comparison-report and paper/sim linkage for any surface that is used to argue promotion readiness
 - done_when:
   - offline closure criteria move from `PARTIAL` to `PASS` on evidence areas that are currently unproven

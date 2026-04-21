@@ -48,6 +48,7 @@ def build_retained_bundle_manifest(
     instance_metadata_path: Path | None = None,
     ql031_status_path: Path | None = None,
     config_copies: list[tuple[Path, str]] | None = None,
+    allow_incomplete: bool = False,
 ) -> dict[str, Any]:
     resolved_bundle_root = bundle_root.expanduser().resolve()
     if not resolved_bundle_root.exists() or not resolved_bundle_root.is_dir():
@@ -55,9 +56,9 @@ def build_retained_bundle_manifest(
 
     copied_configs = _copy_config_files(bundle_root=resolved_bundle_root, config_copies=config_copies or [])
     registry_root = resolved_bundle_root / "registry"
-    if not registry_root.exists():
+    if not registry_root.exists() and not allow_incomplete:
         raise FileNotFoundError(f"bundle registry root does not exist: {registry_root}")
-    store = LocalRegistryStore(registry_root)
+    store = LocalRegistryStore(registry_root) if registry_root.exists() else None
 
     policy = _maybe_load_model(resolved_bundle_root / "policy.json", PolicyArtifact)
     evaluation = _maybe_load_model(resolved_bundle_root / "evaluation.json", EvaluationReport)
@@ -72,6 +73,8 @@ def build_retained_bundle_manifest(
         "source_run_root": source_run_root,
         "source_registry_root": source_registry_root or f"{source_run_root.rstrip('/')}/registry",
         "retained_bundle_path": str(resolved_bundle_root),
+        "run_completion_state": "partial" if allow_incomplete else "complete",
+        "known_partial": allow_incomplete,
         "bundle_disk_usage_human": _bundle_disk_usage_human(resolved_bundle_root),
         "bundle_unique_bytes": _bundle_unique_bytes(resolved_bundle_root),
         "run_started_at_logline": _first_non_empty_line(
@@ -87,8 +90,8 @@ def build_retained_bundle_manifest(
         "inference_artifact_summary": _inference_artifact_summary(inference_artifact),
         "inspect_s3_summary": _inspect_s3_summary(resolved_bundle_root / "inspect_s3.json"),
         "trajectory_summary": _trajectory_summary(resolved_bundle_root / "trajectories"),
-        "registry_summary": _registry_summary(store),
-        "same_root_proof_summary": _same_root_proof_summary(store),
+        "registry_summary": _registry_summary(store) if store is not None else None,
+        "same_root_proof_summary": _same_root_proof_summary(store) if store is not None else None,
         "instance_metadata": _instance_metadata(instance_metadata_path),
         "ql031_integration_summary": _ql031_integration_summary(ql031_status_path),
         "config_copies": copied_configs,
@@ -110,6 +113,7 @@ def write_retained_bundle_manifest(
     instance_metadata_path: Path | None = None,
     ql031_status_path: Path | None = None,
     config_copies: list[tuple[Path, str]] | None = None,
+    allow_incomplete: bool = False,
 ) -> Path:
     manifest = build_retained_bundle_manifest(
         bundle_root=bundle_root,
@@ -121,6 +125,7 @@ def write_retained_bundle_manifest(
         instance_metadata_path=instance_metadata_path,
         ql031_status_path=ql031_status_path,
         config_copies=config_copies,
+        allow_incomplete=allow_incomplete,
     )
     output_path = bundle_root.expanduser().resolve() / _MANIFEST_FILENAME
     dump_json_data(output_path, manifest)

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from quantlab_ml.contracts import (
+    ACTION_SPACE_VERSION_V2_PHASE1A,
     ActionFeasibilitySurface,
     FeasibilityCell,
     PolicyState,
@@ -372,3 +373,108 @@ def test_reward_engine_force_abstain_keeps_infeasible_penalty(training_bundle, r
     assert outcome.net_reward == pytest.approx(reward_spec.infeasible_action_penalty)
     assert outcome.reward_context is not None
     assert outcome.reward_context.selected_venue == "binance"
+
+
+def test_phase1a_hold_is_only_valid_as_continuation(phase1a_training_bundle, reward_spec) -> None:
+    _, action_space, _ = phase1a_training_bundle
+    assert action_space.action_space_version == ACTION_SPACE_VERSION_V2_PHASE1A
+    engine = RewardEngine(reward_spec, action_space)
+    feasibility = _make_feasibility(action_space)
+    snapshot = engine.build_snapshot(
+        event_time=datetime(2024, 1, 1, tzinfo=UTC),
+        reward_context=_make_context(),
+        reward_timeline=_make_timeline(("binance", [110.0]), ("bybit", [105.0])),
+        action_feasibility=feasibility,
+    )
+
+    flat_outcome = engine.apply_decision(
+        snapshot=snapshot,
+        requested_action_key="hold",
+        action_feasibility=feasibility,
+        infeasible_action_treatment="force_abstain",
+        policy_state=PolicyState(),
+    )
+    in_position_outcome = engine.apply_decision(
+        snapshot=snapshot,
+        requested_action_key="hold",
+        action_feasibility=feasibility,
+        infeasible_action_treatment="force_abstain",
+        policy_state=PolicyState(previous_position_side="long", previous_venue="binance"),
+    )
+
+    assert flat_outcome.applied_action_key == "abstain"
+    assert flat_outcome.infeasible is True
+    assert in_position_outcome.applied_action_key == "hold"
+    assert in_position_outcome.resulting_position_side == "long"
+    assert in_position_outcome.venue == "binance"
+
+
+def test_phase1a_exit_is_only_close_and_abstain_is_flat_only(phase1a_training_bundle, reward_spec) -> None:
+    _, action_space, _ = phase1a_training_bundle
+    engine = RewardEngine(reward_spec, action_space)
+    feasibility = _make_feasibility(action_space)
+    snapshot = engine.build_snapshot(
+        event_time=datetime(2024, 1, 1, tzinfo=UTC),
+        reward_context=_make_context(),
+        reward_timeline=_make_timeline(("binance", [110.0]), ("bybit", [105.0])),
+        action_feasibility=feasibility,
+    )
+
+    exit_outcome = engine.apply_decision(
+        snapshot=snapshot,
+        requested_action_key="exit",
+        action_feasibility=feasibility,
+        infeasible_action_treatment="force_abstain",
+        policy_state=PolicyState(previous_position_side="short", previous_venue="bybit"),
+    )
+    abstain_outcome = engine.apply_decision(
+        snapshot=snapshot,
+        requested_action_key="abstain",
+        action_feasibility=feasibility,
+        infeasible_action_treatment="force_abstain",
+        policy_state=PolicyState(previous_position_side="long", previous_venue="binance"),
+    )
+
+    assert exit_outcome.applied_action_key == "exit"
+    assert exit_outcome.resulting_position_side == "flat"
+    assert exit_outcome.venue == "bybit"
+    assert abstain_outcome.applied_action_key == "abstain"
+    assert abstain_outcome.infeasible is True
+
+
+def test_phase1a_forbids_implicit_flip_and_in_position_venue_switch(phase1a_training_bundle, reward_spec) -> None:
+    _, action_space, _ = phase1a_training_bundle
+    engine = RewardEngine(reward_spec, action_space)
+    feasibility = _make_feasibility(action_space)
+    snapshot = engine.build_snapshot(
+        event_time=datetime(2024, 1, 1, tzinfo=UTC),
+        reward_context=_make_context(),
+        reward_timeline=_make_timeline(("binance", [110.0]), ("bybit", [105.0])),
+        action_feasibility=feasibility,
+    )
+
+    flip_outcome = engine.apply_decision(
+        snapshot=snapshot,
+        requested_action_key="enter_short",
+        action_feasibility=feasibility,
+        infeasible_action_treatment="force_abstain",
+        venue="binance",
+        size_band_key="micro",
+        leverage_band_key="low",
+        policy_state=PolicyState(previous_position_side="long", previous_venue="binance"),
+    )
+    venue_switch_outcome = engine.apply_decision(
+        snapshot=snapshot,
+        requested_action_key="enter_long",
+        action_feasibility=feasibility,
+        infeasible_action_treatment="force_abstain",
+        venue="bybit",
+        size_band_key="micro",
+        leverage_band_key="low",
+        policy_state=PolicyState(previous_position_side="long", previous_venue="binance"),
+    )
+
+    assert flip_outcome.applied_action_key == "abstain"
+    assert flip_outcome.infeasible is True
+    assert venue_switch_outcome.applied_action_key == "abstain"
+    assert venue_switch_outcome.infeasible is True

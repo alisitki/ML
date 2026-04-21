@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -12,6 +13,8 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+
+_PROGRESS_MARKER_RE = re.compile(r"\[PROGRESS\]\s+marker=(?P<marker>[A-Za-z0-9_.-]+)(?P<rest>.*)")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -112,7 +115,20 @@ def main() -> int:
             for line in process.stdout:
                 with activity_lock:
                     last_output["value"] = time.monotonic()
-                _emit(log_handle, line.rstrip("\n"))
+                stripped = line.rstrip("\n")
+                _emit(log_handle, stripped)
+                progress_match = _PROGRESS_MARKER_RE.search(stripped)
+                if progress_match is not None:
+                    marker = progress_match.group("marker")
+                    rest = progress_match.group("rest").strip()
+                    suffix = f" {rest}" if rest else ""
+                    _emit(
+                        log_handle,
+                        (
+                            f"[PROGRESS] ts={_timestamp()} run_id={args.run_id} phase={phase} "
+                            f"elapsed_s={_elapsed_seconds(start_monotonic)} marker={marker}{suffix}"
+                        ),
+                    )
             return_code = process.wait()
         except FileNotFoundError as exc:
             return_code = 127

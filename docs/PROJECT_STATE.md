@@ -51,6 +51,7 @@ Why:
 - current HEAD now also carries a retained same-root `QL-031` proof run at `outputs/ql031-same-root-proof-20260419`; that run produced four scored same-surface finalists, one linked paper/sim record, and a rejected promotion decision on `economics.post_cost_positive`
 - current HEAD can now persist registry-backed comparison reports and reusable offline evidence-pack summaries, but those surfaces do not by themselves prove broader offline closure
 - offline closure is still incomplete because the retained same-root `2026-01-25` surface still has no promotable champion and therefore no valid same-root comparison-report chain, even though the retained proof set is now broader than the earlier single-surface baseline
+- `Phase 1A` may now proceed only under the narrow partial-closure exception documented in `docs/QL031_PHASE1A_PARTIAL_CLOSURE_EXCEPTION.md`
 
 ---
 
@@ -88,6 +89,7 @@ These missing layers are planned later-phase work, not current defects by defaul
 - keep repo-tracked continuity closeout decisions explicit and keep retained bundles classified as non-authoritative control surfaces only
 - treat historical local authority discovery as closed in this workspace; future continuity closure should prefer fresh external controlled reruns or already-present concrete external roots
 - run `QL-031` broader offline evidence expansion as the single active next batch in this workspace
+- allow only `Parallel V2 Phase 1A` under the partial-closure exception; do not treat the slim retained blocker bundle as a runnable Phase 1A payload source
 - define explicit offline-closure criteria and continuity-audit procedure
 - leave evidence-dependent items visible instead of writing optimistic closure language
 
@@ -97,6 +99,7 @@ These missing layers are planned later-phase work, not current defects by defaul
 
 - broader multi-window evidence remains partial; the retained proof set now includes the same-root `2026-01-25` run plus the distinct `2026-01-26` retained surface, but it is still not enough to move offline closure to `PASS`
 - the retained same-root `2026-01-25` run still has no current champion because the promotion gate rejected the selected finalist on `economics.post_cost_positive`; as a result, same-root comparison-report linkage is still blocked by `no_current_champion`
+- `Phase 1A` evidence must come from a `fresh full same-root run` or a `payload-complete same-root run`; the slim retained blocker bundle is not a runnable Phase 1A training/evaluation payload
 - commercialization-grade evidence packaging still depends on broader offline proof than the single authoritative continuity rerun
 
 Until those are explicit, Phase 2 is still planned next work but not the main execution focus.
@@ -129,6 +132,7 @@ The following remain visible but are not the current main focus:
 - The repo-tracked continuity closeout records are now decision records for retired windows. They still do not, by themselves, prove live readiness.
 - The repo-tracked minimum offline-closure evidence pack now includes one distinct external retained surface on `2026-01-26`; it remains evidence of progress rather than evidence that multi-window closure or champion/challenger proof is complete.
 - The retained same-root `QL-031` bundle at `outputs/ql031-same-root-proof-20260419` remains `external_retained_evidence`; it sharpens the blocker from generic missing linkage to an exact failure mode: every evaluated finalist on the retained `2026-01-25` surface remained post-cost negative, so promotion was rejected and no current champion was created.
+- `Parallel V2 Phase 1A` is now implemented on current HEAD behind explicit V2/runtime-action-space gates. That does not upgrade offline closure to `PASS`, does not make the retained blocker bundle runnable, and does not authorize `Phase 1B` or `Phase 2`.
 - Comparison-report and offline evidence-pack tooling exist on current HEAD; neither one, by itself, upgrades offline closure to `PASS`.
 - Runtime and executor contracts exist as governance and artifact surfaces. They are not the same thing as a live selector daemon plus executor loop.
 - Commercialization gates are defined, but no gate above the offline side is currently operationally evidenced in this repository.

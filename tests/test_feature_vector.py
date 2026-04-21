@@ -5,7 +5,12 @@ import pytest
 from quantlab_ml.common import load_yaml
 from quantlab_ml.contracts import ActionSpaceSpec, TrajectorySpec
 from quantlab_ml.data import LocalFixtureSource
-from quantlab_ml.models.features import observation_feature_vector
+from quantlab_ml.models.features import (
+    PHASE1A_POLICY_STATE_FEATURE_DIM,
+    observation_feature_vector,
+    phase1a_feature_vector,
+    policy_state_feature_array,
+)
 from quantlab_ml.models.linear_policy import LinearPolicyParameters
 from quantlab_ml.runtime_contract import build_strict_runtime_contract
 from quantlab_ml.trajectories import TrajectoryBuilder
@@ -68,3 +73,18 @@ def test_production_profile_matches_canonical_scale_preset_and_runtime_contract(
     assert [scale.num_buckets for scale in trajectory_spec.scale_preset] == [8, 8, 8, 12]
     assert [scale.label for scale in strict_contract.required_scale_specs] == ["1m", "5m", "15m", "60m"]
     assert len(observation_feature_vector(observation)) == strict_contract.expected_feature_dim
+
+
+def test_phase1a_feature_vector_appends_policy_state_dimensions(phase1a_trajectory_bundle) -> None:
+    step = phase1a_trajectory_bundle.splits["train"][0].steps[1]
+    observation_features = observation_feature_vector(step.observation)
+    policy_features = policy_state_feature_array(step.policy_state, venue_choices=["binance", "bybit", "okx"])
+    full_features = phase1a_feature_vector(
+        step.observation,
+        step.policy_state,
+        venue_choices=["binance", "bybit", "okx"],
+    )
+
+    assert len(policy_features) == PHASE1A_POLICY_STATE_FEATURE_DIM
+    assert len(full_features) == len(observation_features) + PHASE1A_POLICY_STATE_FEATURE_DIM
+    assert full_features[-PHASE1A_POLICY_STATE_FEATURE_DIM :] == pytest.approx(policy_features.tolist())

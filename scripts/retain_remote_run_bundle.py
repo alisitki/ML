@@ -66,6 +66,11 @@ def _parse_args() -> argparse.Namespace:
         help="Optional ql031_status.json path to embed QL-031 integration summary.",
     )
     parser.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="Allow incomplete bundles that do not yet contain final policy/evaluation/export outputs.",
+    )
+    parser.add_argument(
         "--config-copy",
         action="append",
         default=[],
@@ -91,6 +96,7 @@ def main() -> int:
         instance_metadata_path=args.instance_metadata,
         ql031_status_path=args.ql031_status_path,
         config_copies=config_copies,
+        allow_incomplete=args.allow_incomplete,
     )
     sha256sums_path = write_bundle_sha256sums(args.bundle_root)
     if report is not None:

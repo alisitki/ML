@@ -8,6 +8,7 @@ from quantlab_ml.contracts import (
     ExecutionIntent,
     LEGACY_POLICY_ARTIFACT_SCHEMA_VERSION,
     POLICY_ARTIFACT_SCHEMA_VERSION,
+    PolicyState,
 )
 from quantlab_ml.policies import PolicyRuntimeBridge
 
@@ -236,6 +237,73 @@ def test_runtime_bridge_rejects_unknown_decision_venue(policy_artifact, trajecto
     bad_bridge = _BadVenueBridge()
     with pytest.raises(ValueError, match="not allowed by the artifact"):
         bad_bridge.build_execution_intent(policy_artifact, observation)
+
+
+def test_runtime_bridge_accepts_v1_policy_state_none(policy_artifact, trajectory_bundle) -> None:
+    bridge = PolicyRuntimeBridge()
+    observation = _validation_observation(trajectory_bundle)
+
+    decision = bridge.decide(policy_artifact, observation, policy_state=None)
+
+    assert decision.action_key in policy_artifact.allowed_action_family
+
+
+def test_runtime_bridge_rejects_phase1a_missing_policy_state(
+    phase1a_policy_artifact,
+    phase1a_trajectory_bundle,
+) -> None:
+    bridge = PolicyRuntimeBridge()
+    step = phase1a_trajectory_bundle.splits["validation"][0].steps[0]
+
+    with pytest.raises(ValueError, match="requires explicit policy_state"):
+        bridge.decide(
+            phase1a_policy_artifact,
+            step.observation,
+            action_feasibility=step.action_feasibility,
+        )
+
+
+def test_runtime_bridge_rejects_phase1a_feature_dimension_mismatch(
+    phase1a_policy_artifact,
+    phase1a_trajectory_bundle,
+) -> None:
+    bridge = PolicyRuntimeBridge()
+    step = phase1a_trajectory_bundle.splits["validation"][0].steps[0].model_copy(deep=True)
+    strict_contract = phase1a_policy_artifact.runtime_metadata.strict_runtime_contract
+    assert strict_contract is not None
+    broken = phase1a_policy_artifact.model_copy(
+        update={
+            "runtime_metadata": phase1a_policy_artifact.runtime_metadata.model_copy(
+                update={
+                    "strict_runtime_contract": strict_contract.model_copy(
+                        update={"expected_feature_dim": strict_contract.expected_feature_dim + 1},
+                        deep=True,
+                    )
+                },
+                deep=True,
+            )
+        },
+        deep=True,
+    )
+
+    with pytest.raises(ValueError, match="payload feature dimension does not match runtime contract"):
+        bridge.decide(
+            broken,
+            step.observation,
+            action_feasibility=step.action_feasibility,
+            policy_state=PolicyState(),
+        )
+
+
+def test_phase1a_execution_intent_is_fail_closed(
+    phase1a_policy_artifact,
+    phase1a_trajectory_bundle,
+) -> None:
+    bridge = PolicyRuntimeBridge()
+    step = phase1a_trajectory_bundle.splits["validation"][0].steps[0]
+
+    with pytest.raises(ValueError, match="evaluation-only"):
+        bridge.build_execution_intent(phase1a_policy_artifact, step.observation)
 
 
 def _legacy_linear_artifact(policy_artifact):

@@ -1,0 +1,26 @@
+{
+  "decision": {
+    "action_key": "enter_short",
+    "confidence": 1.0,
+    "leverage_band_key": "low",
+    "size_band_key": "micro",
+    "venue": "binance"
+  },
+  "evaluation_summary": {
+    "action_counts": {
+      "abstain": 0,
+      "enter_long": 0,
+      "enter_short": 2
+    },
+    "average_net_return": -0.01931439115528333,
+    "fee_total": -0.0005,
+    "funding_total": -0.00014000000000000001,
+    "infeasible_action_count": 0,
+    "realized_trade_count": 2,
+    "risk_penalty_total": -0.007357756462113332,
+    "slippage_total": -0.0002,
+    "total_net_return": -0.03862878231056666,
+    "total_steps": 2,
+    "turnover_penalty_total": -0.001
+  }
+}

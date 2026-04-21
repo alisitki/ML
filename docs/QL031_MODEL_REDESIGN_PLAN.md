@@ -57,7 +57,7 @@ The approved redesign posture is therefore:
 
 ### Primary recommendation
 
-Build a parallel `structured-policy-v2` path in two controlled stages:
+Build a parallel `V2` path in two controlled stages:
 
 1. `Phase 1A`: semantics/objective redesign on the current observation surface.
 2. `Phase 1B`: structured encoder redesign on top of the exact same `Phase 1A` semantics/objective.
@@ -214,6 +214,16 @@ Required outputs:
 
 `Phase 1A` keeps the current flattened observation surface.
 
+Current execution boundary:
+
+- Phase 1A is carried by `linear-policy-v2` on the flat surface
+- config-level base actions stay generic: `abstain`, `hold`, `exit`, `enter_long`, `enter_short`
+- internal training/runtime vocabulary is the 9-logit venue-expanded joint action vocabulary
+- `PolicyRuntimeBridge.decide()` stays backward-compatible for `linear-policy-v1` via `policy_state=None`
+- shared reward / evaluation / runtime semantics are gated by `action_space_version`
+- Phase 1A evidence must come from a `fresh full same-root run` or a `payload-complete same-root run`
+- the slim blocker bundle at `outputs/ql031-same-root-proof-20260419` is not a runnable Phase 1A payload source
+
 It changes only:
 
 - the action contract,
@@ -227,7 +237,7 @@ Approved bootstrap oracle for `Phase 1A`:
 - exact horizon: `H_bootstrap = 4`
 - objective: undiscounted 4-step cumulative post-cost net reward
 - split boundary: only train/validation
-- leakage guard: if the full `t..t+4` window is not available inside the same split and same trajectory chunk, the bootstrap supervised label is masked out
+- leakage guard: if the full 4-row local horizon `t..t+3` is not available inside the same split and same trajectory chunk, the bootstrap supervised label is masked out
 - unavailable venues and infeasible actions are masked before the oracle solves the local decision problem
 
 Approved `Phase 1A` bootstrap loss:

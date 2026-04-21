@@ -102,7 +102,7 @@ together with another single full successful day rather than widening scope.
 
 For `QL-031` same-root proof runs:
 - keep `configs/data/controlled-remote-day.yaml` as the default `2026-01-25` proof surface
-- switch the training config to `configs/training/production-ql031-search.yaml`
+- switch the training config to `configs/training/production-phase1a-flat-v2-search.yaml` for the current `Parallel V2 Phase 1A` run
 - keep the run inside one external registry root until champion promotion, challenger comparison, and paper/sim linkage are all recorded
 - keep every retained summary explicit that the resulting local bundle is still `external_retained_evidence`
 
@@ -318,17 +318,267 @@ Operational requirement:
 
 ## QL-031 same-root proof chain overlay
 
-Use this overlay only for the `QL-031` closure batch.
+Use this overlay only for the current `QL-031` `Parallel V2 Phase 1A` same-root run.
 
 Command deltas:
-- replace `configs/training/production.yaml` with `configs/training/production-ql031-search.yaml`
-- keep `RUN_ROOT` external, for example `/workspace/runs/ql031-same-root-proof-<date>`
+- replace `configs/training/production.yaml` with `configs/training/production-phase1a-flat-v2-search.yaml`
+- keep `RUN_ROOT` external, for example `/workspace/runs/ql031-phase1a-same-root-<date>`
 - keep one registry root for the selected champion and the compared challenger
-- evaluate and score the selected artifact plus at least one non-selected candidate from the same `policy_search.json`
+- pass `--split final_untouched_test` explicitly to both selected and challenger `evaluate` commands
+- choose the challenger as the highest-ranked non-selected candidate from `policy_search.json`
+- split execution into `Stage A` and `Stage B`
 
-Required same-root chain after the initial `train`:
+`H=4` wording rule for this overlay:
+- `H=4` means a 4-row local oracle horizon, `t..t+3`
+- labels must be masked out unless all four rows stay inside the same split and the same trajectory chunk
+
+### Operator survivability shell baseline
+
+Use the following shell helpers for every `QL-031` `Parallel V2 Phase 1A` remote run. These helpers are not optional policy text; they are the canonical operator path for incomplete-run retention, periodic sync, and hard abort handling.
 
 ```bash
+set -euo pipefail
+
+SSH_CMD=(ssh -i ~/.ssh/quantlab_hetzner -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -p "$SSH_PORT" "root@$SSH_HOST")
+RSYNC_RSH="ssh -i ~/.ssh/quantlab_hetzner -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -p $SSH_PORT"
+
+require_file() {
+  local path="$1"
+  [[ -f "$path" ]] || { echo "missing required file: $path" >&2; return 1; }
+}
+
+require_exit_zero() {
+  local exit_file="$1"
+  require_file "$exit_file"
+  [[ "$(tr -d '[:space:]' < "$exit_file")" == "0" ]]
+}
+
+require_profile_summary() {
+  local profile_path="$1"
+  local key="$2"
+  local expected="$3"
+  python3 - <<'PY' "$profile_path" "$key" "$expected"
+import json, sys
+path, key, expected = sys.argv[1:4]
+with open(path, encoding="utf-8") as handle:
+    payload = json.load(handle)
+value = payload["summary"].get(key)
+normalized = str(value).lower() if isinstance(value, bool) else str(value)
+if normalized != expected.lower():
+    raise SystemExit(f"profile summary mismatch: {key}={value!r} expected {expected!r}")
+PY
+}
+
+require_profile_number_max() {
+  local profile_path="$1"
+  local key="$2"
+  local threshold="$3"
+  python3 - <<'PY' "$profile_path" "$key" "$threshold"
+import json, sys
+path, key, threshold = sys.argv[1:4]
+with open(path, encoding="utf-8") as handle:
+    payload = json.load(handle)
+value = payload["summary"].get(key)
+if value is None:
+    raise SystemExit(f"profile summary missing numeric field: {key}")
+if float(value) > float(threshold):
+    raise SystemExit(f"profile summary threshold exceeded: {key}={value} max={threshold}")
+PY
+}
+
+sync_partial_bundle() {
+  mkdir -p "$LOCAL_BUNDLE_ROOT"
+  rsync -az -e "$RSYNC_RSH" \
+    --include='*/' \
+    --include='*.log' \
+    --include='*.exit' \
+    --include='phase1a_profile.json' \
+    --include='policy.json' \
+    --include='policy_search.json' \
+    --include='policy_search.partial.json' \
+    --include='policy_candidates_partial/***' \
+    --include='checkpoints/***' \
+    --include='evaluation.json' \
+    --include='score.json' \
+    --include='trajectories/manifest.json' \
+    --include='trajectories/phase1a_supervision_v1/manifest.json' \
+    --include='registry/***' \
+    --exclude='*' \
+    "root@$SSH_HOST:$RUN_ROOT/" "$LOCAL_BUNDLE_ROOT/"
+}
+
+retain_incomplete_bundle() {
+  python /Users/stk/Desktop/ML/scripts/retain_remote_run_bundle.py \
+    --allow-incomplete \
+    --bundle-root "$LOCAL_BUNDLE_ROOT" \
+    --source-run-root "$RUN_ROOT" \
+    --source-registry-root "$RUN_ROOT/registry" \
+    --instance-metadata "$LOCAL_INSTANCE_METADATA" \
+    --config-copy /Users/stk/Desktop/ML/configs/data/controlled-remote-day.yaml:configs/data/controlled-remote-day.yaml \
+    --config-copy /Users/stk/Desktop/ML/configs/training/production-phase1a-flat-v2-search.yaml:configs/training/production-phase1a-flat-v2-search.yaml \
+    --config-copy /Users/stk/Desktop/ML/configs/reward/default.yaml:configs/reward/default.yaml \
+    --config-copy /Users/stk/Desktop/ML/configs/evaluation/default.yaml:configs/evaluation/default.yaml
+}
+
+checkpoint_sync() {
+  sync_partial_bundle
+  retain_incomplete_bundle
+  date +%s > "$LOCAL_BUNDLE_ROOT/.last_sync_epoch"
+}
+
+abort_and_retain() {
+  local reason="$1"
+  echo "ABORT: $reason" >&2
+  checkpoint_sync || true
+  exit 1
+}
+
+periodic_sync_loop() {
+  while sleep 900; do
+    local last=0
+    [[ -f "$LOCAL_BUNDLE_ROOT/.last_sync_epoch" ]] && last="$(cat "$LOCAL_BUNDLE_ROOT/.last_sync_epoch")"
+    local now
+    now="$(date +%s)"
+    if (( now - last >= 900 )); then
+      checkpoint_sync || true
+    fi
+  done
+}
+
+watch_progress_and_sync() {
+  "${SSH_CMD[@]}" "tail -n 0 -F '$RUN_ROOT/materialize.log' '$RUN_ROOT/train.log'" | \
+  while IFS= read -r line; do
+    case "$line" in
+      *"[PROGRESS]"*"marker=materialization_completed"*|*"[PROGRESS]"*"marker=fold_completed"*|*"[PROGRESS]"*"marker=candidate_completed"*)
+        checkpoint_sync || true
+        ;;
+    esac
+  done
+}
+```
+
+Sync/retain trigger points:
+- immediately after `build` completes and `build.exit == 0`
+- immediately after `materialize` completes and `materialize.exit == 0`
+- immediately after any `[PROGRESS] marker=fold_completed`
+- immediately after any `[PROGRESS] marker=candidate_completed`
+- every `15 minutes` if no fold/candidate completion marker has arrived
+- immediately after `evaluate` completion
+- immediately after `score` completion
+- immediately before every hard abort through `abort_and_retain`
+
+Partial-retain integrity rule for the helper above:
+- do not copy `trajectories/tensor_cache_v1/tensor_cache_manifest.json` unless the corresponding shard payloads are copied too
+- the default `sync_partial_bundle` helper intentionally keeps incomplete local bundles `slim`
+- if tensor-cache summary metadata is needed in a `slim` retained copy, write a non-dangling summary artifact instead of copying the canonical manifest alone
+
+### Smallest paid remote scope first
+
+Do not jump directly to full `Stage A`. Once local profiling gates are green, run only the smallest paid remote scope:
+- full same-root surface
+- `1 candidate x 1 epoch`
+- selected `evaluate`
+- selected `score`
+
+```bash
+set -euo pipefail
+
+export RUN_ID="$(basename "$RUN_ROOT")"
+mkdir -p "$RUN_ROOT/registry"
+
+periodic_sync_loop &
+PERIODIC_SYNC_PID=$!
+watch_progress_and_sync &
+PROGRESS_SYNC_PID=$!
+trap 'kill "$PERIODIC_SYNC_PID" "$PROGRESS_SYNC_PID" 2>/dev/null || true' EXIT
+
+quantlab-ml inspect-s3-compact \
+  --env-file .env \
+  --data-config configs/data/controlled-remote-day.yaml \
+  > "$RUN_ROOT/inspect_s3.json"
+
+python - <<'PY' "$RUN_ROOT/inspect_s3.json"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+matched = int(payload.get("matched_partition_count", 0))
+if matched <= 0:
+    raise SystemExit("inspect-s3-compact found zero matched partitions")
+if payload.get("readability_failures"):
+    raise SystemExit("inspect-s3-compact reported readability failures")
+PY
+
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase BUILD_STARTED \
+  --log "$RUN_ROOT/build.log" \
+  --exit-file "$RUN_ROOT/build.exit" \
+  -- \
+  quantlab-ml build-trajectories \
+    --source s3-compact \
+    --s3-env-file .env \
+    --data-config configs/data/controlled-remote-day.yaml \
+    --training-config configs/training/production-phase1a-flat-v2-search.yaml \
+    --reward-config configs/reward/default.yaml \
+    --output "$RUN_ROOT/trajectories"
+
+checkpoint_sync
+require_exit_zero "$LOCAL_BUNDLE_ROOT/build.exit" || abort_and_retain "build failed"
+require_file "$LOCAL_BUNDLE_ROOT/trajectories/manifest.json" || abort_and_retain "missing trajectories manifest"
+require_file "$LOCAL_BUNDLE_ROOT/trajectories/tensor_cache_v1/tensor_cache_manifest.json" || abort_and_retain "missing tensor cache manifest"
+
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase MATERIALIZE_STARTED \
+  --log "$RUN_ROOT/materialize.log" \
+  --exit-file "$RUN_ROOT/materialize.exit" \
+  -- \
+  quantlab-ml materialize-phase1a-supervision \
+    --trajectories "$RUN_ROOT/trajectories" \
+    --training-config configs/training/production-phase1a-flat-v2-search.yaml \
+    --output "$RUN_ROOT/trajectories/phase1a_supervision_v1" \
+    --profile-output "$RUN_ROOT/phase1a_profile.json"
+
+checkpoint_sync
+require_exit_zero "$LOCAL_BUNDLE_ROOT/materialize.exit" || abort_and_retain "materialization failed"
+require_file "$LOCAL_BUNDLE_ROOT/trajectories/phase1a_supervision_v1/manifest.json" || abort_and_retain "missing supervision manifest"
+require_file "$LOCAL_BUNDLE_ROOT/phase1a_profile.json" || abort_and_retain "missing phase1a_profile.json after materialize"
+require_profile_summary "$LOCAL_BUNDLE_ROOT/phase1a_profile.json" "tensor_cache_used" "true" || abort_and_retain "tensor_cache_used=false after materialize"
+require_profile_summary "$LOCAL_BUNDLE_ROOT/phase1a_profile.json" "phase1a_supervision_used" "true" || abort_and_retain "phase1a_supervision_used=false after materialize"
+require_profile_number_max "$LOCAL_BUNDLE_ROOT/phase1a_profile.json" "materialization_wall_sec" "1500" || abort_and_retain "materialization exceeded 25-minute threshold"
+
+python3 - <<'PY' > "$RUN_ROOT/profile-1cand-1epoch.yaml"
+import yaml
+cfg = yaml.safe_load(open('configs/training/production-phase1a-flat-v2-search.yaml'))
+cfg['trainer']['epochs'] = 1
+cfg['trainer']['candidate_search'] = {'seeds': [7], 'learning_rates': [0.05], 'l2_weights': [0.00005]}
+print(yaml.safe_dump(cfg, sort_keys=False))
+PY
+
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase TRAIN_STARTED \
+  --log "$RUN_ROOT/train.log" \
+  --exit-file "$RUN_ROOT/train.exit" \
+  -- \
+  quantlab-ml train \
+    --trajectories "$RUN_ROOT/trajectories" \
+    --training-config "$RUN_ROOT/profile-1cand-1epoch.yaml" \
+    --profile-output "$RUN_ROOT/phase1a_profile.json" \
+    --registry-root "$RUN_ROOT/registry" \
+    --output "$RUN_ROOT/policy.json"
+
+checkpoint_sync
+require_exit_zero "$LOCAL_BUNDLE_ROOT/train.exit" || abort_and_retain "train failed"
+require_file "$LOCAL_BUNDLE_ROOT/policy.json" || abort_and_retain "missing policy.json after train"
+require_profile_summary "$LOCAL_BUNDLE_ROOT/phase1a_profile.json" "tensor_cache_used" "true" || abort_and_retain "tensor_cache_used=false after train"
+require_profile_summary "$LOCAL_BUNDLE_ROOT/phase1a_profile.json" "phase1a_supervision_used" "true" || abort_and_retain "phase1a_supervision_used=false after train"
+require_profile_summary "$LOCAL_BUNDLE_ROOT/phase1a_profile.json" "jsonl_fallback_used" "false" || abort_and_retain "jsonl_fallback_used=true after train"
+require_profile_number_max "$LOCAL_BUNDLE_ROOT/phase1a_profile.json" "candidate_wall_sec" "480" || abort_and_retain "1 candidate x 1 epoch exceeded 8-minute threshold"
+
 python scripts/remote_run_stage.py \
   --run-id "$RUN_ID" \
   --phase EVAL_STARTED \
@@ -339,7 +589,14 @@ python scripts/remote_run_stage.py \
     --trajectories "$RUN_ROOT/trajectories" \
     --policy "$RUN_ROOT/policy.json" \
     --evaluation-config configs/evaluation/default.yaml \
+    --split final_untouched_test \
+    --profile-output "$RUN_ROOT/phase1a_profile.json" \
     --output "$RUN_ROOT/evaluation.json"
+
+checkpoint_sync
+require_exit_zero "$LOCAL_BUNDLE_ROOT/evaluate.exit" || abort_and_retain "evaluate failed"
+require_file "$LOCAL_BUNDLE_ROOT/evaluation.json" || abort_and_retain "missing evaluation.json"
+require_profile_summary "$LOCAL_BUNDLE_ROOT/phase1a_profile.json" "compiled_v2_eval_used" "true" || abort_and_retain "compiled_v2_eval_used=false"
 
 python scripts/remote_run_stage.py \
   --run-id "$RUN_ID" \
@@ -353,6 +610,255 @@ python scripts/remote_run_stage.py \
     --registry-root "$RUN_ROOT/registry" \
     --output "$RUN_ROOT/score.json"
 
+checkpoint_sync
+require_exit_zero "$LOCAL_BUNDLE_ROOT/score.exit" || abort_and_retain "score failed"
+require_file "$LOCAL_BUNDLE_ROOT/score.json" || abort_and_retain "missing score.json"
+```
+
+Early-abort thresholds for this smallest remote scope:
+- `materialization_wall_sec > 1500`
+- `candidate_wall_sec > 480`
+- any non-zero `*.exit`
+- any missing manifest or required artifact
+- `tensor_cache_used=false`
+- `phase1a_supervision_used=false`
+- `compiled_v2_eval_used=false`
+- `jsonl_fallback_used=true`
+
+The full `Stage A` same-root chain remains blocked until this smallest remote scope is green and reviewed.
+
+### Stage A
+
+Run only:
+- `inspect-s3-compact`
+- `build-trajectories`
+- `train`
+- selected `evaluate`
+- selected `score`
+
+```bash
+set -euo pipefail
+
+require_file() {
+  local path="$1"
+  [[ -f "$path" ]] || { echo "missing required file: $path" >&2; exit 1; }
+}
+
+require_exit_zero() {
+  local exit_file="$1"
+  require_file "$exit_file"
+  [[ "$(tr -d '[:space:]' < "$exit_file")" == "0" ]] || {
+    echo "stage failed: $exit_file" >&2
+    exit 1
+  }
+}
+
+export RUN_ID="$(basename "$RUN_ROOT")"
+mkdir -p "$RUN_ROOT/registry"
+
+quantlab-ml inspect-s3-compact \
+  --env-file .env \
+  --data-config configs/data/controlled-remote-day.yaml \
+  > "$RUN_ROOT/inspect_s3.json"
+
+python - <<'PY' "$RUN_ROOT/inspect_s3.json"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+matched = int(payload.get("matched_partition_count", 0))
+if matched <= 0:
+    raise SystemExit("inspect-s3-compact found zero matched partitions")
+if payload.get("readability_failures"):
+    raise SystemExit("inspect-s3-compact reported readability failures")
+PY
+
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase BUILD_STARTED \
+  --log "$RUN_ROOT/build.log" \
+  --exit-file "$RUN_ROOT/build.exit" \
+  -- \
+  quantlab-ml build-trajectories \
+    --source s3-compact \
+    --s3-env-file .env \
+    --data-config configs/data/controlled-remote-day.yaml \
+    --training-config configs/training/production-phase1a-flat-v2-search.yaml \
+    --reward-config configs/reward/default.yaml \
+    --output "$RUN_ROOT/trajectories"
+require_exit_zero "$RUN_ROOT/build.exit"
+
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase TRAIN_STARTED \
+  --log "$RUN_ROOT/train.log" \
+  --exit-file "$RUN_ROOT/train.exit" \
+  -- \
+  quantlab-ml train \
+    --trajectories "$RUN_ROOT/trajectories" \
+    --training-config configs/training/production-phase1a-flat-v2-search.yaml \
+    --registry-root "$RUN_ROOT/registry" \
+    --output "$RUN_ROOT/policy.json"
+require_exit_zero "$RUN_ROOT/train.exit"
+
+require_file "$RUN_ROOT/policy.json"
+require_file "$RUN_ROOT/policy_search.json"
+
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase EVAL_STARTED \
+  --log "$RUN_ROOT/evaluate.log" \
+  --exit-file "$RUN_ROOT/evaluate.exit" \
+  -- \
+  quantlab-ml evaluate \
+    --trajectories "$RUN_ROOT/trajectories" \
+    --policy "$RUN_ROOT/policy.json" \
+    --evaluation-config configs/evaluation/default.yaml \
+    --split final_untouched_test \
+    --output "$RUN_ROOT/evaluation.json"
+require_exit_zero "$RUN_ROOT/evaluate.exit"
+
+python scripts/remote_run_stage.py \
+  --run-id "$RUN_ID" \
+  --phase SCORE_STARTED \
+  --log "$RUN_ROOT/score.log" \
+  --exit-file "$RUN_ROOT/score.exit" \
+  -- \
+  quantlab-ml score \
+    --policy "$RUN_ROOT/policy.json" \
+    --evaluation "$RUN_ROOT/evaluation.json" \
+    --registry-root "$RUN_ROOT/registry" \
+    --output "$RUN_ROOT/score.json"
+require_exit_zero "$RUN_ROOT/score.exit"
+
+python - <<'PY' \
+  "$RUN_ROOT/policy.json" \
+  "$RUN_ROOT/policy_search.json" \
+  "$RUN_ROOT/evaluation.json" \
+  "$RUN_ROOT/stage-a-summary.json" \
+  "$RUN_ROOT/stage-b.allowed"
+import json
+import sys
+from pathlib import Path
+
+policy_path, search_path, evaluation_path, summary_path, allow_flag_path = sys.argv[1:6]
+
+with open(policy_path, encoding="utf-8") as handle:
+    policy = json.load(handle)
+with open(search_path, encoding="utf-8") as handle:
+    search = json.load(handle)
+with open(evaluation_path, encoding="utf-8") as handle:
+    evaluation = json.load(handle)
+
+training_summary = policy.get("training_summary", {})
+diagnostics = evaluation.get("diagnostics") or {}
+
+artifact_checks = {
+    "selected_policy_matches_manifest": search.get("selected_policy_id") == policy.get("policy_id"),
+    "candidate_manifest_has_runner_up": len(search.get("candidates", [])) >= 2,
+    "selection_metric_total_net_return": training_summary.get("selection_metric") == "total_net_return",
+    "final_untouched_test_unused_for_selection": training_summary.get("final_untouched_test_used") is False,
+    "bootstrap_horizon_steps_h4": training_summary.get("bootstrap_horizon_steps") == 4,
+    "oracle_masked_rows_positive": training_summary.get("oracle_masked_row_count", 0) > 0,
+    "oracle_label_coverage_partial": 0.0 < training_summary.get("oracle_label_coverage_ratio", 0.0) < 1.0,
+}
+
+continuation_checks = {
+    "total_net_return_gate": evaluation.get("total_net_return", float("-inf")) >= -0.60,
+    "gross_directional_pnl_gate": diagnostics.get("gross_directional_pnl", float("-inf")) > 0.15,
+    "trade_rate_gate": diagnostics.get("trade_rate", float("inf")) <= 0.65,
+    "fee_slippage_burden_gate": diagnostics.get("fee_slippage_burden", float("inf")) <= 0.75,
+    "mean_dwell_steps_gate": diagnostics.get("mean_dwell_steps", float("-inf")) >= 2.0,
+    "flip_rate_gate": diagnostics.get("flip_rate", float("inf")) <= 0.20,
+    "venue_switch_rate_gate": diagnostics.get("venue_switch_rate", float("inf")) <= 0.08,
+}
+
+summary = {
+    "total_net_return": evaluation.get("total_net_return"),
+    "gross_directional_pnl": diagnostics.get("gross_directional_pnl"),
+    "trade_rate": diagnostics.get("trade_rate"),
+    "fee_slippage_burden": diagnostics.get("fee_slippage_burden"),
+    "mean_dwell_steps": diagnostics.get("mean_dwell_steps"),
+    "flip_rate": diagnostics.get("flip_rate"),
+    "venue_switch_rate": diagnostics.get("venue_switch_rate"),
+    "oracle_masked_row_count": training_summary.get("oracle_masked_row_count"),
+    "oracle_label_coverage_ratio": training_summary.get("oracle_label_coverage_ratio"),
+    "artifact_checks": artifact_checks,
+    "continuation_checks": continuation_checks,
+}
+
+continue_to_stage_b = all(artifact_checks.values()) and all(continuation_checks.values())
+summary["continue_to_stage_b"] = continue_to_stage_b
+
+Path(summary_path).write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+print(json.dumps(summary, indent=2))
+
+allow_flag = Path(allow_flag_path)
+if continue_to_stage_b:
+    allow_flag.write_text("stage_b_allowed\n", encoding="utf-8")
+else:
+    allow_flag.unlink(missing_ok=True)
+PY
+
+echo "Stage A complete. Review $RUN_ROOT/stage-a-summary.json"
+test -f "$RUN_ROOT/stage-b.allowed" && echo "Stage B is allowed." || echo "Stage B remains blocked."
+```
+
+### Stage B
+
+Run only if `Stage A` produced `$RUN_ROOT/stage-b.allowed`.
+
+```bash
+set -euo pipefail
+
+require_file() {
+  local path="$1"
+  [[ -f "$path" ]] || { echo "missing required file: $path" >&2; exit 1; }
+}
+
+require_exit_zero() {
+  local exit_file="$1"
+  require_file "$exit_file"
+  [[ "$(tr -d '[:space:]' < "$exit_file")" == "0" ]] || {
+    echo "stage failed: $exit_file" >&2
+    exit 1
+  }
+}
+
+require_file "$RUN_ROOT/stage-b.allowed"
+require_file "$RUN_ROOT/policy_search.json"
+require_file "$RUN_ROOT/policy.json"
+require_file "$RUN_ROOT/score.json"
+
+eval "$(python - <<'PY' "$RUN_ROOT/policy_search.json"
+import json
+import shlex
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+selected_policy_id = payload["selected_policy_id"]
+challengers = [candidate for candidate in payload["candidates"] if not candidate["selected_candidate"]]
+if not challengers:
+    raise SystemExit("policy_search.json does not contain a non-selected challenger")
+challenger = min(
+    challengers,
+    key=lambda candidate: (candidate["candidate_rank"], candidate["candidate_index"]),
+)
+
+exports = {
+    "SELECTED_POLICY_ID": selected_policy_id,
+    "CHALLENGER_POLICY_ID": challenger["policy_id"],
+    "CHALLENGER_POLICY_PATH": challenger["artifact_path"],
+}
+for key, value in exports.items():
+    print(f"export {key}={shlex.quote(str(value))}")
+PY
+)"
+
 python scripts/remote_run_stage.py \
   --run-id "$RUN_ID" \
   --phase EXPORT_STARTED \
@@ -363,6 +869,7 @@ python scripts/remote_run_stage.py \
     --policy "$RUN_ROOT/policy.json" \
     --score "$RUN_ROOT/score.json" \
     --output "$RUN_ROOT/inference_artifact.json"
+require_exit_zero "$RUN_ROOT/export.exit"
 
 python scripts/remote_run_stage.py \
   --run-id "$RUN_ID" \
@@ -372,8 +879,9 @@ python scripts/remote_run_stage.py \
   -- \
   quantlab-ml record-paper-sim \
     --registry-root "$RUN_ROOT/registry" \
-    --policy-id <selected-policy-id> \
+    --policy-id "$SELECTED_POLICY_ID" \
     --report "$RUN_ROOT/champion-paper-sim.md"
+require_exit_zero "$RUN_ROOT/champion-paper-sim.exit"
 
 python scripts/remote_run_stage.py \
   --run-id "$RUN_ID" \
@@ -383,9 +891,21 @@ python scripts/remote_run_stage.py \
   -- \
   quantlab-ml promote-policy \
     --registry-root "$RUN_ROOT/registry" \
-    --policy-id <selected-policy-id> \
+    --policy-id "$SELECTED_POLICY_ID" \
     --evidence "$RUN_ROOT/champion-promotion-evidence.yaml" \
     --output "$RUN_ROOT/champion-promotion-decision.json"
+require_exit_zero "$RUN_ROOT/champion-promotion.exit"
+
+python - <<'PY' "$RUN_ROOT/champion-promotion-decision.json"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+if payload.get("decision") != "promote":
+    raise SystemExit("selected policy was not promoted; challenger compare chain stays blocked")
+PY
 
 python scripts/remote_run_stage.py \
   --run-id "$RUN_ID" \
@@ -395,9 +915,11 @@ python scripts/remote_run_stage.py \
   -- \
   quantlab-ml evaluate \
     --trajectories "$RUN_ROOT/trajectories" \
-    --policy "$RUN_ROOT/policy_candidates/<challenger-policy-id>.json" \
+    --policy "$CHALLENGER_POLICY_PATH" \
     --evaluation-config configs/evaluation/default.yaml \
+    --split final_untouched_test \
     --output "$RUN_ROOT/challenger-evaluation.json"
+require_exit_zero "$RUN_ROOT/challenger-evaluate.exit"
 
 python scripts/remote_run_stage.py \
   --run-id "$RUN_ID" \
@@ -406,10 +928,11 @@ python scripts/remote_run_stage.py \
   --exit-file "$RUN_ROOT/challenger-score.exit" \
   -- \
   quantlab-ml score \
-    --policy "$RUN_ROOT/policy_candidates/<challenger-policy-id>.json" \
+    --policy "$CHALLENGER_POLICY_PATH" \
     --evaluation "$RUN_ROOT/challenger-evaluation.json" \
     --registry-root "$RUN_ROOT/registry" \
     --output "$RUN_ROOT/challenger-score.json"
+require_exit_zero "$RUN_ROOT/challenger-score.exit"
 
 python scripts/remote_run_stage.py \
   --run-id "$RUN_ID" \
@@ -419,8 +942,20 @@ python scripts/remote_run_stage.py \
   -- \
   quantlab-ml compare-policies \
     --registry-root "$RUN_ROOT/registry" \
-    --challenger-policy-id <challenger-policy-id> \
+    --challenger-policy-id "$CHALLENGER_POLICY_ID" \
     --output "$RUN_ROOT/challenger-comparison-report.json"
+require_exit_zero "$RUN_ROOT/challenger-compare.exit"
+
+export COMPARISON_REPORT_ID="$(python - <<'PY' "$RUN_ROOT/challenger-comparison-report.json"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+print(payload["comparison_report_id"])
+PY
+)"
 
 python scripts/remote_run_stage.py \
   --run-id "$RUN_ID" \
@@ -430,9 +965,10 @@ python scripts/remote_run_stage.py \
   -- \
   quantlab-ml record-paper-sim \
     --registry-root "$RUN_ROOT/registry" \
-    --policy-id <challenger-policy-id> \
+    --policy-id "$CHALLENGER_POLICY_ID" \
     --report "$RUN_ROOT/challenger-paper-sim.md" \
-    --comparison-report-id <comparison-report-id>
+    --comparison-report-id "$COMPARISON_REPORT_ID"
+require_exit_zero "$RUN_ROOT/challenger-paper-sim.exit"
 ```
 
 Evidence-file rule:
@@ -453,10 +989,12 @@ The first controlled run should leave behind:
 - `trajectories/tensor_cache_v1/tensor_cache_manifest.json`
 - split-scoped tensor cache shard files and replay sidecars under `trajectories/tensor_cache_v1/`
 - `policy.json`
-- `policy_search.json` when `production-ql031-search.yaml` is used
-- `policy_candidates/` when `production-ql031-search.yaml` is used
+- `policy_search.json` when `production-phase1a-flat-v2-search.yaml` is used
+- `policy_candidates/` when `production-phase1a-flat-v2-search.yaml` is used
 - `evaluation.json`
 - `score.json`
+- `stage-a-summary.json`
+- optional `stage-b.allowed`
 - `inference_artifact.json`
 - `build.log`
 - `train.log`
@@ -478,6 +1016,11 @@ For `QL-031` same-root proof runs, also retain:
 - retained manifest metadata that records the exact Vast.ai instance details used for the run
 
 After copying the retained bundle locally, build `bundle_manifest.json` and `SHA256SUMS` directly from the copied bundle:
+
+Historical note:
+- the example below is for the retained `2026-04-19` same-root blocker bundle only
+- it intentionally copies the exact historical training config used by that source run
+- do not reuse that config-copy line for a new `Parallel V2 Phase 1A` launch
 
 ```bash
 python scripts/retain_remote_run_bundle.py \

@@ -6,14 +6,21 @@ from typing import Any
 from pydantic import Field, model_validator
 
 from quantlab_ml.contracts.common import LineagePointer, NumericBand, QuantBaseModel
-from quantlab_ml.contracts.learning_surface import ActionSpaceSpec, ObservationSchema, ScaleSpec
+from quantlab_ml.contracts.learning_surface import (
+    ACTION_SPACE_VERSION_V1,
+    ActionSpaceSpec,
+    ObservationSchema,
+    ScaleSpec,
+)
 
 LEGACY_POLICY_ARTIFACT_SCHEMA_VERSION = "policy_artifact_v1"
 POLICY_ARTIFACT_SCHEMA_VERSION = "policy_artifact_v2"
 OBSERVATION_SCHEMA_VERSION = "observation_schema_v1"
-ACTION_SPACE_VERSION = "action_space_v1"
+ACTION_SPACE_VERSION = ACTION_SPACE_VERSION_V1
 EXECUTION_INTENT_SCHEMA_VERSION = "execution_intent_v1"
 STRICT_RUNTIME_CONTRACT_VERSION = "runtime_contract_v1"
+POLICY_STATE_FEATURE_VERSION_PHASE1A = "policy_state_features_v2_phase1a"
+JOINT_ACTION_VOCABULARY_VERSION_PHASE1A = "joint_action_vocabulary_v2_phase1a"
 DERIVED_CHANNEL_TARGET_PLACEHOLDER = "__target_symbol__"
 DYNAMIC_TARGET_ASSET = "__dynamic_target_symbol__"
 
@@ -55,6 +62,9 @@ class StrictRuntimeContract(QuantBaseModel):
     derived_channel_templates: list[DerivedChannelTemplate] = Field(default_factory=list)
     derived_channel_template_signature: str
     expected_feature_dim: int
+    policy_state_feature_version: str | None = None
+    expected_policy_state_dim: int = 0
+    joint_action_vocabulary_version: str | None = None
 
     @model_validator(mode="after")
     def validate_contract(self) -> "StrictRuntimeContract":

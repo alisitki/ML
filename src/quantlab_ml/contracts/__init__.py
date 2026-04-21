@@ -13,6 +13,8 @@ from quantlab_ml.contracts.dataset import (
 )
 from quantlab_ml.contracts.evaluation import EvaluationBoundary, EvaluationReport, PolicyScore
 from quantlab_ml.contracts.learning_surface import (
+    ACTION_SPACE_VERSION_V1,
+    ACTION_SPACE_VERSION_V2_PHASE1A,
     ActionChoice,
     ActionFeasibilitySurface,
     ActionSpaceSpec,
@@ -37,9 +39,11 @@ from quantlab_ml.contracts.policies import (
     DERIVED_CHANNEL_TARGET_PLACEHOLDER,
     DYNAMIC_TARGET_ASSET,
     EXECUTION_INTENT_SCHEMA_VERSION,
+    JOINT_ACTION_VOCABULARY_VERSION_PHASE1A,
     LEGACY_POLICY_ARTIFACT_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION,
     POLICY_ARTIFACT_SCHEMA_VERSION,
+    POLICY_STATE_FEATURE_VERSION_PHASE1A,
     STRICT_RUNTIME_CONTRACT_VERSION,
     DerivedChannelTemplate,
     ExecutionIntent,
@@ -103,6 +107,8 @@ __all__ = [
     # learning_surface
     "ActionChoice",
     "ActionFeasibilitySurface",
+    "ACTION_SPACE_VERSION_V1",
+    "ACTION_SPACE_VERSION_V2_PHASE1A",
     "ActionSpaceSpec",
     "DerivedChannel",
     "DerivedSurface",
@@ -127,8 +133,10 @@ __all__ = [
     "ExecutionIntent",
     "InferenceArtifactExport",
     "LEGACY_POLICY_ARTIFACT_SCHEMA_VERSION",
+    "JOINT_ACTION_VOCABULARY_VERSION_PHASE1A",
     "OBSERVATION_SCHEMA_VERSION",
     "POLICY_ARTIFACT_SCHEMA_VERSION",
+    "POLICY_STATE_FEATURE_VERSION_PHASE1A",
     "STRICT_RUNTIME_CONTRACT_VERSION",
     "DerivedChannelTemplate",
     "ExecutorMetadata",

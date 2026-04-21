@@ -4,6 +4,7 @@ import logging
 
 from quantlab_ml.common import hash_payload
 from quantlab_ml.contracts import (
+    ActionFeasibilitySurface,
     DYNAMIC_TARGET_ASSET,
     ExecutionIntent,
     InferenceArtifactExport,
@@ -13,6 +14,7 @@ from quantlab_ml.contracts import (
     OBSERVATION_SCHEMA_VERSION,
     POLICY_ARTIFACT_SCHEMA_VERSION,
     PolicyArtifact,
+    PolicyState,
     PolicyScore,
     STRICT_RUNTIME_CONTRACT_VERSION,
     StrictRuntimeContract,
@@ -20,9 +22,11 @@ from quantlab_ml.contracts import (
 from quantlab_ml.models import (
     LinearPolicyModel,
     LinearPolicyParameters,
+    LinearPolicyV2Model,
+    LinearPolicyV2Parameters,
     RuntimeDecision,
 )
-from quantlab_ml.models.features import observation_feature_vector
+from quantlab_ml.models.features import observation_feature_vector, phase1a_feature_vector
 from quantlab_ml.runtime_contract import (
     build_strict_runtime_contract,
     canonical_raw_surface_shapes,
@@ -37,8 +41,15 @@ class PolicyRuntimeBridge:
     def __init__(self) -> None:
         self._legacy_warning_artifact_ids: set[str] = set()
 
-    def decide(self, artifact: PolicyArtifact, observation: ObservationContext) -> RuntimeDecision:
-        self._validate_artifact_compatibility(artifact, observation)
+    def decide(
+        self,
+        artifact: PolicyArtifact,
+        observation: ObservationContext,
+        *,
+        action_feasibility: ActionFeasibilitySurface | None = None,
+        policy_state: PolicyState | None = None,
+    ) -> RuntimeDecision:
+        self._validate_artifact_compatibility(artifact, observation, policy_state=policy_state)
         runtime_adapter = artifact.policy_payload.runtime_adapter
         if runtime_adapter == "momentum-baseline-v1":
             raise ValueError(
@@ -48,6 +59,18 @@ class PolicyRuntimeBridge:
         if runtime_adapter == "linear-policy-v1":
             linear_params = LinearPolicyParameters.model_validate_json(artifact.policy_payload.blob)
             return LinearPolicyModel(linear_params).decide(observation, artifact.action_space)
+        if runtime_adapter == "linear-policy-v2":
+            if policy_state is None:
+                raise ValueError("linear-policy-v2 runtime decision requires explicit policy_state")
+            if action_feasibility is None:
+                raise ValueError("linear-policy-v2 runtime decision requires explicit action_feasibility")
+            linear_params = LinearPolicyV2Parameters.model_validate_json(artifact.policy_payload.blob)
+            return LinearPolicyV2Model(linear_params).decide(
+                observation,
+                artifact.action_space,
+                policy_state=policy_state,
+                action_feasibility=action_feasibility,
+            )
         raise ValueError(f"unsupported runtime adapter: {runtime_adapter}")
 
     def export(self, artifact: PolicyArtifact, score: PolicyScore | None) -> InferenceArtifactExport:
@@ -78,6 +101,8 @@ class PolicyRuntimeBridge:
         ttl_seconds: int = 60,
         selector_trace_id: str | None = None,
     ) -> ExecutionIntent:
+        if artifact.policy_payload.runtime_adapter == "linear-policy-v2":
+            raise ValueError("linear-policy-v2 phase1a artifacts are evaluation-only and cannot emit execution intents")
         decision = self.decide(artifact, observation)
         action = decision.action_key
         venue = self._resolve_venue(artifact, decision)
@@ -115,6 +140,8 @@ class PolicyRuntimeBridge:
         self,
         artifact: PolicyArtifact,
         observation: ObservationContext,
+        *,
+        policy_state: PolicyState | None,
     ) -> StrictRuntimeContract:
         metadata = artifact.runtime_metadata
         if metadata.runtime_adapter != artifact.policy_payload.runtime_adapter:
@@ -133,7 +160,7 @@ class PolicyRuntimeBridge:
         self._validate_stream_and_field_requirements(artifact, observation)
         self._validate_venue_requirements(artifact, observation)
         self._validate_derived_contract(strict_contract, observation)
-        self._validate_feature_dimension(strict_contract, artifact, observation)
+        self._validate_feature_dimension(strict_contract, artifact, observation, policy_state=policy_state)
         return strict_contract
 
     def _resolved_runtime_contract(self, artifact: PolicyArtifact) -> StrictRuntimeContract:
@@ -361,6 +388,8 @@ class PolicyRuntimeBridge:
         strict_contract: StrictRuntimeContract,
         artifact: PolicyArtifact,
         observation: ObservationContext,
+        *,
+        policy_state: PolicyState | None,
     ) -> None:
         payload_feature_dim = self._payload_feature_dim(artifact)
         if payload_feature_dim != strict_contract.expected_feature_dim:
@@ -368,7 +397,19 @@ class PolicyRuntimeBridge:
                 "artifact payload feature dimension does not match runtime contract: "
                 f"payload_feature_dim={payload_feature_dim}, expected_feature_dim={strict_contract.expected_feature_dim}"
             )
-        actual_feature_dim = len(observation_feature_vector(observation))
+        runtime_adapter = artifact.policy_payload.runtime_adapter
+        if runtime_adapter == "linear-policy-v2":
+            if policy_state is None:
+                raise ValueError("linear-policy-v2 runtime contract requires explicit policy_state")
+            actual_feature_dim = len(
+                phase1a_feature_vector(
+                    observation,
+                    policy_state,
+                    venue_choices=artifact.allowed_venues,
+                )
+            )
+        else:
+            actual_feature_dim = len(observation_feature_vector(observation))
         if actual_feature_dim != strict_contract.expected_feature_dim:
             raise ValueError(
                 "observation feature dimension does not match runtime contract: "
@@ -377,12 +418,17 @@ class PolicyRuntimeBridge:
 
     def _payload_feature_dim(self, artifact: PolicyArtifact) -> int:
         runtime_adapter = artifact.policy_payload.runtime_adapter
+        if runtime_adapter == "linear-policy-v1":
+            linear_params = LinearPolicyParameters.model_validate_json(artifact.policy_payload.blob)
+            return len(linear_params.feature_mean)
+        if runtime_adapter == "linear-policy-v2":
+            linear_params = LinearPolicyV2Parameters.model_validate_json(artifact.policy_payload.blob)
+            return len(linear_params.feature_mean)
         if runtime_adapter != "linear-policy-v1":
             raise ValueError(
                 f"runtime adapter {runtime_adapter!r} is not supported by the active strict runtime contract"
             )
-        linear_params = LinearPolicyParameters.model_validate_json(artifact.policy_payload.blob)
-        return len(linear_params.feature_mean)
+        raise AssertionError("unreachable")
 
     def _resolve_venue(self, artifact: PolicyArtifact, decision: RuntimeDecision) -> str:
         if decision.venue is not None:

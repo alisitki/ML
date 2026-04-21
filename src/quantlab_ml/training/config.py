@@ -20,4 +20,9 @@ class TrainingConfig(QuantBaseModel):
     seed: int = 7
     preferred_size_band: str
     preferred_leverage_band: str
+    bootstrap_horizon_steps: int = 1
+    aux_value_loss_weight: float = 0.0
+    policy_state_feature_version: str | None = None
+    joint_action_vocabulary_version: str | None = None
+    phase1a_compute_dtype: str = "float32"
     candidate_search: CandidateSearchConfig | None = None

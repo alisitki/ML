@@ -36,6 +36,8 @@ from quantlab_ml.registry.bundle_integrity import (
 from quantlab_ml.registry.analysis import preflight_same_root_comparison
 from quantlab_ml.scoring import PolicyScorer
 from quantlab_ml.training import LinearPolicyTrainer, TrainingConfig, TrainingSearchResult
+from quantlab_ml.training.phase1a_profile import merge_phase1a_profile
+from quantlab_ml.training.phase1a_supervision import materialize_phase1a_supervision
 from quantlab_ml.trajectories import TrajectoryBuilder, TrajectoryDirectoryStore, TrajectoryStore
 from quantlab_ml.trajectories.builder import (
     read_trajectory_build_diagnostics,
@@ -156,6 +158,36 @@ def inspect_policy_state(
     typer.echo(json.dumps(payload, indent=2))
 
 
+@app.command("materialize-phase1a-supervision")
+def materialize_phase1a_supervision_command(
+    trajectories: Path = typer.Option(..., exists=True, readable=True),
+    training_config: Path = typer.Option(Path("configs/training/default.yaml"), exists=True),
+    output: Path = typer.Option(..., help="Phase 1A supervision sidecar output directory."),
+    profile_output: Path | None = typer.Option(
+        None,
+        help="Optional canonical phase1a_profile.json output path.",
+    ),
+) -> None:
+    if not TrajectoryDirectoryStore.is_trajectory_directory(trajectories):
+        raise typer.BadParameter("materialize-phase1a-supervision requires a trajectory directory")
+    manifest = TrajectoryDirectoryStore.read_manifest(trajectories)
+    _, _, training_config_model = _load_training_bundle(training_config)
+    report = materialize_phase1a_supervision(
+        trajectories_directory=trajectories,
+        output_directory=output,
+        manifest=manifest,
+        training_config=training_config_model,
+    )
+    if profile_output is not None:
+        merge_phase1a_profile(profile_output, "materialize", report.profile_payload())
+    total_rows = sum(split.row_count for split in report.manifest.splits.values())
+    typer.echo(
+        "[PROGRESS] marker=materialization_completed "
+        f"rows={total_rows} reused={str(report.materialization_reused).lower()}"
+    )
+    typer.echo(f"wrote phase1a supervision sidecar to {output}")
+
+
 @app.command("inspect-eval-diagnostics")
 def inspect_eval_diagnostics(
     evaluation: Path = typer.Option(..., exists=True, readable=True),
@@ -190,6 +222,14 @@ def train(
         False,
         help="Allow temporary JSONL-only compatibility fallback when tensor cache is missing.",
     ),
+    resume_search: bool = typer.Option(
+        False,
+        help="Resume a partial Phase 1A search from checkpoints when compatible.",
+    ),
+    profile_output: Path | None = typer.Option(
+        None,
+        help="Optional canonical phase1a_profile.json output path.",
+    ),
 ) -> None:
     _, _, training_config_model = _load_training_bundle(training_config)
     trainer = LinearPolicyTrainer(training_config_model)
@@ -203,9 +243,13 @@ def train(
                 trajectories,
                 parent_policy_id=parent_policy_id,
                 allow_jsonl_fallback=allow_jsonl_fallback,
+                search_output=output,
+                resume_search=resume_search,
             )
         except BundlePayloadError as exc:
             raise _bundle_bad_parameter(exc) from exc
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         dump_model(output, search_result.selected_artifact)
         if len(search_result.candidate_results) > 1:
             _write_search_artifacts(output, search_result)
@@ -228,6 +272,8 @@ def train(
             registry = LocalRegistryStore(registry_root)
             _register_training_candidates(registry, bundle, search_result)
 
+    if profile_output is not None and trainer.last_phase1a_profile_report is not None:
+        merge_phase1a_profile(profile_output, "train", trainer.last_phase1a_profile_report)
     typer.echo(f"wrote policy artifact to {output}")
 
 
@@ -237,9 +283,14 @@ def evaluate(
     policy: Path = typer.Option(..., exists=True, readable=True),
     output: Path = typer.Option(..., help="Evaluation report output path."),
     evaluation_config: Path = typer.Option(Path("configs/evaluation/default.yaml"), exists=True),
+    split: str = typer.Option("final_untouched_test", help="Evaluation split name."),
     allow_jsonl_fallback: bool = typer.Option(
         False,
         help="Allow temporary JSONL-only compatibility fallback when tensor cache is missing.",
+    ),
+    profile_output: Path | None = typer.Option(
+        None,
+        help="Optional canonical phase1a_profile.json output path.",
     ),
 ) -> None:
     artifact = load_model(policy, PolicyArtifact)
@@ -254,7 +305,7 @@ def evaluate(
                 manifest=manifest,
                 directory=trajectories,
                 artifact=artifact,
-                split_name="final_untouched_test",
+                split_name=split,
                 allow_jsonl_fallback=allow_jsonl_fallback,
             )
         except BundlePayloadError as exc:
@@ -262,9 +313,11 @@ def evaluate(
     else:
         # FIXTURE / TEST COMPAT PATH
         bundle = TrajectoryStore.read(trajectories)
-        report = engine.evaluate(bundle, artifact, split="final_untouched_test")
+        report = engine.evaluate(bundle, artifact, split=split)
 
     dump_model(output, report)
+    if profile_output is not None and engine.last_phase1a_profile_report is not None:
+        merge_phase1a_profile(profile_output, "evaluate", engine.last_phase1a_profile_report)
     typer.echo(f"wrote evaluation report to {output}")
 
 

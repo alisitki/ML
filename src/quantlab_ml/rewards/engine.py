@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Literal, cast
 
 from quantlab_ml.contracts import (
+    ACTION_SPACE_VERSION_V2_PHASE1A,
     ActionFeasibilitySurface,
     ActionChoice,
     ActionReward,
@@ -57,6 +58,22 @@ class RewardEngine:
                 action_rewards.append(
                     ActionReward(
                         action_key="abstain",
+                        gross_return=0.0,
+                        fee=0.0,
+                        funding=0.0,
+                        slippage=0.0,
+                        risk_penalty=0.0,
+                        turnover_penalty=0.0,
+                        net_reward=0.0,
+                        applicable=True,
+                        venue=None,
+                    )
+                )
+                continue
+            if self.action_space.action_space_version == ACTION_SPACE_VERSION_V2_PHASE1A and action.key in {"hold", "exit"}:
+                action_rewards.append(
+                    ActionReward(
+                        action_key=action.key,
                         gross_return=0.0,
                         fee=0.0,
                         funding=0.0,
@@ -181,6 +198,20 @@ class RewardEngine:
         previous_position_side = self._previous_position_side(policy_state, snapshot.context)
         resulting_position_side = self._resulting_position_side(action, previous_position_side)
 
+        if (
+            self.action_space.action_space_version == ACTION_SPACE_VERSION_V2_PHASE1A
+        ):
+            return self._apply_phase1a_decision(
+                snapshot=snapshot,
+                action=action,
+                previous_position_side=previous_position_side,
+                action_feasibility=action_feasibility,
+                policy_state=policy_state or PolicyState(),
+                venue=venue,
+                size_band_key=size_band_key,
+                leverage_band_key=leverage_band_key,
+            )
+
         if action.key == "abstain":
             abstain_reward = snapshot.for_action("abstain")
             return AppliedReward(
@@ -282,6 +313,163 @@ class RewardEngine:
             turnover_accumulator=turnover_accumulator,
         )
 
+    def _apply_phase1a_decision(
+        self,
+        *,
+        snapshot: RewardSnapshot,
+        action: ActionChoice,
+        previous_position_side: str,
+        action_feasibility: ActionFeasibilitySurface,
+        policy_state: PolicyState,
+        venue: str | None,
+        size_band_key: str | None,
+        leverage_band_key: str | None,
+    ) -> AppliedReward:
+        previous_venue = policy_state.previous_venue
+        if action.key in {"enter_long", "enter_short"}:
+            if previous_position_side != "flat":
+                return self._phase1a_force_abstain(snapshot, previous_position_side, infeasible=True)
+            requested_reward = self._select_reward(snapshot, action.key, venue)
+            requested_available = (
+                requested_reward is not None
+                and requested_reward.applicable
+                and self._decision_is_feasible(
+                    action_feasibility=action_feasibility,
+                    action=action,
+                    venue=venue,
+                    size_band_key=size_band_key,
+                    leverage_band_key=leverage_band_key,
+                )
+            )
+            if not requested_available or requested_reward is None:
+                return self._phase1a_force_abstain(snapshot, previous_position_side, infeasible=True)
+            turnover_penalty = self._turnover_penalty(previous_position_side, action.direction)
+            reward_context = self._effective_reward_context(snapshot.context, venue)
+            return AppliedReward(
+                requested_action_key=action.key,
+                applied_action_key=action.key,
+                net_reward=requested_reward.net_reward + turnover_penalty,
+                fee=requested_reward.fee,
+                funding=requested_reward.funding,
+                slippage=requested_reward.slippage,
+                risk_penalty=requested_reward.risk_penalty,
+                turnover_penalty=turnover_penalty,
+                infeasible=False,
+                infeasible_penalty=0.0,
+                venue=venue,
+                size_band_key=size_band_key,
+                leverage_band_key=leverage_band_key,
+                previous_position_side=previous_position_side,
+                resulting_position_side=action.direction,
+                reward_context=reward_context,
+            )
+        if action.key == "abstain":
+            if previous_position_side != "flat":
+                return self._phase1a_force_abstain(snapshot, previous_position_side, infeasible=True)
+            abstain_reward = snapshot.for_action("abstain")
+            return AppliedReward(
+                requested_action_key="abstain",
+                applied_action_key="abstain",
+                net_reward=abstain_reward.net_reward,
+                fee=abstain_reward.fee,
+                funding=abstain_reward.funding,
+                slippage=abstain_reward.slippage,
+                risk_penalty=abstain_reward.risk_penalty,
+                turnover_penalty=0.0,
+                infeasible=False,
+                infeasible_penalty=0.0,
+                venue=None,
+                previous_position_side=previous_position_side,
+                resulting_position_side="flat",
+                reward_context=self._effective_reward_context(snapshot.context, None),
+            )
+
+        if action.key == "hold":
+            if previous_position_side == "flat" or previous_venue is None:
+                return self._phase1a_force_abstain(snapshot, previous_position_side, infeasible=True)
+            directional_key = "enter_long" if previous_position_side == "long" else "enter_short"
+            directional_reward = self._select_reward(snapshot, directional_key, previous_venue)
+            if directional_reward is None or not directional_reward.applicable:
+                return self._phase1a_force_abstain(snapshot, previous_position_side, infeasible=True)
+            reward_context = self._effective_reward_context(snapshot.context, previous_venue)
+            return AppliedReward(
+                requested_action_key="hold",
+                applied_action_key="hold",
+                net_reward=(
+                    directional_reward.gross_return
+                    + directional_reward.funding
+                    + directional_reward.risk_penalty
+                ),
+                fee=0.0,
+                funding=directional_reward.funding,
+                slippage=0.0,
+                risk_penalty=directional_reward.risk_penalty,
+                turnover_penalty=0.0,
+                infeasible=False,
+                infeasible_penalty=0.0,
+                venue=previous_venue,
+                previous_position_side=previous_position_side,
+                resulting_position_side=previous_position_side,
+                reward_context=reward_context,
+            )
+
+        if action.key == "exit":
+            if previous_position_side == "flat" or previous_venue is None:
+                return self._phase1a_force_abstain(snapshot, previous_position_side, infeasible=True)
+            reference_reward = self._select_reward(
+                snapshot,
+                "enter_long" if previous_position_side == "long" else "enter_short",
+                previous_venue,
+            )
+            if reference_reward is None:
+                return self._phase1a_force_abstain(snapshot, previous_position_side, infeasible=True)
+            turnover_penalty = self._turnover_penalty(previous_position_side, "flat")
+            reward_context = self._effective_reward_context(snapshot.context, previous_venue)
+            return AppliedReward(
+                requested_action_key="exit",
+                applied_action_key="exit",
+                net_reward=reference_reward.fee + reference_reward.slippage + turnover_penalty,
+                fee=reference_reward.fee,
+                funding=0.0,
+                slippage=reference_reward.slippage,
+                risk_penalty=0.0,
+                turnover_penalty=turnover_penalty,
+                infeasible=False,
+                infeasible_penalty=0.0,
+                venue=previous_venue,
+                previous_position_side=previous_position_side,
+                resulting_position_side="flat",
+                reward_context=reward_context,
+            )
+
+        raise ValueError(f"unsupported phase1a action: {action.key}")
+
+    def _phase1a_force_abstain(
+        self,
+        snapshot: RewardSnapshot,
+        previous_position_side: str,
+        *,
+        infeasible: bool,
+    ) -> AppliedReward:
+        abstain_reward = snapshot.for_action("abstain")
+        infeasible_penalty = self.reward_spec.infeasible_action_penalty if infeasible else 0.0
+        return AppliedReward(
+            requested_action_key="abstain",
+            applied_action_key="abstain",
+            net_reward=abstain_reward.net_reward + infeasible_penalty,
+            fee=abstain_reward.fee,
+            funding=abstain_reward.funding,
+            slippage=abstain_reward.slippage,
+            risk_penalty=abstain_reward.risk_penalty,
+            turnover_penalty=0.0,
+            infeasible=infeasible,
+            infeasible_penalty=infeasible_penalty,
+            venue=None,
+            previous_position_side=previous_position_side,
+            resulting_position_side=previous_position_side,
+            reward_context=self._effective_reward_context(snapshot.context, None),
+        )
+
     # ------------------------------------------------------------------
     # Internal Helpers
     # ------------------------------------------------------------------
@@ -346,6 +534,8 @@ class RewardEngine:
     ) -> bool:
         if action.key == "abstain":
             return action_feasibility.abstain_feasible()
+        if self.action_space.action_space_version == ACTION_SPACE_VERSION_V2_PHASE1A and action.key in {"hold", "exit"}:
+            return True
         assert venue is not None
         assert size_band_key is not None
         assert leverage_band_key is not None
@@ -380,6 +570,13 @@ class RewardEngine:
         action: ActionChoice,
         previous_position_side: str,
     ) -> str:
+        if self.action_space.action_space_version == ACTION_SPACE_VERSION_V2_PHASE1A:
+            if action.key == "abstain":
+                return "flat"
+            if action.key == "hold":
+                return previous_position_side
+            if action.key == "exit":
+                return "flat"
         if action.key in {"abstain", "hold"} or action.category == "abstain":
             return previous_position_side
         if action.key == "exit":

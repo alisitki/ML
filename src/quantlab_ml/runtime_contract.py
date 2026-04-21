@@ -7,6 +7,8 @@ from quantlab_ml.contracts.learning_surface import DERIVED_SURFACE_CONTRACT_VERS
 from quantlab_ml.contracts.policies import (
     DERIVED_CHANNEL_TARGET_PLACEHOLDER,
     DerivedChannelTemplate,
+    JOINT_ACTION_VOCABULARY_VERSION_PHASE1A,
+    POLICY_STATE_FEATURE_VERSION_PHASE1A,
     StrictRuntimeContract,
 )
 
@@ -26,7 +28,16 @@ def build_strict_runtime_contract(
         derived_contract_version=DERIVED_SURFACE_CONTRACT_VERSION,
         derived_channel_templates=templates,
         derived_channel_template_signature=derived_channel_template_signature(templates),
-        expected_feature_dim=expected_feature_dim(observation_schema, templates),
+        expected_feature_dim=expected_feature_dim(observation_schema, templates, policy_kind=policy_kind),
+        policy_state_feature_version=(
+            POLICY_STATE_FEATURE_VERSION_PHASE1A if policy_kind == "linear-policy-v2" else None
+        ),
+        expected_policy_state_dim=(
+            policy_state_feature_dim(observation_schema) if policy_kind == "linear-policy-v2" else 0
+        ),
+        joint_action_vocabulary_version=(
+            JOINT_ACTION_VOCABULARY_VERSION_PHASE1A if policy_kind == "linear-policy-v2" else None
+        ),
     )
 
 
@@ -87,6 +98,8 @@ def resolve_derived_channel_templates(
 def expected_feature_dim(
     observation_schema: ObservationSchema,
     templates: list[DerivedChannelTemplate] | None = None,
+    *,
+    policy_kind: str = "linear-policy-v1",
 ) -> int:
     canonical_templates = templates or canonical_derived_channel_templates(observation_schema)
     raw_dim = sum(_shape_size(list(observation_schema.shape_for_scale(scale.label))) * 6 for scale in observation_schema.scale_axis)
@@ -100,7 +113,14 @@ def expected_feature_dim(
             f"got {derived_dims}"
         )
     derived_dim = next(iter(derived_dims.values()), 0)
-    return raw_dim + derived_dim + 1
+    total = raw_dim + derived_dim + 1
+    if policy_kind == "linear-policy-v2":
+        total += policy_state_feature_dim(observation_schema)
+    return total
+
+
+def policy_state_feature_dim(observation_schema: ObservationSchema) -> int:
+    return 3 + len(observation_schema.exchange_axis) + 1 + 2
 
 
 def derived_channel_template_signature(templates: list[DerivedChannelTemplate]) -> str:

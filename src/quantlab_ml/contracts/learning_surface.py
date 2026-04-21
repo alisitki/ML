@@ -14,6 +14,8 @@ from quantlab_ml.contracts.rewards import RewardContext, RewardEventSpec, Reward
 OBSERVATION_SCHEMA_VERSION = "observation_schema_v1"
 DERIVED_SURFACE_CONTRACT_VERSION = "derived_surface_v1"
 _CANONICAL_SPLIT_VERSION = "split_v1_walkforward"
+ACTION_SPACE_VERSION_V1 = "action_space_v1"
+ACTION_SPACE_VERSION_V2_PHASE1A = "action_space_v2_phase1a"
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +316,7 @@ class ActionChoice(QuantBaseModel):
 
 
 class ActionSpaceSpec(QuantBaseModel):
+    action_space_version: str = ACTION_SPACE_VERSION_V1
     actions: list[ActionChoice]
     venue_choices: list[str]
     size_bands: list[NumericBand]
@@ -327,11 +330,23 @@ class ActionSpaceSpec(QuantBaseModel):
             raise ValueError("action space must contain exactly one abstain action")
         if abstain_actions[0].key != "abstain":
             raise ValueError("abstain action key must be 'abstain'")
+        if self.action_space_version == ACTION_SPACE_VERSION_V2_PHASE1A:
+            expected = {"abstain", "hold", "exit", "enter_long", "enter_short"}
+            actual = {action.key for action in self.actions}
+            if actual != expected:
+                raise ValueError(
+                    "phase1a v2 action space must define exactly "
+                    f"{sorted(expected)}; got {sorted(actual)}"
+                )
         return self
 
     @property
     def action_keys(self) -> list[str]:
         return [action.key for action in self.actions]
+
+    @property
+    def is_phase1a_v2(self) -> bool:
+        return self.action_space_version == ACTION_SPACE_VERSION_V2_PHASE1A
 
 
 # ---------------------------------------------------------------------------
