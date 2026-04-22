@@ -87,6 +87,7 @@ _STREAMING_BATCH_LABEL_OVERHEAD_BYTES = (
 )
 _PHASE1A_VALUE_LABEL_OVERHEAD_BYTES = np.dtype(np.float64).itemsize
 _PHASE1A_VALUE_GRAD_CLIP_NORM = 1_000.0
+_PHASE1A_AUX_VALUE_HUBER_DELTA = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,6 +299,12 @@ class _Phase1AEpochMetrics:
 
 @dataclass(slots=True)
 class _Phase1ANumericsTelemetry:
+    joint_ce_loss: float = 0.0
+    aux_value_loss_raw: float = 0.0
+    aux_value_loss_weighted: float = 0.0
+    total_loss: float = 0.0
+    action_logit_abs_max: float = 0.0
+    action_entropy: float = 0.0
     value_pred_abs_max: float = 0.0
     value_grad_norm_pre_clip: float = 0.0
     value_grad_norm_post_clip: float = 0.0
@@ -307,6 +314,12 @@ class _Phase1ANumericsTelemetry:
 
     def as_dict(self) -> dict[str, object]:
         return {
+            "joint_ce_loss": self.joint_ce_loss,
+            "aux_value_loss_raw": self.aux_value_loss_raw,
+            "aux_value_loss_weighted": self.aux_value_loss_weighted,
+            "total_loss": self.total_loss,
+            "action_logit_abs_max": self.action_logit_abs_max,
+            "action_entropy": self.action_entropy,
             "value_pred_abs_max": self.value_pred_abs_max,
             "value_grad_norm_pre_clip": self.value_grad_norm_pre_clip,
             "value_grad_norm_post_clip": self.value_grad_norm_post_clip,
@@ -321,6 +334,12 @@ class _Phase1ANumericsTelemetry:
             return cls()
         context = payload.get("first_nonfinite_batch_context")
         return cls(
+            joint_ce_loss=float(payload.get("joint_ce_loss", 0.0) or 0.0),
+            aux_value_loss_raw=float(payload.get("aux_value_loss_raw", 0.0) or 0.0),
+            aux_value_loss_weighted=float(payload.get("aux_value_loss_weighted", 0.0) or 0.0),
+            total_loss=float(payload.get("total_loss", 0.0) or 0.0),
+            action_logit_abs_max=float(payload.get("action_logit_abs_max", 0.0) or 0.0),
+            action_entropy=float(payload.get("action_entropy", 0.0) or 0.0),
             value_pred_abs_max=float(payload.get("value_pred_abs_max", 0.0) or 0.0),
             value_grad_norm_pre_clip=float(payload.get("value_grad_norm_pre_clip", 0.0) or 0.0),
             value_grad_norm_post_clip=float(payload.get("value_grad_norm_post_clip", 0.0) or 0.0),
@@ -332,6 +351,17 @@ class _Phase1ANumericsTelemetry:
         )
 
     def merge(self, other: "_Phase1ANumericsTelemetry") -> None:
+        if other.joint_ce_loss > 0.0:
+            self.joint_ce_loss = other.joint_ce_loss
+        if other.aux_value_loss_raw > 0.0:
+            self.aux_value_loss_raw = other.aux_value_loss_raw
+        if other.aux_value_loss_weighted > 0.0:
+            self.aux_value_loss_weighted = other.aux_value_loss_weighted
+        if other.total_loss > 0.0:
+            self.total_loss = other.total_loss
+        self.action_logit_abs_max = max(self.action_logit_abs_max, other.action_logit_abs_max)
+        if other.action_entropy > 0.0:
+            self.action_entropy = other.action_entropy
         self.value_pred_abs_max = max(self.value_pred_abs_max, other.value_pred_abs_max)
         self.value_grad_norm_pre_clip = max(
             self.value_grad_norm_pre_clip,
@@ -353,7 +383,12 @@ class _Phase1ANumericsTelemetry:
 
 @dataclass(slots=True, frozen=True)
 class _Phase1ABatchStepResult:
+    joint_ce_loss: float
+    aux_value_loss_raw: float
+    aux_value_loss_weighted: float
     total_loss: float
+    action_logit_abs_max: float
+    action_entropy: float
     numerics: _Phase1ANumericsTelemetry
 
 
@@ -851,6 +886,11 @@ class LinearPolicyTrainer:
         joint_mask_batch = np.empty((batch_size, len(prepared.joint_action_keys)), dtype=np.bool_)
         value_batch = np.empty(batch_size, dtype=compute_dtype)
         weighted_loss_total = 0.0
+        joint_ce_loss_total = 0.0
+        aux_value_loss_raw_total = 0.0
+        aux_value_loss_weighted_total = 0.0
+        action_entropy_total = 0.0
+        action_logit_abs_max = 0.0
         seen = 0
         batch_row = 0
         batch_assembly_wall_sec = 0.0
@@ -906,6 +946,11 @@ class LinearPolicyTrainer:
                     )
                     batch_compute_wall_sec += _time.perf_counter() - compute_started_at
                     numerics.merge(batch_result.numerics)
+                    action_logit_abs_max = max(action_logit_abs_max, batch_result.action_logit_abs_max)
+                    joint_ce_loss_total += batch_result.joint_ce_loss * int(batch_indices.shape[0])
+                    aux_value_loss_raw_total += batch_result.aux_value_loss_raw * int(batch_indices.shape[0])
+                    aux_value_loss_weighted_total += batch_result.aux_value_loss_weighted * int(batch_indices.shape[0])
+                    action_entropy_total += batch_result.action_entropy * int(batch_indices.shape[0])
                     weighted_loss_total += batch_result.total_loss * int(batch_indices.shape[0])
                     seen += int(batch_indices.shape[0])
         else:
@@ -992,6 +1037,11 @@ class LinearPolicyTrainer:
                         )
                         batch_compute_wall_sec += _time.perf_counter() - compute_started_at
                         numerics.merge(batch_result.numerics)
+                        action_logit_abs_max = max(action_logit_abs_max, batch_result.action_logit_abs_max)
+                        joint_ce_loss_total += batch_result.joint_ce_loss * batch_row
+                        aux_value_loss_raw_total += batch_result.aux_value_loss_raw * batch_row
+                        aux_value_loss_weighted_total += batch_result.aux_value_loss_weighted * batch_row
+                        action_entropy_total += batch_result.action_entropy * batch_row
                         weighted_loss_total += batch_result.total_loss * batch_row
                         seen += batch_row
                         batch_row = 0
@@ -1010,13 +1060,24 @@ class LinearPolicyTrainer:
             )
             batch_compute_wall_sec += _time.perf_counter() - compute_started_at
             numerics.merge(batch_result.numerics)
+            action_logit_abs_max = max(action_logit_abs_max, batch_result.action_logit_abs_max)
+            joint_ce_loss_total += batch_result.joint_ce_loss * batch_row
+            aux_value_loss_raw_total += batch_result.aux_value_loss_raw * batch_row
+            aux_value_loss_weighted_total += batch_result.aux_value_loss_weighted * batch_row
+            action_entropy_total += batch_result.action_entropy * batch_row
             weighted_loss_total += batch_result.total_loss * batch_row
             seen += batch_row
 
         if seen <= 0:
             raise ValueError("phase1a train split is empty")
+        numerics.joint_ce_loss = float(joint_ce_loss_total / seen)
+        numerics.aux_value_loss_raw = float(aux_value_loss_raw_total / seen)
+        numerics.aux_value_loss_weighted = float(aux_value_loss_weighted_total / seen)
+        numerics.total_loss = float(weighted_loss_total / seen)
+        numerics.action_logit_abs_max = action_logit_abs_max
+        numerics.action_entropy = float(action_entropy_total / seen)
         return _Phase1AEpochMetrics(
-            total_loss=float(weighted_loss_total / seen),
+            total_loss=numerics.total_loss,
             batch_assembly_wall_sec=batch_assembly_wall_sec,
             batch_compute_wall_sec=batch_compute_wall_sec,
             numerics=numerics,
@@ -1067,6 +1128,7 @@ class LinearPolicyTrainer:
         batch_assembly_wall_sec = 0.0
         batch_compute_wall_sec = 0.0
         numerics = _Phase1ANumericsTelemetry()
+        best_epoch_numerics: _Phase1ANumericsTelemetry | None = None
 
         for epoch in range(1, config.epochs + 1):
             import time as _time
@@ -1135,6 +1197,7 @@ class LinearPolicyTrainer:
                 best_parameters = parameters
                 best_validation_score = validation_score
                 best_epoch = epoch
+                best_epoch_numerics = _Phase1ANumericsTelemetry.from_mapping(epoch_metrics.numerics.as_dict())
 
         if best_parameters is None:
             import time as _time
@@ -1184,7 +1247,7 @@ class LinearPolicyTrainer:
             validation_wall_sec_history=validation_wall_sec_history,
             batch_assembly_wall_sec=batch_assembly_wall_sec,
             batch_compute_wall_sec=batch_compute_wall_sec,
-            numerics=numerics,
+            numerics=best_epoch_numerics or numerics,
         )
 
     def _phase1a_validation_report_from_factory(
@@ -3069,6 +3132,12 @@ class LinearPolicyTrainer:
                     "resume_compatible": False,
                     "completed_candidate_count": 0,
                     "completed_fold_count": 0,
+                    "joint_ce_loss": 0.0,
+                    "aux_value_loss_raw": 0.0,
+                    "aux_value_loss_weighted": 0.0,
+                    "total_loss": 0.0,
+                    "action_logit_abs_max": 0.0,
+                    "action_entropy": 0.0,
                     "value_pred_abs_max": 0.0,
                     "value_grad_norm_pre_clip": 0.0,
                     "value_grad_norm_post_clip": 0.0,
@@ -5032,6 +5101,7 @@ def _phase1a_batch_step(
     if isinstance(backend, _NumpyLinearTrainingBackend):
         training_state = _expect_phase1a_numpy_state(state)
         joint_logits = batch_features @ training_state.joint_action_weight.T + training_state.joint_action_bias
+        action_logit_abs_max = float(np.max(np.abs(joint_logits))) if joint_logits.size > 0 else 0.0
         masked_joint_logits = np.where(batch_joint_action_masks, joint_logits, -1.0e30)
         _phase1a_require_finite_array(
             "joint_logits",
@@ -5047,6 +5117,7 @@ def _phase1a_batch_step(
             batch_context=resolved_batch_context,
         )
         joint_loss = _cross_entropy_loss(joint_probabilities, batch_joint_action_labels)
+        action_entropy = _categorical_entropy(joint_probabilities)
         joint_gradient = joint_probabilities.copy()
         joint_gradient[np.arange(len(batch_joint_action_labels)), batch_joint_action_labels] -= 1.0
         joint_gradient /= len(batch_joint_action_labels)
@@ -5068,7 +5139,7 @@ def _phase1a_batch_step(
             np.float64,
             copy=False,
         )
-        value_loss = float(np.mean(np.square(value_error)))
+        value_loss = _huber_loss_numpy(value_error, delta=_PHASE1A_AUX_VALUE_HUBER_DELTA)
         _phase1a_require_finite_scalar(
             "value_loss",
             value_loss,
@@ -5077,14 +5148,17 @@ def _phase1a_batch_step(
         )
         value_weight_gradient = np.zeros(training_state.value_weight.shape, dtype=np.float64)
         value_bias_gradient = 0.0
+        aux_value_loss_weighted = 0.0
         total_loss = float(joint_loss)
         if config.aux_value_loss_weight > 0.0:
-            total_loss += config.aux_value_loss_weight * value_loss
-            value_scale = (2.0 * config.aux_value_loss_weight) / len(batch_value_targets)
+            aux_value_loss_weighted = config.aux_value_loss_weight * value_loss
+            total_loss += aux_value_loss_weighted
+            huber_gradient = _huber_gradient_numpy(value_error, delta=_PHASE1A_AUX_VALUE_HUBER_DELTA)
+            value_scale = config.aux_value_loss_weight / len(batch_value_targets)
             value_weight_gradient = value_scale * (
-                value_error[:, None] * batch_features.astype(np.float64, copy=False)
+                huber_gradient[:, None] * batch_features.astype(np.float64, copy=False)
             ).sum(axis=0)
-            value_bias_gradient = value_scale * float(value_error.sum())
+            value_bias_gradient = value_scale * float(huber_gradient.sum())
 
         if config.l2_weight > 0.0:
             total_loss += config.l2_weight * (
@@ -5152,7 +5226,15 @@ def _phase1a_batch_step(
         )
         training_state.value_weight = next_value_weight
         training_state.value_bias = next_value_bias
-        return _Phase1ABatchStepResult(total_loss=float(total_loss), numerics=numerics)
+        return _Phase1ABatchStepResult(
+            joint_ce_loss=float(joint_loss),
+            aux_value_loss_raw=value_loss,
+            aux_value_loss_weighted=float(aux_value_loss_weighted),
+            total_loss=float(total_loss),
+            action_logit_abs_max=action_logit_abs_max,
+            action_entropy=action_entropy,
+            numerics=numerics,
+        )
 
     if isinstance(backend, _TorchLinearTrainingBackend):
         training_state = _expect_phase1a_torch_state(state)
@@ -5166,6 +5248,7 @@ def _phase1a_batch_step(
         value_targets = torch_module.tensor(batch_value_targets, dtype=tensor_dtype, device=device)
 
         joint_logits = x_batch @ training_state.joint_action_weight.transpose(0, 1) + training_state.joint_action_bias
+        action_logit_abs_max = float(torch_module.max(torch_module.abs(joint_logits)).item()) if batch_size > 0 else 0.0
         masked_joint_logits = torch_module.where(mask_batch, joint_logits, torch_module.full_like(joint_logits, -1.0e30))
         _phase1a_require_finite_tensor(
             torch_module,
@@ -5183,6 +5266,7 @@ def _phase1a_batch_step(
             batch_context=resolved_batch_context,
         )
         joint_loss = _torch_cross_entropy_loss(torch_module, joint_probabilities, labels_batch)
+        action_entropy = _categorical_entropy_torch(torch_module, joint_probabilities)
         joint_gradient = joint_probabilities.clone()
         joint_gradient[
             torch_module.arange(batch_size, device=device),
@@ -5209,7 +5293,11 @@ def _phase1a_batch_step(
         value_prediction_f64 = value_prediction.to(dtype=torch_module.float64)
         value_targets_f64 = value_targets.to(dtype=torch_module.float64)
         value_error = value_prediction_f64 - value_targets_f64
-        value_loss = torch_module.mean(value_error**2)
+        value_loss = _huber_loss_torch(
+            torch_module,
+            value_error,
+            delta=_PHASE1A_AUX_VALUE_HUBER_DELTA,
+        )
         _phase1a_require_finite_tensor(
             torch_module,
             "value_loss",
@@ -5219,14 +5307,21 @@ def _phase1a_batch_step(
         )
         value_weight_gradient = torch_module.zeros_like(training_state.value_weight, dtype=torch_module.float64)
         value_bias_gradient = torch_module.tensor(0.0, dtype=torch_module.float64, device=device)
+        aux_value_loss_weighted = 0.0
         total_loss = float(joint_loss.item())
         if config.aux_value_loss_weight > 0.0:
-            total_loss += config.aux_value_loss_weight * float(value_loss.item())
-            value_scale = (2.0 * config.aux_value_loss_weight) / batch_size
+            aux_value_loss_weighted = config.aux_value_loss_weight * float(value_loss.item())
+            total_loss += aux_value_loss_weighted
+            huber_gradient = _huber_gradient_torch(
+                torch_module,
+                value_error,
+                delta=_PHASE1A_AUX_VALUE_HUBER_DELTA,
+            )
+            value_scale = config.aux_value_loss_weight / batch_size
             value_weight_gradient = value_scale * (
-                value_error.unsqueeze(1) * x_batch.to(dtype=torch_module.float64)
+                huber_gradient.unsqueeze(1) * x_batch.to(dtype=torch_module.float64)
             ).sum(dim=0)
-            value_bias_gradient = value_scale * value_error.sum()
+            value_bias_gradient = value_scale * huber_gradient.sum()
 
         if config.l2_weight > 0.0:
             total_loss += config.l2_weight * (
@@ -5306,7 +5401,15 @@ def _phase1a_batch_step(
         )
         training_state.value_weight = next_value_weight
         training_state.value_bias = next_value_bias
-        return _Phase1ABatchStepResult(total_loss=float(total_loss), numerics=numerics)
+        return _Phase1ABatchStepResult(
+            joint_ce_loss=float(joint_loss.item()),
+            aux_value_loss_raw=float(value_loss.item()),
+            aux_value_loss_weighted=float(aux_value_loss_weighted),
+            total_loss=float(total_loss),
+            action_logit_abs_max=action_logit_abs_max,
+            action_entropy=action_entropy,
+            numerics=numerics,
+        )
 
     raise TypeError(f"unsupported backend for phase1a batch step: {type(backend)!r}")
 
@@ -5409,6 +5512,30 @@ def _phase1a_clip_value_gradients_torch(
     return clipped_weight, clipped_bias, pre_clip_norm, post_clip_norm, True
 
 
+def _huber_loss_numpy(errors: np.ndarray, *, delta: float) -> float:
+    abs_error = np.abs(errors)
+    quadratic = np.minimum(abs_error, delta)
+    linear = abs_error - quadratic
+    return float(np.mean(0.5 * np.square(quadratic) + (delta * linear)))
+
+
+def _huber_gradient_numpy(errors: np.ndarray, *, delta: float) -> np.ndarray:
+    abs_error = np.abs(errors)
+    return np.where(abs_error <= delta, errors, delta * np.sign(errors))
+
+
+def _huber_loss_torch(torch_module: Any, errors: Any, *, delta: float) -> Any:
+    abs_error = torch_module.abs(errors)
+    quadratic = torch_module.minimum(abs_error, torch_module.full_like(abs_error, delta))
+    linear = abs_error - quadratic
+    return torch_module.mean((0.5 * quadratic * quadratic) + (delta * linear))
+
+
+def _huber_gradient_torch(torch_module: Any, errors: Any, *, delta: float) -> Any:
+    delta_tensor = torch_module.full_like(errors, delta)
+    return torch_module.where(torch_module.abs(errors) <= delta_tensor, errors, delta_tensor * torch_module.sign(errors))
+
+
 def _phase1a_parameters(
     *,
     backend: _LinearTrainingBackend,
@@ -5509,6 +5636,16 @@ def _softmax_matrix(logits: np.ndarray) -> np.ndarray:
     shifted = logits - np.max(logits, axis=1, keepdims=True)
     exps = np.exp(shifted)
     return exps / np.sum(exps, axis=1, keepdims=True)
+
+
+def _categorical_entropy(probabilities: np.ndarray) -> float:
+    safe = np.clip(probabilities, 1.0e-12, 1.0)
+    return float(np.mean(-np.sum(safe * np.log(safe), axis=1)))
+
+
+def _categorical_entropy_torch(torch_module: Any, probabilities: Any) -> float:
+    safe = torch_module.clamp(probabilities, min=1.0e-12, max=1.0)
+    return float(torch_module.mean(-torch_module.sum(safe * torch_module.log(safe), dim=1)).item())
 
 
 def _cross_entropy_loss(probabilities: np.ndarray, labels: np.ndarray) -> float:

@@ -22,6 +22,12 @@ _SUMMARY_KEYS = (
     "batch_compute_wall_sec",
     "batch_compute_share",
     "evaluation_rows_per_sec",
+    "joint_ce_loss",
+    "aux_value_loss_raw",
+    "aux_value_loss_weighted",
+    "total_loss",
+    "action_logit_abs_max",
+    "action_entropy",
     "value_pred_abs_max",
     "value_grad_norm_pre_clip",
     "value_grad_norm_post_clip",
@@ -91,6 +97,12 @@ def _build_summary(stages: dict[str, dict[str, object]]) -> dict[str, object]:
     if "evaluation_rows_per_sec" in evaluate:
         summary["evaluation_rows_per_sec"] = evaluate["evaluation_rows_per_sec"]
     for key in (
+        "joint_ce_loss",
+        "aux_value_loss_raw",
+        "aux_value_loss_weighted",
+        "total_loss",
+        "action_logit_abs_max",
+        "action_entropy",
         "value_pred_abs_max",
         "value_grad_norm_pre_clip",
         "value_grad_norm_post_clip",

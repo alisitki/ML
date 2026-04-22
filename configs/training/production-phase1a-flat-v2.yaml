@@ -82,6 +82,6 @@ trainer:
   preferred_size_band: micro
   preferred_leverage_band: low
   bootstrap_horizon_steps: 4
-  aux_value_loss_weight: 0.25
+  aux_value_loss_weight: 0.001
   policy_state_feature_version: policy_state_features_v2_phase1a
   joint_action_vocabulary_version: joint_action_vocabulary_v2_phase1a

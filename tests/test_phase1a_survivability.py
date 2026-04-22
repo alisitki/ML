@@ -233,6 +233,12 @@ def test_phase1a_train_and_evaluate_merge_profile_and_write_partial_outputs(
     assert profile["summary"]["jsonl_fallback_used"] is False
     assert profile["summary"]["batch_compute_wall_sec"] >= 0.0
     assert profile["summary"]["evaluation_rows_per_sec"] > 0.0
+    assert profile["summary"]["joint_ce_loss"] >= 0.0
+    assert profile["summary"]["aux_value_loss_raw"] >= 0.0
+    assert profile["summary"]["aux_value_loss_weighted"] >= 0.0
+    assert profile["summary"]["total_loss"] >= 0.0
+    assert profile["summary"]["action_logit_abs_max"] >= 0.0
+    assert profile["summary"]["action_entropy"] >= 0.0
     assert profile["summary"]["value_pred_abs_max"] >= 0.0
     assert profile["summary"]["value_grad_norm_pre_clip"] >= profile["summary"]["value_grad_norm_post_clip"] >= 0.0
     assert profile["summary"]["clip_applied_count"] >= 0

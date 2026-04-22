@@ -271,10 +271,16 @@ def test_phase1a_training_summary_records_bootstrap_metadata(phase1a_policy_arti
     assert summary.get("bootstrap_horizon_steps") == 4
     assert summary.get("joint_action_vocabulary_version") == "joint_action_vocabulary_v2_phase1a"
     assert summary.get("policy_state_feature_version") == "policy_state_features_v2_phase1a"
-    assert summary.get("aux_value_loss_weight") == 0.25
+    assert summary.get("aux_value_loss_weight") == 0.001
     assert summary.get("oracle_source_row_count", 0) > 0
     assert summary.get("oracle_masked_row_count", 0) > 0
     assert summary.get("oracle_label_coverage_ratio", 0.0) < 1.0
+    assert summary.get("joint_ce_loss", -1.0) >= 0.0
+    assert summary.get("aux_value_loss_raw", -1.0) >= 0.0
+    assert summary.get("aux_value_loss_weighted", -1.0) >= 0.0
+    assert summary.get("total_loss", -1.0) >= 0.0
+    assert summary.get("action_logit_abs_max", -1.0) >= 0.0
+    assert 0.0 <= summary.get("action_entropy", -1.0) <= math.log(9.0)
     assert summary.get("value_pred_abs_max", -1.0) >= 0.0
     assert summary.get("value_grad_norm_pre_clip", -1.0) >= summary.get("value_grad_norm_post_clip", -1.0) >= 0.0
     assert summary.get("clip_applied_count", -1) >= 0
