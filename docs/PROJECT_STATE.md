@@ -64,6 +64,7 @@ Why:
 - registry-backed comparison-report persistence and reusable offline evidence-pack summaries
 - runtime-facing contracts and thin-executor boundary definitions
 - governance, runbook, and repo-tracked closeout-record discipline around retained proof surfaces
+- offline event-depth scaffolding via row-aligned `event_token_cache_v1` beside `tensor_cache_v1`
 
 ---
 
@@ -136,3 +137,4 @@ The following remain visible but are not the current main focus:
 - Comparison-report and offline evidence-pack tooling exist on current HEAD; neither one, by itself, upgrades offline closure to `PASS`.
 - Runtime and executor contracts exist as governance and artifact surfaces. They are not the same thing as a live selector daemon plus executor loop.
 - Commercialization gates are defined, but no gate above the offline side is currently operationally evidenced in this repository.
+- `event_token_cache_v1` now exists on current `HEAD` as an offline-only additive data-depth artifact. It does not yet mean the model/runtime path is event-aware, and it does not change current Phase 1A semantics.

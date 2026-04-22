@@ -69,6 +69,13 @@ Use:
 ### Rule
 Learning surface and split policy are anchored on `event_time`, not `ingest_time`.
 
+For `event_token_cache_v1`, same-timestamp deterministic ordering is:
+
+- `(event_time, source_label, source_event_index)`
+
+This provides deterministic replay order.
+It does not claim causal priority beyond that ordering.
+
 ## 4. Identity axes
 
 The core learning surface must preserve these axes:
@@ -126,6 +133,25 @@ Required field family:
 - `event_delta`
 - `count_or_burst`
 
+Field freeze:
+
+- `price`
+  - current trade execution price
+  - raw, unnormalized
+- `qty`
+  - current matched trade quantity
+  - raw, unnormalized
+- `side_or_signed_flow_proxy`
+  - `qty_t * side_sign_t`
+  - engineered, unnormalized
+- `event_delta`
+  - `price_t - price_{t-1}` on the same `(exchange, symbol, trade)` lane after dedup and authoritative ordering
+  - engineered, unnormalized
+- `count_or_burst`
+  - running size of the contiguous same-lane burst ending at `t`
+  - burst resets when inter-arrival gap `> 250ms`
+  - engineered, unnormalized integer-as-float
+
 ### BBO
 Required field family:
 
@@ -136,6 +162,30 @@ Required field family:
 - `spread`
 - `mid`
 - `imbalance_inputs`
+
+Field freeze:
+
+- `bid_price`
+  - current best bid
+  - raw, unnormalized
+- `ask_price`
+  - current best ask
+  - raw, unnormalized
+- `bid_size`
+  - current displayed top-of-book bid size
+  - raw, unnormalized
+- `ask_size`
+  - current displayed top-of-book ask size
+  - raw, unnormalized
+- `spread`
+  - `ask_price - bid_price`
+  - engineered, unnormalized
+- `mid`
+  - `(bid_price + ask_price) / 2`
+  - engineered, unnormalized
+- `imbalance_inputs`
+  - `(bid_size - ask_size) / max(bid_size + ask_size, 1e-12)`
+  - engineered, normalized
 
 ### Mark price
 Required field family:
@@ -201,6 +251,9 @@ Rules:
 - bucket semantics must be deterministic and documented
 
 Multi-scale windows are allowed and expected.
+
+Parallel offline event windows are also allowed when explicitly versioned.
+They must preserve raw event order, duplicate handling, unsupported-vs-empty semantics, and replayable row alignment.
 
 ## 11. Compact-source discovery
 

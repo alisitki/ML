@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from quantlab_ml.common import current_code_commit_hash, dump_json_data, load_model, load_yaml, utcnow
+from quantlab_ml.common import current_code_commit_hash, dump_json_data, hash_payload, load_model, load_yaml, utcnow
 from quantlab_ml.contracts import (
     ComparisonReport,
     EvaluationReport,
@@ -18,11 +18,13 @@ from quantlab_ml.contracts import (
 )
 from quantlab_ml.registry.bundle_integrity import inspect_retained_bundle
 from quantlab_ml.registry.store import LocalRegistryStore
+from quantlab_ml.trajectories.event_token_cache import read_event_token_cache_manifest
 from quantlab_ml.trajectories.tensor_cache import read_tensor_cache_manifest
 
 _MANIFEST_FILENAME = "bundle_manifest.json"
 _SHA256SUMS_FILENAME = "SHA256SUMS"
 _TENSOR_CACHE_SUMMARY_FILENAME = "tensor_cache_manifest.summary.json"
+_EVENT_TOKEN_CACHE_SUMMARY_FILENAME = "event_token_cache_manifest.summary.json"
 _DEFAULT_AUTHORITY_NOTE = (
     "derived from a controlled remote run; retained copy remains external-retained-evidence "
     "and is not relabeled authoritative evidence"
@@ -65,6 +67,7 @@ def build_retained_bundle_manifest(
     score = _maybe_load_model(resolved_bundle_root / "score.json", PolicyScore)
     inference_artifact = _maybe_load_model(resolved_bundle_root / "inference_artifact.json", InferenceArtifactExport)
 
+    trajectory_summary = _trajectory_summary(resolved_bundle_root / "trajectories")
     manifest = {
         "retained_bundle_kind": retained_bundle_kind,
         "retained_bundle_authority_note": retained_bundle_authority_note,
@@ -89,7 +92,7 @@ def build_retained_bundle_manifest(
         "score_summary": _score_summary(score),
         "inference_artifact_summary": _inference_artifact_summary(inference_artifact),
         "inspect_s3_summary": _inspect_s3_summary(resolved_bundle_root / "inspect_s3.json"),
-        "trajectory_summary": _trajectory_summary(resolved_bundle_root / "trajectories"),
+        "trajectory_summary": trajectory_summary,
         "registry_summary": _registry_summary(store) if store is not None else None,
         "same_root_proof_summary": _same_root_proof_summary(store) if store is not None else None,
         "instance_metadata": _instance_metadata(instance_metadata_path),
@@ -98,6 +101,11 @@ def build_retained_bundle_manifest(
         "copied_files": _copied_files(resolved_bundle_root),
         "hardlink_map": _hardlink_map(resolved_bundle_root),
     }
+    if trajectory_summary is not None:
+        if "event_token_cache_manifest_hash" in trajectory_summary:
+            manifest["event_token_cache_manifest_hash"] = trajectory_summary["event_token_cache_manifest_hash"]
+        if "tensor_cache_manifest_hash" in trajectory_summary:
+            manifest["tensor_cache_manifest_hash"] = trajectory_summary["tensor_cache_manifest_hash"]
     manifest = _attach_bundle_integrity_metadata(manifest, resolved_bundle_root)
     return {key: value for key, value in manifest.items() if value not in (None, [], {})}
 
@@ -256,8 +264,12 @@ def _trajectory_summary(trajectories_root: Path) -> dict[str, Any] | None:
     }
     cache_manifest_path = trajectories_root / "tensor_cache_v1" / "tensor_cache_manifest.json"
     cache_summary_path = trajectories_root / "tensor_cache_v1" / _TENSOR_CACHE_SUMMARY_FILENAME
+    event_cache_manifest_path = trajectories_root / "event_token_cache_v1" / "event_token_cache_manifest.json"
+    event_cache_summary_path = trajectories_root / "event_token_cache_v1" / _EVENT_TOKEN_CACHE_SUMMARY_FILENAME
     if cache_manifest_path.exists():
+        cache_manifest_payload = json.loads(cache_manifest_path.read_text(encoding="utf-8"))
         cache_manifest = read_tensor_cache_manifest(trajectories_root)
+        summary["tensor_cache_manifest_hash"] = hash_payload(cache_manifest_payload)
         summary["tensor_cache_feature_dtype"] = cache_manifest.feature_dtype
         summary["tensor_cache_feature_dim"] = cache_manifest.feature_dim
         summary["tensor_cache_split_shard_counts"] = {
@@ -272,6 +284,35 @@ def _trajectory_summary(trajectories_root: Path) -> dict[str, Any] | None:
         summary["tensor_cache_feature_dim"] = cache_summary.get("feature_dim")
         summary["tensor_cache_split_shard_counts"] = cache_summary.get("split_shard_counts", {})
         summary["tensor_cache_split_row_counts"] = cache_summary.get("split_row_counts", {})
+    if event_cache_manifest_path.exists():
+        event_cache_manifest_payload = json.loads(event_cache_manifest_path.read_text(encoding="utf-8"))
+        event_cache_manifest = read_event_token_cache_manifest(trajectories_root)
+        summary["event_token_cache_manifest_hash"] = hash_payload(event_cache_manifest_payload)
+        summary["event_token_cache_contract_version"] = event_cache_manifest.event_window_contract_version
+        summary["event_token_cache_tokenizer_version"] = event_cache_manifest.tokenizer_version
+        summary["event_token_cache_token_cap"] = event_cache_manifest.token_cap
+        summary["event_token_cache_lookback_seconds"] = event_cache_manifest.lookback_seconds
+        summary["event_token_cache_split_shard_counts"] = {
+            split_name: split_manifest.shard_count
+            for split_name, split_manifest in event_cache_manifest.splits.items()
+        }
+        summary["event_token_cache_split_row_counts"] = {
+            split_name: split_manifest.row_count
+            for split_name, split_manifest in event_cache_manifest.splits.items()
+        }
+        summary["event_token_cache_split_token_counts"] = {
+            split_name: split_manifest.token_count
+            for split_name, split_manifest in event_cache_manifest.splits.items()
+        }
+    elif event_cache_summary_path.exists():
+        event_cache_summary = json.loads(event_cache_summary_path.read_text(encoding="utf-8"))
+        summary["event_token_cache_contract_version"] = event_cache_summary.get("event_window_contract_version")
+        summary["event_token_cache_tokenizer_version"] = event_cache_summary.get("tokenizer_version")
+        summary["event_token_cache_token_cap"] = event_cache_summary.get("token_cap")
+        summary["event_token_cache_lookback_seconds"] = event_cache_summary.get("lookback_seconds")
+        summary["event_token_cache_split_shard_counts"] = event_cache_summary.get("split_shard_counts", {})
+        summary["event_token_cache_split_row_counts"] = event_cache_summary.get("split_row_counts", {})
+        summary["event_token_cache_split_token_counts"] = event_cache_summary.get("split_token_counts", {})
     return summary
 
 

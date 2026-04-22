@@ -96,15 +96,20 @@ Result:
 ### QL-033
 
 - label: `OFFLINE_EXPANSION`
-- status: `blocked`
+- status: `in_progress`
 - title: Expand research/evidence surface without weakening closure discipline
 - why_open:
   - search, architecture, and evaluation expansion are valid later offline work
   - they should not be used to paper over unresolved continuity or truth gaps
+- current_scope:
+  - `Phase A` and `Phase B` are now implemented as an additive offline-only event-depth surface
+  - current `HEAD` now writes `event_token_cache_v1` beside `tensor_cache_v1`
+  - `Phase C` stays gated until the proof slice shows the cache is replayable, stable, and informative
 - evidence_needed:
   - explicit acceptance criteria per expansion item
 - done_when:
-  - expansion work is scoped as additive offline research rather than fake closure
+  - expansion work remains additive offline research rather than fake closure
+  - `event_token_cache_v1` proof-slice evidence is strong enough to justify offline model/eval adaptation without changing Phase 1A semantics at the same time
 
 ---
 

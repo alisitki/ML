@@ -13,7 +13,7 @@ from typing import Any, Literal, cast
 
 import numpy as np
 
-from quantlab_ml.common import dump_json_data
+from quantlab_ml.common import dump_json_data, hash_payload
 from quantlab_ml.contracts import (
     ActionFeasibilitySurface,
     ActionSpaceSpec,
@@ -54,6 +54,16 @@ from quantlab_ml.trajectories.tensor_cache import (
     write_tensor_cache_diagnostics_atomic,
     write_tensor_cache_manifest_atomic,
 )
+from quantlab_ml.trajectories.event_token_cache import (
+    DEFAULT_EVENT_TOKEN_CACHE_SHARD_TARGET_BYTES,
+    EventTokenCacheSplitWriter,
+    write_event_token_cache_diagnostics_atomic,
+    write_event_token_cache_manifest_atomic,
+)
+from quantlab_ml.contracts import (
+    EventTokenCacheDiagnosticsManifest,
+    EventTokenCacheManifest,
+)
 
 TRAJECTORY_BUILD_DIAGNOSTICS_FILENAME = "trajectory_build_diagnostics.json"
 
@@ -84,11 +94,20 @@ class _CompactEvent:
     For 43 M events (controlled-remote-day): ~22 GB vs ~45 GB.
     """
 
-    __slots__ = ("event_time_ts", "fields")
+    __slots__ = ("event_time_ts", "fields", "source_label_id", "source_event_index")
 
-    def __init__(self, event_time_ts: float, fields: dict[str, float]) -> None:
+    def __init__(
+        self,
+        event_time_ts: float,
+        fields: dict[str, float],
+        *,
+        source_label_id: int = 0,
+        source_event_index: int = 0,
+    ) -> None:
         self.event_time_ts: float = event_time_ts
         self.fields: dict[str, float] = fields
+        self.source_label_id: int = source_label_id
+        self.source_event_index: int = source_event_index
 
 
 # Each index bucket stores a sorted numpy timestamp array paired with the
@@ -149,7 +168,7 @@ class TrajectoryBuilder:
         build_to_directory() for production builds.
         """
         self._reset_diagnostics()
-        indexed, event_count, history_start_from_events = self._index_events(events)
+        indexed, event_count, history_start_from_events, _ = self._index_events(events)
         history_start = history_start_from_events or self.dataset_spec.train_range.start
         logger.info(
             "trajectory_build_started slice_id=%s event_count=%d symbol_count=%d exchange_count=%d",
@@ -223,7 +242,7 @@ class TrajectoryBuilder:
         # Avoid circular import (streaming_store imports contracts, not builder)
         from quantlab_ml.trajectories.streaming_store import TrajectoryDirectoryStore
 
-        indexed, event_count, history_start_from_events = self._index_events(events)
+        indexed, event_count, history_start_from_events, source_labels = self._index_events(events)
         history_start = history_start_from_events or self.dataset_spec.train_range.start
         logger.info(
             "trajectory_build_started slice_id=%s event_count=%d symbol_count=%d exchange_count=%d",
@@ -260,6 +279,8 @@ class TrajectoryBuilder:
         split_write_stats: dict[str, TrajectorySplitStats] = {}
         tensor_cache_diagnostics: dict[str, Any] = {}
         tensor_cache_splits: dict[str, TensorCacheSplitManifest] = {}
+        event_token_cache_diagnostics: dict[str, Any] = {}
+        event_token_cache_splits: dict[str, Any] = {}
         for split_name, split_range in zip(split_names, split_ranges):
             logger.info("building_split split=%s", split_name)
             records_iter = self._build_split_iter(split_name, split_range, indexed, history_start)
@@ -271,23 +292,40 @@ class TrajectoryBuilder:
                 venue_choices=self.dataset_spec.exchanges,
                 shard_target_bytes=DEFAULT_TENSOR_CACHE_SHARD_TARGET_BYTES,
             )
+            event_token_writer = EventTokenCacheSplitWriter(
+                directory=output_dir,
+                split_name=split_name,
+                dataset_spec=self.dataset_spec,
+                indexed=indexed,
+                source_labels=source_labels,
+                shard_target_bytes=DEFAULT_EVENT_TOKEN_CACHE_SHARD_TARGET_BYTES,
+            )
 
             def _tapped_records() -> Iterator[TrajectoryRecord]:
                 for record in records_iter:
                     tensor_writer.consume_record(record)
+                    event_token_writer.consume_record(record)
                     yield record
 
             rec_count, step_count = TrajectoryDirectoryStore.write_split(
                 output_dir, split_name, _tapped_records()
             )
             split_cache_manifest = tensor_writer.finalize()
+            split_event_cache_manifest = event_token_writer.finalize()
             if split_cache_manifest.row_count != step_count:
                 raise ValueError(
                     f"tensor cache row count mismatch for split={split_name!r}: "
                     f"cache_rows={split_cache_manifest.row_count}, split_steps={step_count}"
                 )
+            if split_event_cache_manifest.row_count != step_count:
+                raise ValueError(
+                    f"event token cache row count mismatch for split={split_name!r}: "
+                    f"cache_rows={split_event_cache_manifest.row_count}, split_steps={step_count}"
+                )
             tensor_cache_splits[split_name] = split_cache_manifest
             tensor_cache_diagnostics[split_name] = tensor_writer.diagnostics()
+            event_token_cache_splits[split_name] = split_event_cache_manifest
+            event_token_cache_diagnostics[split_name] = event_token_writer.diagnostics()
             split_write_stats[split_name] = TrajectorySplitStats(
                 record_count=rec_count,
                 step_count=step_count,
@@ -301,25 +339,75 @@ class TrajectoryBuilder:
 
         manifest = manifest.model_copy(update={"split_write_stats": split_write_stats})
         TrajectoryDirectoryStore.write_manifest(output_dir, manifest)
-        dump_json_data(trajectory_build_diagnostics_path(output_dir), self._build_diagnostics_manifest())
+        trajectory_manifest_hash = hash_payload(manifest)
 
-        write_tensor_cache_manifest_atomic(
-            output_dir,
-            TensorCacheManifest(
-                feature_dtype="float32",
-                feature_dim=feature_dim,
-                shard_target_bytes=DEFAULT_TENSOR_CACHE_SHARD_TARGET_BYTES,
-                splits=tensor_cache_splits,
-            ),
+        tensor_cache_manifest = TensorCacheManifest(
+            feature_dtype="float32",
+            feature_dim=feature_dim,
+            shard_target_bytes=DEFAULT_TENSOR_CACHE_SHARD_TARGET_BYTES,
+            splits=tensor_cache_splits,
         )
+        write_tensor_cache_manifest_atomic(output_dir, tensor_cache_manifest)
         write_tensor_cache_diagnostics_atomic(
             output_dir,
             TensorCacheDiagnosticsManifest(splits=tensor_cache_diagnostics),
         )
+        tensor_cache_manifest_hash = hash_payload(tensor_cache_manifest)
+        event_token_cache_manifest = EventTokenCacheManifest(
+            trajectory_manifest_hash=trajectory_manifest_hash,
+            tensor_cache_manifest_hash=tensor_cache_manifest_hash,
+            dataset_hash=self.dataset_spec.dataset_hash,
+            lookback_seconds=60,
+            token_cap=256,
+            recency_reserve_count=64,
+            burst_reserve_count=48,
+            burst_gap_ms=250,
+            stale_after_seconds=180,
+            stream_order=["trade", "bbo"],
+            exchange_order=list(self.dataset_spec.exchanges),
+            symbol_order=list(self.dataset_spec.symbols),
+            source_labels=source_labels,
+            payload_schema_catalog={
+                "trade_payload_v1": {
+                    "payload_schema_id": 1,
+                    "field_order": [
+                        "price",
+                        "qty",
+                        "side_or_signed_flow_proxy",
+                        "event_delta",
+                        "count_or_burst",
+                    ],
+                },
+                "bbo_payload_v1": {
+                    "payload_schema_id": 2,
+                    "field_order": [
+                        "bid_price",
+                        "ask_price",
+                        "bid_size",
+                        "ask_size",
+                        "spread",
+                        "mid",
+                        "imbalance_inputs",
+                    ],
+                },
+            },
+            splits=event_token_cache_splits,
+        )
+        write_event_token_cache_manifest_atomic(output_dir, event_token_cache_manifest)
+        write_event_token_cache_diagnostics_atomic(
+            output_dir,
+            EventTokenCacheDiagnosticsManifest(splits=event_token_cache_diagnostics),
+        )
+        self._event_token_split_summary = {
+            split_name: diagnostics.model_dump(mode="json")
+            for split_name, diagnostics in event_token_cache_diagnostics.items()
+        }
+        dump_json_data(trajectory_build_diagnostics_path(output_dir), self._build_diagnostics_manifest())
         logger.info(
             "trajectory_build_completed slice_id=%s total_records=%d total_steps=%d "
             "fold_count=%d output_dir=%s tensor_cache_format=%s cache_feature_dtype=%s "
-            "cache_feature_dim=%d tensor_cache_shard_count=%d",
+            "cache_feature_dim=%d tensor_cache_shard_count=%d event_token_cache_format=%s "
+            "event_token_cache_shard_count=%d",
             self.dataset_spec.slice_id,
             total_records,
             total_steps,
@@ -329,6 +417,8 @@ class TrajectoryBuilder:
             "float32",
             feature_dim,
             sum(split.shard_count for split in tensor_cache_splits.values()),
+            "event_token_cache_v1",
+            sum(split.shard_count for split in event_token_cache_splits.values()),
         )
         return manifest
 
@@ -1030,7 +1120,7 @@ class TrajectoryBuilder:
 
     def _index_events(
         self, events: Iterable[NormalizedMarketEvent]
-    ) -> tuple[_Index, int, datetime | None]:
+    ) -> tuple[_Index, int, datetime | None, list[str]]:
         """Index events as compact (event_time_ts, fields) objects.
 
         Each raw NormalizedMarketEvent is converted to a _CompactEvent
@@ -1054,17 +1144,29 @@ class TrajectoryBuilder:
         """
         # --- pass 1: accumulate per-bucket parallel lists ---
         tmp_times: dict[tuple[str, str, str], list[float]] = defaultdict(list)
+        tmp_source_label_ids: dict[tuple[str, str, str], list[int]] = defaultdict(list)
+        tmp_source_event_indices: dict[tuple[str, str, str], list[int]] = defaultdict(list)
         tmp_events: dict[tuple[str, str, str], list[_CompactEvent]] = defaultdict(list)
         count = 0
         min_time_ts: float | None = None
+        source_label_to_id: dict[str, int] = {}
+        source_labels: list[str] = []
         for event in events:
             et_ts = event.event_time.timestamp()
+            source_label = str(event.ingest_metadata.get("source", "<unknown>"))
+            source_label_id = source_label_to_id.setdefault(source_label, len(source_labels))
+            if source_label_id == len(source_labels):
+                source_labels.append(source_label)
             compact = _CompactEvent(
                 event_time_ts=et_ts,
                 fields=dict(event.fields),
+                source_label_id=source_label_id,
+                source_event_index=int(event.ingest_metadata.get("source_event_index", count)),
             )
             key = (event.symbol, event.exchange, event.stream_type)
             tmp_times[key].append(et_ts)
+            tmp_source_label_ids[key].append(source_label_id)
+            tmp_source_event_indices[key].append(compact.source_event_index)
             tmp_events[key].append(compact)
             count += 1
             if min_time_ts is None or et_ts < min_time_ts:
@@ -1074,15 +1176,18 @@ class TrajectoryBuilder:
         indexed: _Index = {}
         for key in tmp_times:
             times_list = tmp_times[key]
+            source_label_ids_list = tmp_source_label_ids[key]
+            source_event_indices_list = tmp_source_event_indices[key]
             evs_list = tmp_events[key]
-            # sort ascending by timestamp (in-place via argsort on numpy)
             times_arr = np.array(times_list, dtype=np.float64)
-            sort_idx = np.argsort(times_arr, kind="stable")
+            source_label_ids_arr = np.array(source_label_ids_list, dtype=np.int64)
+            source_event_indices_arr = np.array(source_event_indices_list, dtype=np.int64)
+            sort_idx = np.lexsort((source_event_indices_arr, source_label_ids_arr, times_arr))
             frozen_times = times_arr[sort_idx]
             sorted_events = [evs_list[i] for i in sort_idx]
             indexed[key] = (frozen_times, sorted_events)
 
-        del tmp_times, tmp_events
+        del tmp_times, tmp_source_label_ids, tmp_source_event_indices, tmp_events
         gc.collect()
 
         min_time = (
@@ -1090,7 +1195,7 @@ class TrajectoryBuilder:
             if min_time_ts is not None
             else None
         )
-        return indexed, count, min_time
+        return indexed, count, min_time, source_labels
 
     def _reset_diagnostics(self) -> None:
         self._split_window_eligibility: dict[str, dict[str, Any]] = {}
@@ -1098,6 +1203,7 @@ class TrajectoryBuilder:
         self._raw_surface_mask_counts: dict[str, dict[str, dict[str, dict[str, int]]]] = defaultdict(
             lambda: defaultdict(lambda: defaultdict(dict))
         )
+        self._event_token_split_summary: dict[str, Any] = {}
 
     def _record_split_window_eligibility(self, split_name: str, timestamp_count: int) -> None:
         usable_steps = max(timestamp_count - self.reward_spec.horizon_steps, 0)
@@ -1228,6 +1334,7 @@ class TrajectoryBuilder:
             "structural_sparsity": self._structural_sparsity_manifest(),
             "split_window_eligibility": self._split_window_eligibility,
             "raw_surface_mask_summary": raw_surface_mask_summary,
+            "event_window_summary": self._event_token_split_summary,
         }
 
 

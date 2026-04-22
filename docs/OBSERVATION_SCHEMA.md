@@ -13,6 +13,7 @@ This is the canonical reference for:
 
 Canonical version id:
 - observation schema version -> `observation_schema_v1`
+- event window contract version -> `event_window_contract_v1`
 
 ## 1. Core principle
 
@@ -131,6 +132,30 @@ Venue-pair spread in v1 is full pairwise across available venues for the target 
 
 Allowed derived families do not imply default dependence.
 Support for these channels does not elevate them to the core/default observation path by itself.
+
+## 9. Parallel event window
+
+`observation_schema_v1` remains the authoritative coarse snapshot surface.
+
+Current `HEAD` also supports a parallel offline-only sibling artifact:
+
+- `event_token_cache_v1`
+
+Rules:
+
+- it is row-aligned to existing decision rows
+- it does not replace `observation_schema_v1`
+- it does not change current decision cadence
+- it is the first serious data-depth step, not the final ceiling
+- cadence redesign remains a separate later research question
+
+Current implemented event-window scope:
+
+- window: `[decision_timestamp - 60s, decision_timestamp]`
+- token cap: `256`
+- streams: `trade`, `bbo`
+- unsupported lanes stay authoritative in snapshot masks rather than being synthesized into fake event emptiness
+- ordering is anchored on `event_time` with deterministic tie-break `(event_time, source_label, source_event_index)`
 
 ## 10. Mask semantics
 

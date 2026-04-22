@@ -41,6 +41,8 @@ def test_build_to_directory_writes_sparsity_and_policy_state_diagnostics(
     assert build_diag["structural_sparsity"]["field_total"] > 0
     assert build_diag["split_window_eligibility"]["train"]["usable_steps_per_symbol"] > 0
     assert build_diag["raw_surface_mask_summary"]["train"]["observation_count"] > 0
+    assert "event_window_summary" in build_diag
+    assert build_diag["event_window_summary"]["train"]["row_count"] == manifest.split_write_stats["train"].step_count
 
     validation_diag = cache_diag.splits["validation"]
     assert validation_diag.empirical_sparsity.row_count == manifest.split_write_stats["validation"].step_count

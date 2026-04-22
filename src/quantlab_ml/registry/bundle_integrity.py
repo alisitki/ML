@@ -7,12 +7,19 @@ from typing import Literal
 from pydantic import Field
 
 from quantlab_ml.common import current_code_commit_hash, dump_json_data, utcnow
+from quantlab_ml.contracts import EventTokenCacheManifest
 from quantlab_ml.contracts.common import QuantBaseModel
 from quantlab_ml.registry.bundle_errors import (
+    DanglingEventTokenCacheManifestError,
     DanglingTensorCacheManifestError,
     Phase0EmpiricalClosureUnsupportedError,
 )
 from quantlab_ml.trajectories.streaming_store import TrajectoryDirectoryStore
+from quantlab_ml.trajectories.event_token_cache import (
+    event_token_cache_manifest_path,
+    event_token_cache_payload_status,
+    read_event_token_cache_manifest,
+)
 from quantlab_ml.trajectories.tensor_cache import (
     TensorCacheManifest,
     read_tensor_cache_manifest,
@@ -24,6 +31,7 @@ BundlePayloadClass = Literal["full", "slim"]
 _BUNDLE_MANIFEST_FILENAME = "bundle_manifest.json"
 _NORMALIZATION_RECEIPT_FILENAME = "normalization_receipt.json"
 _TENSOR_CACHE_SUMMARY_FILENAME = "tensor_cache_manifest.summary.json"
+_EVENT_TOKEN_CACHE_SUMMARY_FILENAME = "event_token_cache_manifest.summary.json"
 
 
 class TrajectoryDirectoryIntegrityReport(QuantBaseModel):
@@ -32,6 +40,7 @@ class TrajectoryDirectoryIntegrityReport(QuantBaseModel):
     supports_phase0_empirical_closure: bool
     split_jsonl_presence: dict[str, bool] = Field(default_factory=dict)
     tensor_cache_status: dict[str, object] = Field(default_factory=dict)
+    event_token_cache_status: dict[str, object] = Field(default_factory=dict)
     blocking_reasons: list[str] = Field(default_factory=list)
 
 
@@ -58,12 +67,15 @@ def inspect_trajectory_directory(directory: Path) -> TrajectoryDirectoryIntegrit
             for split_name in manifest.split_names
         }
     cache_status = tensor_cache_payload_status(resolved_directory)
+    event_cache_status = event_token_cache_payload_status(resolved_directory)
     has_any_split_jsonl = any(split_presence.values())
     has_complete_tensor_cache = bool(cache_status.payload_complete)
     replayable = has_any_split_jsonl or has_complete_tensor_cache
     blocking_reasons: list[str] = []
     if cache_status.manifest_present and not cache_status.payload_complete:
         blocking_reasons.append("dangling_tensor_cache_manifest")
+    if event_cache_status.manifest_present and not event_cache_status.payload_complete:
+        blocking_reasons.append("dangling_event_token_cache_manifest")
     if not replayable:
         blocking_reasons.append("phase0_empirical_closure_unsupported")
     return TrajectoryDirectoryIntegrityReport(
@@ -72,6 +84,7 @@ def inspect_trajectory_directory(directory: Path) -> TrajectoryDirectoryIntegrit
         supports_phase0_empirical_closure=replayable,
         split_jsonl_presence=split_presence,
         tensor_cache_status=cache_status.model_dump(mode="json"),
+        event_token_cache_status=event_cache_status.model_dump(mode="json"),
         blocking_reasons=blocking_reasons,
     )
 
@@ -94,6 +107,12 @@ def validate_retained_bundle(bundle_root: Path) -> TrajectoryDirectoryIntegrityR
             bundle_payload_class=report.bundle_payload_class,
             bundle_root=bundle_root,
         )
+    if "dangling_event_token_cache_manifest" in report.blocking_reasons:
+        raise DanglingEventTokenCacheManifestError(
+            detail="retained bundle contains event_token_cache_manifest.json references without readable shard payloads",
+            bundle_payload_class=report.bundle_payload_class,
+            bundle_root=bundle_root,
+        )
     if report.bundle_payload_class == "full" and report.split_jsonl_presence and not all(report.split_jsonl_presence.values()):
         missing_splits = sorted(
             split_name
@@ -107,12 +126,20 @@ def validate_retained_bundle(bundle_root: Path) -> TrajectoryDirectoryIntegrityR
     return report
 
 
-def infer_bundle_payload_error_for_directory(directory: Path) -> DanglingTensorCacheManifestError | Phase0EmpiricalClosureUnsupportedError | None:
+def infer_bundle_payload_error_for_directory(
+    directory: Path,
+) -> DanglingTensorCacheManifestError | DanglingEventTokenCacheManifestError | Phase0EmpiricalClosureUnsupportedError | None:
     report = inspect_trajectory_directory(directory)
     resolved_directory = directory.expanduser().resolve()
     if "dangling_tensor_cache_manifest" in report.blocking_reasons:
         return DanglingTensorCacheManifestError(
             detail="trajectory directory contains tensor_cache_manifest.json references without readable shard payloads",
+            bundle_payload_class=report.bundle_payload_class,
+            bundle_root=resolved_directory,
+        )
+    if "dangling_event_token_cache_manifest" in report.blocking_reasons:
+        return DanglingEventTokenCacheManifestError(
+            detail="trajectory directory contains event_token_cache_manifest.json references without readable shard payloads",
             bundle_payload_class=report.bundle_payload_class,
             bundle_root=resolved_directory,
         )
@@ -127,7 +154,7 @@ def infer_bundle_payload_error_for_directory(directory: Path) -> DanglingTensorC
 
 def infer_bundle_payload_error_for_evaluation(
     evaluation_path: Path,
-) -> Phase0EmpiricalClosureUnsupportedError | DanglingTensorCacheManifestError | None:
+) -> Phase0EmpiricalClosureUnsupportedError | DanglingTensorCacheManifestError | DanglingEventTokenCacheManifestError | None:
     resolved_path = evaluation_path.expanduser().resolve()
     bundle_root = resolved_path.parent
     if not _has_retained_bundle_markers(bundle_root):
@@ -136,6 +163,12 @@ def infer_bundle_payload_error_for_evaluation(
     if report is not None and "dangling_tensor_cache_manifest" in report.blocking_reasons:
         return DanglingTensorCacheManifestError(
             detail="evaluation report belongs to a retained bundle with a dangling tensor cache manifest",
+            bundle_payload_class=report.bundle_payload_class,
+            bundle_root=bundle_root,
+        )
+    if report is not None and "dangling_event_token_cache_manifest" in report.blocking_reasons:
+        return DanglingEventTokenCacheManifestError(
+            detail="evaluation report belongs to a retained bundle with a dangling event token cache manifest",
             bundle_payload_class=report.bundle_payload_class,
             bundle_root=bundle_root,
         )
@@ -184,6 +217,14 @@ def normalize_retained_bundle(
             cache_manifest = read_tensor_cache_manifest(normalized_trajectories_root)
             summary_path = manifest_path.with_name(_TENSOR_CACHE_SUMMARY_FILENAME)
             dump_json_data(summary_path, _tensor_cache_summary(cache_manifest))
+            replacement_summary_artifacts.append(summary_path.relative_to(normalized_root).as_posix())
+            removed_dangling_files.append(manifest_path.relative_to(normalized_root).as_posix())
+            manifest_path.unlink()
+        if "dangling_event_token_cache_manifest" in normalized_report.blocking_reasons:
+            manifest_path = event_token_cache_manifest_path(normalized_trajectories_root)
+            cache_manifest = read_event_token_cache_manifest(normalized_trajectories_root)
+            summary_path = manifest_path.with_name(_EVENT_TOKEN_CACHE_SUMMARY_FILENAME)
+            dump_json_data(summary_path, _event_token_cache_summary(cache_manifest))
             replacement_summary_artifacts.append(summary_path.relative_to(normalized_root).as_posix())
             removed_dangling_files.append(manifest_path.relative_to(normalized_root).as_posix())
             manifest_path.unlink()
@@ -251,6 +292,28 @@ def _tensor_cache_summary(cache_manifest: TensorCacheManifest) -> dict[str, obje
         },
         "split_row_counts": {
             split_name: split_manifest.row_count
+            for split_name, split_manifest in cache_manifest.splits.items()
+        },
+    }
+
+
+def _event_token_cache_summary(cache_manifest: EventTokenCacheManifest) -> dict[str, object]:
+    return {
+        "format_version": cache_manifest.format_version,
+        "event_window_contract_version": cache_manifest.event_window_contract_version,
+        "tokenizer_version": cache_manifest.tokenizer_version,
+        "lookback_seconds": cache_manifest.lookback_seconds,
+        "token_cap": cache_manifest.token_cap,
+        "split_shard_counts": {
+            split_name: split_manifest.shard_count
+            for split_name, split_manifest in cache_manifest.splits.items()
+        },
+        "split_row_counts": {
+            split_name: split_manifest.row_count
+            for split_name, split_manifest in cache_manifest.splits.items()
+        },
+        "split_token_counts": {
+            split_name: split_manifest.token_count
             for split_name, split_manifest in cache_manifest.splits.items()
         },
     }

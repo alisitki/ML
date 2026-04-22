@@ -20,11 +20,15 @@ class LocalFixtureSource(MarketDataSource):
 
     def load_events(self, dataset_spec: DatasetSpec) -> Iterator[NormalizedMarketEvent]:
         events: list[NormalizedMarketEvent] = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
+        for source_event_index, line in enumerate(self.path.read_text(encoding="utf-8").splitlines()):
             if not line.strip():
                 continue
             raw = json.loads(line)
-            event = _normalize_record(raw, source_label=str(self.path))
+            event = _normalize_record(
+                raw,
+                source_label=str(self.path),
+                source_event_index=source_event_index,
+            )
             if event.exchange in dataset_spec.exchanges and event.symbol in dataset_spec.symbols:
                 if dataset_spec.stream_available(event.exchange, event.stream_type):
                     events.append(event)
@@ -45,8 +49,12 @@ class LocalParquetSource(MarketDataSource):
         events: list[NormalizedMarketEvent] = []
         for file_path in files:
             table = pq.read_table(file_path)
-            for raw in table.to_pylist():
-                event = _normalize_record(raw, source_label=str(file_path))
+            for source_event_index, raw in enumerate(table.to_pylist()):
+                event = _normalize_record(
+                    raw,
+                    source_label=str(file_path),
+                    source_event_index=source_event_index,
+                )
                 if event.exchange in dataset_spec.exchanges and event.symbol in dataset_spec.symbols:
                     if dataset_spec.stream_available(event.exchange, event.stream_type):
                         events.append(event)
@@ -305,8 +313,12 @@ class S3CompactedSource(MarketDataSource):
                     continue
                 rows.append(json.loads(line))
 
-        for raw in rows:
-            event = _normalize_record(raw, source_label=f"s3://{self.bucket}/{key}")
+        for source_event_index, raw in enumerate(rows):
+            event = _normalize_record(
+                raw,
+                source_label=f"s3://{self.bucket}/{key}",
+                source_event_index=source_event_index,
+            )
             if event.exchange in dataset_spec.exchanges and event.symbol in dataset_spec.symbols:
                 if dataset_spec.stream_available(event.exchange, event.stream_type):
                     yield event
@@ -322,7 +334,12 @@ class S3PartitionRef:
     metadata: dict[str, Any]
 
 
-def _normalize_record(record: dict[str, Any], source_label: str) -> NormalizedMarketEvent:
+def _normalize_record(
+    record: dict[str, Any],
+    source_label: str,
+    *,
+    source_event_index: int,
+) -> NormalizedMarketEvent:
     stream_type = record.get("stream_type", record.get("stream"))
     if stream_type is None:
         raise KeyError("stream_type")
@@ -339,7 +356,10 @@ def _normalize_record(record: dict[str, Any], source_label: str) -> NormalizedMa
         stream_type=stream_type,
         value=canonical_value,
         fields=fields,
-        ingest_metadata={"source": source_label},
+        ingest_metadata={
+            "source": source_label,
+            "source_event_index": source_event_index,
+        },
     )
 
 

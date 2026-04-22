@@ -44,6 +44,38 @@ def _build_dangling_bundle(
     return bundle_root
 
 
+def _build_dangling_event_bundle(
+    *,
+    fixture_path: Path,
+    tmp_path: Path,
+    dataset_spec,
+    training_bundle,
+    reward_spec,
+) -> Path:
+    trajectory_spec, action_space, _ = training_bundle
+    source_root = tmp_path / "source-event-trajectories"
+    builder = TrajectoryBuilder(dataset_spec, trajectory_spec, action_space, reward_spec)
+    events = LocalFixtureSource(fixture_path).load_events(dataset_spec)
+    builder.build_to_directory(events, source_root)
+
+    bundle_root = tmp_path / "legacy-retained-event-bundle"
+    (bundle_root / "trajectories" / "event_token_cache_v1").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_root / "manifest.json", bundle_root / "trajectories" / "manifest.json")
+    shutil.copy2(
+        source_root / "event_token_cache_v1" / "event_token_cache_manifest.json",
+        bundle_root / "trajectories" / "event_token_cache_v1" / "event_token_cache_manifest.json",
+    )
+    dump_json_data(
+        bundle_root / "bundle_manifest.json",
+        {
+            "retained_bundle_kind": "legacy-slim",
+            "source_run_root": "/workspace/runs/legacy-retained-event-bundle",
+        },
+    )
+    write_bundle_sha256sums(bundle_root)
+    return bundle_root
+
+
 def test_normalize_retained_bundle_preserves_original_and_writes_receipt(
     repo_root: Path,
     fixture_path: Path,
@@ -100,3 +132,45 @@ def test_normalize_retained_bundle_preserves_original_and_writes_receipt(
     assert manifest["replayable"] is False
     assert manifest["supports_phase0_empirical_closure"] is False
     assert manifest["normalization_receipt_path"] == "normalization_receipt.json"
+
+
+def test_normalize_retained_bundle_writes_event_token_summary_for_dangling_event_manifest(
+    repo_root: Path,
+    fixture_path: Path,
+    tmp_path: Path,
+    dataset_spec,
+    training_bundle,
+    reward_spec,
+) -> None:
+    bundle_root = _build_dangling_event_bundle(
+        fixture_path=fixture_path,
+        tmp_path=tmp_path,
+        dataset_spec=dataset_spec,
+        training_bundle=training_bundle,
+        reward_spec=reward_spec,
+    )
+    script_path = repo_root / "scripts" / "normalize_retained_bundle.py"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "--bundle-root",
+            str(bundle_root),
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    normalized_root = bundle_root.with_name(f"{bundle_root.name}-normalized")
+    receipt = json.loads((normalized_root / "normalization_receipt.json").read_text(encoding="utf-8"))
+    summary_path = normalized_root / "trajectories" / "event_token_cache_v1" / "event_token_cache_manifest.summary.json"
+
+    assert summary_path.exists()
+    assert not (normalized_root / "trajectories" / "event_token_cache_v1" / "event_token_cache_manifest.json").exists()
+    assert "trajectories/event_token_cache_v1/event_token_cache_manifest.json" in receipt["removed_dangling_files"]
+    assert "trajectories/event_token_cache_v1/event_token_cache_manifest.summary.json" in receipt["replacement_summary_artifacts"]

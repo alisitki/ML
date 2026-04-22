@@ -42,6 +42,14 @@ from quantlab_ml.trajectories.tensor_cache import (
     tensor_cache_directory,
     tensor_cache_manifest_path,
 )
+from quantlab_ml.trajectories.event_token_cache import (
+    EVENT_TOKEN_CACHE_FORMAT_VERSION,
+    event_token_cache_directory,
+    event_token_cache_manifest_path,
+    load_event_token_cache_shard,
+    read_event_token_cache_diagnostics,
+    read_event_token_cache_manifest,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +407,66 @@ class TestBuildToDirectory:
 
         assert total_rows == total_steps
         assert tensor_cache_directory(tmp_path).exists()
+
+    def test_build_writes_event_token_cache_manifest_and_aligned_shards(
+        self,
+        tmp_path: Path,
+        fixture_path: Path,
+        dataset_spec,
+        training_bundle,
+        reward_spec,
+    ) -> None:
+        """Build must write row-aligned event-token shards beside tensor-cache output."""
+        builder, events = _make_builder(fixture_path, dataset_spec, training_bundle, reward_spec)
+        builder.build_to_directory(events, tmp_path)
+
+        assert event_token_cache_manifest_path(tmp_path).exists()
+        cache_manifest = read_event_token_cache_manifest(tmp_path)
+        cache_diagnostics = read_event_token_cache_diagnostics(tmp_path)
+
+        assert cache_manifest.format_version == EVENT_TOKEN_CACHE_FORMAT_VERSION
+        assert cache_manifest.event_window_contract_version == "event_window_contract_v1"
+        assert cache_manifest.tokenizer_version == "event_tokenizer_contract_v1"
+        assert cache_manifest.lookback_seconds == 60
+        assert cache_manifest.token_cap == 256
+        assert cache_manifest.stream_order == ["trade", "bbo"]
+        assert set(cache_manifest.splits) == {
+            "development",
+            "train",
+            "validation",
+            "final_untouched_test",
+        }
+
+        total_rows = 0
+        total_steps = 0
+        for split_name, split_manifest in cache_manifest.splits.items():
+            assert split_manifest.shard_count >= 1
+            assert len(split_manifest.shards) == split_manifest.shard_count
+            split_steps = sum(
+                len(record.steps) for record in TrajectoryDirectoryStore.iter_records(tmp_path, split_name)
+            )
+            assert split_manifest.row_count == split_steps
+            first_shard = load_event_token_cache_shard(tmp_path, split_manifest.shards[0])
+            assert first_shard.row_offsets.dtype == np.int64
+            assert first_shard.event_time_ms.dtype == np.int64
+            assert first_shard.lag_ms.dtype == np.int64
+            assert first_shard.trade_payload_values.shape[1] == 5
+            assert first_shard.bbo_payload_values.shape[1] == 7
+            assert first_shard.row_count == len(first_shard.window_stats)
+            assert first_shard.row_offsets.shape[0] == first_shard.row_count + 1
+            if first_shard.window_stats:
+                first_row = first_shard.window_stats[0]
+                assert "BTCUSDT" in first_row.retained_by_symbol or "ETHUSDT" in first_row.retained_by_symbol
+                assert first_row.selected_token_count <= cache_manifest.token_cap
+            total_rows += split_manifest.row_count
+            total_steps += split_steps
+
+            split_diag = cache_diagnostics.splits[split_name]
+            assert split_diag.row_count == split_manifest.row_count
+            assert split_diag.token_count == split_manifest.token_count
+
+        assert total_rows == total_steps
+        assert event_token_cache_directory(tmp_path).exists()
 
 
 # ---------------------------------------------------------------------------

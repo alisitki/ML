@@ -44,6 +44,22 @@ class DanglingTensorCacheManifestError(BundlePayloadError):
         )
 
 
+class DanglingEventTokenCacheManifestError(BundlePayloadError):
+    def __init__(
+        self,
+        *,
+        detail: str,
+        bundle_payload_class: str = "slim",
+        bundle_root: Path | None = None,
+    ) -> None:
+        super().__init__(
+            error_code="dangling_event_token_cache_manifest",
+            detail=detail,
+            bundle_payload_class=bundle_payload_class,
+            bundle_root=bundle_root,
+        )
+
+
 class Phase0EmpiricalClosureUnsupportedError(BundlePayloadError):
     def __init__(
         self,
@@ -62,6 +78,7 @@ class Phase0EmpiricalClosureUnsupportedError(BundlePayloadError):
 
 __all__ = [
     "BundlePayloadError",
+    "DanglingEventTokenCacheManifestError",
     "DanglingTensorCacheManifestError",
     "Phase0EmpiricalClosureUnsupportedError",
 ]
