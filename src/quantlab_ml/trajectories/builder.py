@@ -281,6 +281,14 @@ class TrajectoryBuilder:
         tensor_cache_splits: dict[str, TensorCacheSplitManifest] = {}
         event_token_cache_diagnostics: dict[str, Any] = {}
         event_token_cache_splits: dict[str, Any] = {}
+        event_selection_policy_id: str | None = None
+        event_selection_hyperparameters = None
+        event_selector_params_hash: str | None = None
+        event_lookback_seconds: int | None = None
+        event_token_cap: int | None = None
+        event_burst_gap_ms: int | None = None
+        event_stale_after_seconds: int | None = None
+        event_source_labels: list[str] = []
         for split_name, split_range in zip(split_names, split_ranges):
             logger.info("building_split split=%s", split_name)
             records_iter = self._build_split_iter(split_name, split_range, indexed, history_start)
@@ -326,6 +334,14 @@ class TrajectoryBuilder:
             tensor_cache_diagnostics[split_name] = tensor_writer.diagnostics()
             event_token_cache_splits[split_name] = split_event_cache_manifest
             event_token_cache_diagnostics[split_name] = event_token_writer.diagnostics()
+            event_selection_policy_id = event_token_writer.selection_policy_id
+            event_selection_hyperparameters = event_token_writer.selection_hyperparameters
+            event_selector_params_hash = event_token_writer.selector_params_hash
+            event_lookback_seconds = event_token_writer.lookback_seconds
+            event_token_cap = event_token_writer.token_cap
+            event_burst_gap_ms = event_token_writer.burst_gap_ms
+            event_stale_after_seconds = event_token_writer.stale_after_seconds
+            event_source_labels = list(event_token_writer.source_labels)
             split_write_stats[split_name] = TrajectorySplitStats(
                 record_count=rec_count,
                 step_count=step_count,
@@ -357,16 +373,19 @@ class TrajectoryBuilder:
             trajectory_manifest_hash=trajectory_manifest_hash,
             tensor_cache_manifest_hash=tensor_cache_manifest_hash,
             dataset_hash=self.dataset_spec.dataset_hash,
-            lookback_seconds=60,
-            token_cap=256,
-            recency_reserve_count=64,
-            burst_reserve_count=48,
-            burst_gap_ms=250,
-            stale_after_seconds=180,
+            lookback_seconds=event_lookback_seconds or 60,
+            token_cap=event_token_cap or 256,
+            selection_policy_id=event_selection_policy_id or "unknown",
+            selection_hyperparameters=event_selection_hyperparameters,
+            selector_params_hash=event_selector_params_hash,
+            recency_reserve_count=0,
+            burst_reserve_count=0,
+            burst_gap_ms=event_burst_gap_ms or 250,
+            stale_after_seconds=event_stale_after_seconds or 180,
             stream_order=["trade", "bbo"],
             exchange_order=list(self.dataset_spec.exchanges),
             symbol_order=list(self.dataset_spec.symbols),
-            source_labels=source_labels,
+            source_labels=event_source_labels or source_labels,
             payload_schema_catalog={
                 "trade_payload_v1": {
                     "payload_schema_id": 1,
@@ -396,7 +415,13 @@ class TrajectoryBuilder:
         write_event_token_cache_manifest_atomic(output_dir, event_token_cache_manifest)
         write_event_token_cache_diagnostics_atomic(
             output_dir,
-            EventTokenCacheDiagnosticsManifest(splits=event_token_cache_diagnostics),
+            EventTokenCacheDiagnosticsManifest(
+                selection_policy_id=event_selection_policy_id or "unknown",
+                selector_params_hash=event_selector_params_hash,
+                audit_selector_policy_id=event_selection_policy_id,
+                audit_selector_params_hash=event_selector_params_hash,
+                splits=event_token_cache_diagnostics,
+            ),
         )
         self._event_token_split_summary = {
             split_name: diagnostics.model_dump(mode="json")

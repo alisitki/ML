@@ -132,6 +132,9 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     ).read_text(encoding="utf-8")
     closeout_records = (repo_root / "docs" / "CONTINUITY_CLOSEOUT_RECORDS.md").read_text(encoding="utf-8")
     remote_gpu_runbook = (repo_root / "docs" / "REMOTE_GPU_RUNBOOK.md").read_text(encoding="utf-8")
+    archive_retention_policy = (repo_root / "docs" / "ARCHIVE_RETENTION_POLICY.md").read_text(
+        encoding="utf-8"
+    )
     continuity_authority_decision = (
         repo_root / "docs" / "history" / "2026Q2" / "CONTINUITY_AUTHORITY_DECISION.md"
     ).read_text(encoding="utf-8")
@@ -217,6 +220,7 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
     assert "docs/CONTINUITY_AUDIT_RUNBOOK.md" in docs_index
     assert "docs/CONTINUITY_AUTHORITY_DISCOVERY_RUNBOOK.md" in docs_index
     assert "docs/CONTINUITY_CLOSEOUT_RECORDS.md" in docs_index
+    assert "docs/ARCHIVE_RETENTION_POLICY.md" in docs_index
 
     assert "PASS" in offline_closure
     assert "PARTIAL" in offline_closure
@@ -256,6 +260,16 @@ def test_readme_and_canonical_docs_are_aligned(repo_root: Path) -> None:
 
     assert "retained evidence" in remote_gpu_runbook.lower()
     assert "audit-continuity" in remote_gpu_runbook
+    assert "s3://quantlab-archive/quantlab" in remote_gpu_runbook
+    assert "Archive-first retention rule" in remote_gpu_runbook
+    assert "s3://quantlab-archive/quantlab" in archive_retention_policy
+    assert ".env" in archive_retention_policy
+    assert "SSH keys" in archive_retention_policy
+    assert ".venv" in archive_retention_policy
+    assert ".git" in archive_retention_policy
+    assert "repo-tracked source" in archive_retention_policy
+    assert "dry-run" in archive_retention_policy
+    assert "--execute" in archive_retention_policy
     assert "quantlab-ml compare-policies" in (repo_root / "docs" / "EVALUATION_RUNBOOK.md").read_text(encoding="utf-8")
     assert "quantlab-ml promote-policy" in (repo_root / "docs" / "EVALUATION_RUNBOOK.md").read_text(encoding="utf-8")
     assert "comparison report record" in (repo_root / "docs" / "REGISTRY_SCHEMA.md").read_text(encoding="utf-8")

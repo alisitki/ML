@@ -169,8 +169,15 @@ def test_normalize_retained_bundle_writes_event_token_summary_for_dangling_event
     normalized_root = bundle_root.with_name(f"{bundle_root.name}-normalized")
     receipt = json.loads((normalized_root / "normalization_receipt.json").read_text(encoding="utf-8"))
     summary_path = normalized_root / "trajectories" / "event_token_cache_v1" / "event_token_cache_manifest.summary.json"
+    retention_receipt_path = normalized_root / "trajectories" / "event_token_cache_v1" / "event_token_cache_retention_receipt.json"
 
     assert summary_path.exists()
+    assert retention_receipt_path.exists()
     assert not (normalized_root / "trajectories" / "event_token_cache_v1" / "event_token_cache_manifest.json").exists()
     assert "trajectories/event_token_cache_v1/event_token_cache_manifest.json" in receipt["removed_dangling_files"]
     assert "trajectories/event_token_cache_v1/event_token_cache_manifest.summary.json" in receipt["replacement_summary_artifacts"]
+    assert "trajectories/event_token_cache_v1/event_token_cache_retention_receipt.json" in receipt["replacement_summary_artifacts"]
+
+    retention_receipt = json.loads(retention_receipt_path.read_text(encoding="utf-8"))
+    assert retention_receipt["missing_shard_count"] >= 1
+    assert retention_receipt["missing_payload_count"] >= 1

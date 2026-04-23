@@ -13,7 +13,7 @@ This is the canonical reference for:
 
 Canonical version id:
 - observation schema version -> `observation_schema_v1`
-- event window contract version -> `event_window_contract_v1`
+- event window contract version -> `event_window_contract_v2`
 
 ## 1. Core principle
 
@@ -154,6 +154,17 @@ Current implemented event-window scope:
 - window: `[decision_timestamp - 60s, decision_timestamp]`
 - token cap: `256`
 - streams: `trade`, `bbo`
+- selection policy: `significant_bbo_priority_window_v2`
+- selector numbers are proof-slice hyperparameters, not universal system truths
+- event retention now happens on emitted informative units rather than raw recency-only overflow
+- recent target-relevant trades remain highest-fidelity; older bursts and BBO lanes are compressed before token-cap selection
+- BBO lanes emit canonical significant quote events with explicit precedence:
+  - `liquidity_vacuum`
+  - `spread_regime_jump`
+  - `mid_excursion`
+  - `imbalance_regime_flip`
+  - `burst_boundary`
+- non-target `T4` units are proximity-based target-causal candidates only; they are not declared true causal edges
 - unsupported lanes stay authoritative in snapshot masks rather than being synthesized into fake event emptiness
 - ordering is anchored on `event_time` with deterministic tie-break `(event_time, source_label, source_event_index)`
 

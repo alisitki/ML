@@ -7,7 +7,9 @@ from pathlib import Path
 from quantlab_ml.contracts import DatasetSpec, NormalizedMarketEvent
 from quantlab_ml.trajectories import TrajectoryBuilder
 from quantlab_ml.trajectories.event_token_cache import (
+    EventTokenCacheSplitWriter,
     _EventCandidate,
+    _InformativeUnit,
     _bbo_payload,
     _trade_payload,
     load_event_token_cache_shard,
@@ -141,7 +143,7 @@ def _overflow_events(dataset_spec: DatasetSpec) -> list[NormalizedMarketEvent]:
     return events
 
 
-def test_event_token_cache_reports_overflow_and_symbol_fairness(
+def test_event_token_cache_compresses_bbo_flood_and_preserves_symbol_structure(
     tmp_path: Path,
     training_bundle,
     reward_spec,
@@ -160,25 +162,199 @@ def test_event_token_cache_reports_overflow_and_symbol_fairness(
 
     assert train_split.row_count == 3
     assert first_row.candidate_token_count > 256
-    assert first_row.selected_token_count == 256
-    assert first_row.dropped_token_count > 0
-    assert set(first_row.dropped_by_symbol) == {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
+    assert first_row.informative_candidate_count < first_row.candidate_token_count
+    assert first_row.selected_token_count <= 256
     assert set(first_row.retained_by_symbol) == {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
     assert first_row.target_symbol_retained_rate is not None
     assert 0.0 < first_row.target_symbol_retained_rate <= 1.0
+    assert first_row.raw_target_symbol_retained_rate is not None
+    assert 0.0 < first_row.raw_target_symbol_retained_rate <= 1.0
     assert first_row.symbol_with_zero_retained_tokens_count == 0
     assert first_row.burst_count > 0
     assert first_row.burst_retention_rate is not None
     assert 0.0 < first_row.burst_retention_rate <= 1.0
+    assert first_row.drop_reason_counts_by_tier["COMPRESSION"]["lost_after_compression"] > 0
+    assert first_row.significant_bbo_emitted_count_by_reason
     assert first_row.has_cross_venue_ordered_adjacency is True
     assert first_row.has_trade_to_bbo_ordered_adjacency is True
 
-    assert train_diag.truncation_rate > 0.0
+    assert train_diag.informative_candidate_total < train_diag.candidate_token_total
     assert train_diag.weighted_target_symbol_retained_rate is not None
+    assert train_diag.weighted_raw_target_symbol_retained_rate is not None
+    assert train_diag.weighted_target_trade_retained_rate is not None
+    assert train_diag.weighted_target_bbo_sig_retained_rate is not None
     assert train_diag.weighted_burst_retention_rate is not None
     assert train_diag.cross_venue_ordered_adjacency_rate > 0.0
     assert train_diag.trade_to_bbo_ordered_adjacency_rate > 0.0
-    assert set(train_diag.dropped_by_symbol) == {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
+    assert train_diag.significant_bbo_preservation_rate is not None
+
+
+def test_bbo_significance_uses_canonical_reason_precedence(
+    tmp_path: Path,
+) -> None:
+    dataset_spec = _overflow_dataset_spec()
+    writer = EventTokenCacheSplitWriter(
+        directory=tmp_path,
+        split_name="train",
+        dataset_spec=dataset_spec,
+        indexed={},
+        source_labels=["synthetic://test"],
+    )
+    burst_start = _FakeCompactEvent(
+        event_time_ts=1.0,
+        fields={
+            "bid_price": 100.0,
+            "ask_price": 100.1,
+            "bid_size": 12.0,
+            "ask_size": 8.0,
+        },
+        source_label_id=0,
+        source_event_index=0,
+    )
+    candidate_event = _FakeCompactEvent(
+        event_time_ts=1.2,
+        fields={
+            "bid_price": 100.4,
+            "ask_price": 100.8,
+            "bid_size": 1.0,
+            "ask_size": 9.0,
+        },
+        source_label_id=0,
+        source_event_index=1,
+    )
+    candidate = _EventCandidate(
+        event_time_ts=candidate_event.event_time_ts,
+        exchange="binance",
+        symbol="BTCUSDT",
+        stream="bbo",
+        event=candidate_event,
+        lane_events=[burst_start, candidate_event],
+        lane_position=1,
+    )
+    start_candidate = _EventCandidate(
+        event_time_ts=burst_start.event_time_ts,
+        exchange="binance",
+        symbol="BTCUSDT",
+        stream="bbo",
+        event=burst_start,
+        lane_events=[burst_start, candidate_event],
+        lane_position=0,
+    )
+
+    matched_reasons, salience = writer._bbo_significance_assessment(
+        burst_start=start_candidate,
+        candidate=candidate,
+    )
+
+    assert {"liquidity_vacuum", "spread_regime_jump", "mid_excursion", "imbalance_regime_flip"} <= matched_reasons
+    assert salience > 0.0
+    units = {}
+    writer._upsert_informative_unit(
+        units_by_key=units,
+        candidate=candidate,
+        source_bucket="bbo_recent_sig",
+        decision_time_ms=2_000,
+        lane_key=("binance", "BTCUSDT", "bbo"),
+        burst_id=(("binance", "BTCUSDT", "bbo"), 0, 1),
+        salience=salience,
+        emission_tag="significant",
+        matched_reasons=matched_reasons,
+    )
+    unit = next(iter(units.values()))
+    assert unit.canonical_significance_reason == "liquidity_vacuum"
+    assert unit.matched_reasons == matched_reasons
+
+
+def test_t4_anchor_resolution_prefers_nearest_then_higher_priority_target_anchor(
+    tmp_path: Path,
+) -> None:
+    dataset_spec = _overflow_dataset_spec()
+    writer = EventTokenCacheSplitWriter(
+        directory=tmp_path,
+        split_name="train",
+        dataset_spec=dataset_spec,
+        indexed={},
+        source_labels=["synthetic://test"],
+    )
+
+    def _unit(
+        *,
+        event_time_ts: float,
+        exchange: str,
+        symbol: str,
+        stream: str,
+        source_bucket: str,
+        salience: float,
+        source_event_index: int,
+    ) -> _InformativeUnit:
+        event = _FakeCompactEvent(
+            event_time_ts=event_time_ts,
+            fields={},
+            source_label_id=0,
+            source_event_index=source_event_index,
+        )
+        candidate = _EventCandidate(
+            event_time_ts=event_time_ts,
+            exchange=exchange,
+            symbol=symbol,
+            stream=stream,
+            event=event,
+            lane_events=[event],
+            lane_position=0,
+        )
+        return _InformativeUnit(
+            candidate=candidate,
+            lag_ms=0,
+            source_bucket=source_bucket,
+            lane_key=(exchange, symbol, stream),
+            burst_id=((exchange, symbol, stream), source_event_index),
+            salience=salience,
+        )
+
+    target_trade = _unit(
+        event_time_ts=10.040,
+        exchange="binance",
+        symbol="BTCUSDT",
+        stream="trade",
+        source_bucket="trade_recent_raw",
+        salience=3.0,
+        source_event_index=1,
+    )
+    target_bbo = _unit(
+        event_time_ts=10.200,
+        exchange="binance",
+        symbol="BTCUSDT",
+        stream="bbo",
+        source_bucket="bbo_recent_sig",
+        salience=9.0,
+        source_event_index=2,
+    )
+    non_target = _unit(
+        event_time_ts=10.120,
+        exchange="binance",
+        symbol="ETHUSDT",
+        stream="trade",
+        source_bucket="trade_recent_raw",
+        salience=1.0,
+        source_event_index=3,
+    )
+    informative_units = [target_trade, target_bbo, non_target]
+
+    writer._assign_priority_tiers(informative_units=informative_units, target_symbol="BTCUSDT")
+
+    assert target_trade.priority_tier == "T0"
+    assert target_bbo.priority_tier == "T1"
+    assert non_target.priority_tier == "T4"
+    assert non_target.best_anchor_key == (
+        target_trade.event_time_ts,
+        target_trade.source_label_id,
+        target_trade.source_event_index,
+        target_trade.symbol,
+        target_trade.exchange,
+        target_trade.stream,
+    )
+    assert non_target.best_anchor_tier == "T0"
+    assert non_target.best_anchor_delta_ms == 80
 
 
 @dataclass(slots=True)

@@ -61,6 +61,55 @@ In particular:
 - copied registry JSON that still points at unreadable `/root/runs/...` paths is not continuity-retirement proof by itself
 - continuity closeout still depends on `docs/CONTINUITY_AUDIT_RUNBOOK.md`
 
+## Archive-first retention rule
+
+Remote GPU runs are remote-first for execution and archive-first for heavy artifact
+storage. The canonical storage home for heavy run outputs is:
+
+```text
+s3://quantlab-archive/quantlab/...
+```
+
+Use `s3://quantlab-archive/quantlab/remote-runs/<run-id>/` for remote run roots and
+`s3://quantlab-archive/quantlab/local-outputs/<relative-output-root>/` for local
+ignored retained roots that must be preserved before cleanup.
+
+Do not keep completed heavy roots indefinitely on the local workstation. Local mirrors
+should be thin unless a root is explicitly pinned for active work: receipts, manifests,
+checksum files, logs, configs, summaries, reports, and small evidence files only.
+
+Archive-before-delete is mandatory. A remote or local root may be pruned only after:
+
+- successful upload to `s3://quantlab-archive`
+- checksum or receipt verification
+- an archive manifest and receipt are written
+- the receipt records source root, destination prefix, timestamp, file inventory,
+  digest manifest, retained class, replayability, local keep/prune lists, and remote
+  prune lists
+
+Hard denylist for archive and prune tooling:
+
+- `.env`
+- SSH keys and SSH config material, including `.ssh`, `id_*`, `*.pem`, and `*.key`
+- `.venv`
+- `.git`
+- repo-tracked source, docs, configs, tests, scripts, and metadata
+- local/personal caches including `.aws`, `.config`, `.cache`, `.mypy_cache`,
+  `.pytest_cache`, `.ruff_cache`, `__pycache__`, and `.DS_Store`
+
+Operator sequence:
+
+1. verify `s3://quantlab-archive` credentials with a non-mutating check; dedicated
+   `S3_ARCHIVE_*` credentials are preferred, while shared `S3_COMPACT_*` credentials
+   are allowed only if they verify successfully against `quantlab-archive`
+2. run archive inventory dry-run
+3. review every source root, destination prefix, thin local mirror, prune summary, and
+   blocked entry
+4. upload only with explicit `--execute`
+5. verify receipts
+6. run prune dry-run from verified receipts
+7. prune only with explicit `--execute`
+
 ## Controlled first-run posture
 
 Path classification:

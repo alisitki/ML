@@ -18,7 +18,11 @@ from quantlab_ml.contracts import (
 )
 from quantlab_ml.registry.bundle_integrity import inspect_retained_bundle
 from quantlab_ml.registry.store import LocalRegistryStore
-from quantlab_ml.trajectories.event_token_cache import read_event_token_cache_manifest
+from quantlab_ml.trajectories.event_token_cache import (
+    event_token_cache_retention_receipt_path,
+    read_event_token_cache_manifest,
+    read_event_token_cache_retention_receipt,
+)
 from quantlab_ml.trajectories.tensor_cache import read_tensor_cache_manifest
 
 _MANIFEST_FILENAME = "bundle_manifest.json"
@@ -266,6 +270,7 @@ def _trajectory_summary(trajectories_root: Path) -> dict[str, Any] | None:
     cache_summary_path = trajectories_root / "tensor_cache_v1" / _TENSOR_CACHE_SUMMARY_FILENAME
     event_cache_manifest_path = trajectories_root / "event_token_cache_v1" / "event_token_cache_manifest.json"
     event_cache_summary_path = trajectories_root / "event_token_cache_v1" / _EVENT_TOKEN_CACHE_SUMMARY_FILENAME
+    event_cache_receipt_path = event_token_cache_retention_receipt_path(trajectories_root)
     if cache_manifest_path.exists():
         cache_manifest_payload = json.loads(cache_manifest_path.read_text(encoding="utf-8"))
         cache_manifest = read_tensor_cache_manifest(trajectories_root)
@@ -290,6 +295,11 @@ def _trajectory_summary(trajectories_root: Path) -> dict[str, Any] | None:
         summary["event_token_cache_manifest_hash"] = hash_payload(event_cache_manifest_payload)
         summary["event_token_cache_contract_version"] = event_cache_manifest.event_window_contract_version
         summary["event_token_cache_tokenizer_version"] = event_cache_manifest.tokenizer_version
+        summary["event_token_cache_selection_policy_id"] = event_cache_manifest.selection_policy_id
+        summary["event_token_cache_selector_params_hash"] = event_cache_manifest.selector_params_hash
+        summary["event_token_cache_selection_hyperparameters"] = (
+            event_cache_manifest.selection_hyperparameters.model_dump(mode="json")
+        )
         summary["event_token_cache_token_cap"] = event_cache_manifest.token_cap
         summary["event_token_cache_lookback_seconds"] = event_cache_manifest.lookback_seconds
         summary["event_token_cache_split_shard_counts"] = {
@@ -308,11 +318,23 @@ def _trajectory_summary(trajectories_root: Path) -> dict[str, Any] | None:
         event_cache_summary = json.loads(event_cache_summary_path.read_text(encoding="utf-8"))
         summary["event_token_cache_contract_version"] = event_cache_summary.get("event_window_contract_version")
         summary["event_token_cache_tokenizer_version"] = event_cache_summary.get("tokenizer_version")
+        summary["event_token_cache_selection_policy_id"] = event_cache_summary.get("selection_policy_id")
+        summary["event_token_cache_selector_params_hash"] = event_cache_summary.get("selector_params_hash")
+        summary["event_token_cache_selection_hyperparameters"] = event_cache_summary.get("selection_hyperparameters")
         summary["event_token_cache_token_cap"] = event_cache_summary.get("token_cap")
         summary["event_token_cache_lookback_seconds"] = event_cache_summary.get("lookback_seconds")
         summary["event_token_cache_split_shard_counts"] = event_cache_summary.get("split_shard_counts", {})
         summary["event_token_cache_split_row_counts"] = event_cache_summary.get("split_row_counts", {})
         summary["event_token_cache_split_token_counts"] = event_cache_summary.get("split_token_counts", {})
+    if event_cache_receipt_path.exists():
+        receipt = read_event_token_cache_retention_receipt(trajectories_root)
+        summary["event_token_cache_retention_receipt_path"] = (
+            event_cache_receipt_path.relative_to(trajectories_root).as_posix()
+        )
+        summary["event_token_cache_retained_shard_count"] = receipt.retained_shard_count
+        summary["event_token_cache_missing_shard_count"] = receipt.missing_shard_count
+        summary["event_token_cache_retained_payload_count"] = receipt.retained_payload_count
+        summary["event_token_cache_missing_payload_count"] = receipt.missing_payload_count
     return summary
 
 

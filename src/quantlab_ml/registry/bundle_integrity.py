@@ -16,9 +16,12 @@ from quantlab_ml.registry.bundle_errors import (
 )
 from quantlab_ml.trajectories.streaming_store import TrajectoryDirectoryStore
 from quantlab_ml.trajectories.event_token_cache import (
+    build_event_token_cache_retention_receipt,
     event_token_cache_manifest_path,
     event_token_cache_payload_status,
+    event_token_cache_retention_receipt_path,
     read_event_token_cache_manifest,
+    write_event_token_cache_retention_receipt_atomic,
 )
 from quantlab_ml.trajectories.tensor_cache import (
     TensorCacheManifest,
@@ -225,7 +228,11 @@ def normalize_retained_bundle(
             cache_manifest = read_event_token_cache_manifest(normalized_trajectories_root)
             summary_path = manifest_path.with_name(_EVENT_TOKEN_CACHE_SUMMARY_FILENAME)
             dump_json_data(summary_path, _event_token_cache_summary(cache_manifest))
+            receipt = build_event_token_cache_retention_receipt(normalized_trajectories_root)
+            write_event_token_cache_retention_receipt_atomic(normalized_trajectories_root, receipt)
+            receipt_path = event_token_cache_retention_receipt_path(normalized_trajectories_root)
             replacement_summary_artifacts.append(summary_path.relative_to(normalized_root).as_posix())
+            replacement_summary_artifacts.append(receipt_path.relative_to(normalized_root).as_posix())
             removed_dangling_files.append(manifest_path.relative_to(normalized_root).as_posix())
             manifest_path.unlink()
 
@@ -302,6 +309,10 @@ def _event_token_cache_summary(cache_manifest: EventTokenCacheManifest) -> dict[
         "format_version": cache_manifest.format_version,
         "event_window_contract_version": cache_manifest.event_window_contract_version,
         "tokenizer_version": cache_manifest.tokenizer_version,
+        "selection_policy_id": cache_manifest.selection_policy_id,
+        "selector_params_hash": cache_manifest.selector_params_hash,
+        "selection_hyperparameters": cache_manifest.selection_hyperparameters.model_dump(mode="json"),
+        "selector_audit_artifact_path": cache_manifest.selector_audit_artifact_path,
         "lookback_seconds": cache_manifest.lookback_seconds,
         "token_cap": cache_manifest.token_cap,
         "split_shard_counts": {

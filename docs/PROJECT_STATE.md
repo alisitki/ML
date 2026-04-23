@@ -61,6 +61,7 @@ Why:
 - offline trajectory building
 - walk-forward training and evaluation discipline
 - artifact export and registry discipline
+- remote-first and archive-first operating policy for heavy run artifacts
 - registry-backed comparison-report persistence and reusable offline evidence-pack summaries
 - runtime-facing contracts and thin-executor boundary definitions
 - governance, runbook, and repo-tracked closeout-record discipline around retained proof surfaces
@@ -88,6 +89,7 @@ These missing layers are planned later-phase work, not current defects by defaul
 - keep `quantlab-ml audit-continuity` authority-aware so inspected-scope truth does not read as authoritative closeout truth
 - keep continuity-authority discovery conditional so repo-local retained bundles never read like eligible external authority candidates
 - keep repo-tracked continuity closeout decisions explicit and keep retained bundles classified as non-authoritative control surfaces only
+- keep heavy proof roots archive-first: completed heavy local outputs are transient unless explicitly pinned, and pruning requires verified S3 receipts
 - treat historical local authority discovery as closed in this workspace; future continuity closure should prefer fresh external controlled reruns or already-present concrete external roots
 - run `QL-031` broader offline evidence expansion as the single active next batch in this workspace
 - allow only `Parallel V2 Phase 1A` under the partial-closure exception; do not treat the slim retained blocker bundle as a runnable Phase 1A payload source
@@ -124,6 +126,10 @@ The following remain visible but are not the current main focus:
 ## Current interpretation notes
 
 - The default configured registry root lives under ignored `outputs/registry` and is not repo-tracked on current HEAD.
+- Heavy run artifacts now have an explicit canonical archive home at `s3://quantlab-archive/quantlab/...`; repo-local `outputs/` is a transient ignored workspace surface unless a root is explicitly pinned.
+- Local heavy outputs may be pruned only after successful archive upload, checksum or receipt verification, and a written archive manifest plus receipt.
+- Dedicated `S3_ARCHIVE_*` credentials are preferred for archive operations, but shared `S3_COMPACT_*` credentials are allowed when they verify successfully against `quantlab-archive`.
+- The archive/prune denylist is hard: `.env`, SSH keys, `.venv`, `.git`, repo-tracked files, docs, source/config/test/script files, and local caches are not archive or prune candidates.
 - Current HEAD does not include repo-tracked QL-021 bundles under `outputs/`. If external retained QL-021 bundles exist, they are external retained evidence rather than current-head repo-tracked proof until provenance and authority are attached explicitly.
 - A relocation-safe external retained bundle may prove `clear_in_inspected_scope` via registry-local fallback, but that still does not make it authoritative evidence.
 - If an external active registry root cannot be confirmed, retained bundles remain external retained evidence only and must not be promoted to authoritative evidence.

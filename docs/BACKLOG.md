@@ -17,6 +17,16 @@ Status values:
 - `in_progress`
 - `blocked`
 
+Operational storage guardrail:
+
+- heavy proof builds, heavy artifact validation, same-root reruns, remote smoke, and search default to remote compute
+- canonical heavy artifact archive home is `s3://quantlab-archive/quantlab/...`
+- local `outputs/` is transient unless explicitly pinned
+- archive-before-delete is mandatory for local and remote heavy roots
+- completed heavy runs should keep only thin local mirrors after verified archive receipts
+- archive/prune tooling must enforce hard deny rules for `.env`, SSH material, `.venv`, `.git`, repo-tracked files, docs/source/config/test/script files, and local caches
+- first pass is always credential verification plus dry-run inventory; dedicated archive credentials are preferred, shared compact S3 credentials are allowed if they verify against `quantlab-archive`, and upload/prune require separate explicit `--execute`
+
 ---
 
 ## DOCS_TRUTH
@@ -33,6 +43,7 @@ Status values:
 - done_when:
   - `README.md`, `PROJECT_STATE.md`, `ROADMAP.md`, `BACKLOG.md`, and `DOCS_INDEX.md` agree
   - offline closure criteria, continuity audit method, and closeout record format are explicit
+  - remote-first archive-first retention policy is explicit and does not relabel local retained bundles as authoritative evidence
   - live/runtime work remains visible without reading as the current main focus
 
 ---
@@ -102,9 +113,16 @@ Result:
   - search, architecture, and evaluation expansion are valid later offline work
   - they should not be used to paper over unresolved continuity or truth gaps
 - current_scope:
-  - `Phase A` and `Phase B` are now implemented as an additive offline-only event-depth surface
-  - current `HEAD` now writes `event_token_cache_v1` beside `tensor_cache_v1`
-  - `Phase C` stays gated until the proof slice shows the cache is replayable, stable, and informative
+  - `Phase A` and `Phase B` remain implemented as an additive offline-only event-depth surface
+  - current `HEAD` writes `event_token_cache_v1` beside `tensor_cache_v1`
+  - active work is narrowed to `R1` retention-policy redesign spec, `R2` artifact/diagnostics implementation, and later `R3` proof-slice revalidation
+  - `Phase C` stays gated until the redesigned retention policy proves replayable, stable, and informative on proof-slice evidence
+- next_action:
+  - finish `significant_bbo_priority_window_v2` as the proof-slice retention policy for `trade + bbo`
+  - version selector hyperparameters explicitly in manifest and diagnostics rather than treating current numbers as universal truths
+  - keep `60s` cadence fixed for the next proof slice
+  - add strict target/burst/cross-venue diagnostics plus retained-bundle survivability metadata
+  - do not start `Phase C`, model work, or runtime broadening from this item
 - evidence_needed:
   - explicit acceptance criteria per expansion item
 - done_when:

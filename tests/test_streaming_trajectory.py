@@ -425,8 +425,10 @@ class TestBuildToDirectory:
         cache_diagnostics = read_event_token_cache_diagnostics(tmp_path)
 
         assert cache_manifest.format_version == EVENT_TOKEN_CACHE_FORMAT_VERSION
-        assert cache_manifest.event_window_contract_version == "event_window_contract_v1"
-        assert cache_manifest.tokenizer_version == "event_tokenizer_contract_v1"
+        assert cache_manifest.event_window_contract_version == "event_window_contract_v2"
+        assert cache_manifest.tokenizer_version == "event_tokenizer_contract_v2"
+        assert cache_manifest.selection_policy_id == "significant_bbo_priority_window_v2"
+        assert cache_manifest.selector_params_hash
         assert cache_manifest.lookback_seconds == 60
         assert cache_manifest.token_cap == 256
         assert cache_manifest.stream_order == ["trade", "bbo"]
@@ -458,12 +460,14 @@ class TestBuildToDirectory:
                 first_row = first_shard.window_stats[0]
                 assert "BTCUSDT" in first_row.retained_by_symbol or "ETHUSDT" in first_row.retained_by_symbol
                 assert first_row.selected_token_count <= cache_manifest.token_cap
+                assert first_row.informative_candidate_count >= first_row.selected_token_count
             total_rows += split_manifest.row_count
             total_steps += split_steps
 
             split_diag = cache_diagnostics.splits[split_name]
             assert split_diag.row_count == split_manifest.row_count
             assert split_diag.token_count == split_manifest.token_count
+            assert split_diag.informative_candidate_total >= split_diag.selected_token_total
 
         assert total_rows == total_steps
         assert event_token_cache_directory(tmp_path).exists()

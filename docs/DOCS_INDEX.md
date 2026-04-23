@@ -32,6 +32,7 @@ superseded_by: []
 - continuity audit method -> `docs/CONTINUITY_AUDIT_RUNBOOK.md`
 - continuity authority discovery method -> `docs/CONTINUITY_AUTHORITY_DISCOVERY_RUNBOOK.md`
 - continuity closeout record format -> `docs/CONTINUITY_CLOSEOUT_RECORDS.md`
+- remote-first archive and local-prune policy -> `docs/ARCHIVE_RETENTION_POLICY.md`
 - target business destination -> `docs/PRODUCT_THESIS.md`
 - target live-path architecture -> `docs/ONLINE_RUNTIME_MODEL.md`
 - target commercialization gates -> `docs/COMMERCIALIZATION_GATES.md`
@@ -112,6 +113,7 @@ Current active-track note:
 - `docs/BACKLOG.md`
 - `docs/QL031_MODEL_REDESIGN_PLAN.md`
 - `docs/QL033_EVENT_DEPTH_REDESIGN_PLAN.md`
+- `docs/ARCHIVE_RETENTION_POLICY.md`
 - `docs/OFFLINE_CLOSURE_CRITERIA.md`
 - `docs/CONTINUITY_AUDIT_RUNBOOK.md`
 - `docs/CONTINUITY_AUTHORITY_DISCOVERY_RUNBOOK.md`
@@ -124,6 +126,7 @@ Current active-track note:
 
 - `docs/EVALUATION_RUNBOOK.md`
 - `docs/REMOTE_GPU_RUNBOOK.md`
+- `docs/ARCHIVE_RETENTION_POLICY.md`
 - `docs/CONTINUITY_AUDIT_RUNBOOK.md`
 - `docs/CONTINUITY_AUTHORITY_DISCOVERY_RUNBOOK.md`
 

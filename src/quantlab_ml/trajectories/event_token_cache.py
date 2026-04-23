@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import math
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -18,14 +17,18 @@ from quantlab_ml.contracts import (
     EVENT_TOKEN_CACHE_DIRNAME,
     EVENT_TOKEN_CACHE_FORMAT_VERSION,
     EVENT_TOKEN_CACHE_MANIFEST_FILENAME,
+    EVENT_TOKEN_CACHE_RETENTION_RECEIPT_FILENAME,
+    EVENT_TOKEN_SELECTION_POLICY_ID,
     EVENT_TOKENIZER_VERSION,
     EVENT_WINDOW_CONTRACT_VERSION,
     DatasetSpec,
     EventTokenCacheDiagnosticsManifest,
     EventTokenCacheManifest,
     EventTokenCachePayloadStatus,
+    EventTokenCacheRetentionReceipt,
     EventTokenReplayRow,
     EventTokenRowWindowStats,
+    EventTokenSelectionHyperparameters,
     EventTokenShardManifest,
     EventTokenSplitDiagnostics,
     EventTokenSplitManifest,
@@ -37,11 +40,34 @@ from quantlab_ml.contracts import (
 DEFAULT_EVENT_TOKEN_CACHE_SHARD_TARGET_BYTES = 512 * 1024 * 1024
 DEFAULT_EVENT_WINDOW_LOOKBACK_SECONDS = 60
 DEFAULT_EVENT_WINDOW_TOKEN_CAP = 256
-DEFAULT_EVENT_WINDOW_RECENCY_RESERVE = 64
-DEFAULT_EVENT_WINDOW_BURST_RESERVE = 48
+DEFAULT_EVENT_WINDOW_RECENCY_RESERVE = 0
+DEFAULT_EVENT_WINDOW_BURST_RESERVE = 0
 DEFAULT_EVENT_WINDOW_BURST_GAP_MS = 250
 DEFAULT_EVENT_WINDOW_STALE_AFTER_SECONDS = 180
+DEFAULT_EVENT_WINDOW_RECENT_HIGH_FIDELITY_SECONDS = 5
+DEFAULT_EVENT_WINDOW_CAUSAL_HORIZON_MS = 1000
+DEFAULT_EVENT_WINDOW_RECENT_BBO_EXTRA_SIGNIFICANT_LIMIT = 3
+DEFAULT_BBO_MID_EXCURSION_THRESHOLD = 5e-5
+DEFAULT_BBO_SPREAD_REGIME_JUMP_THRESHOLD = 1.5
+DEFAULT_BBO_IMBALANCE_REGIME_FLIP_THRESHOLD = 0.5
+DEFAULT_BBO_LIQUIDITY_VACUUM_THRESHOLD = 3.0
 _EVENT_STREAM_ORDER = ("trade", "bbo")
+_SIGNIFICANCE_REASON_PRECEDENCE = (
+    "liquidity_vacuum",
+    "spread_regime_jump",
+    "mid_excursion",
+    "imbalance_regime_flip",
+    "burst_boundary",
+)
+_TIER_ORDER = ("T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7")
+_TIER_CAP_GROUPS = (
+    ("T0", ("T0",), 64),
+    ("T1", ("T1",), 32),
+    ("T2_T3", ("T2", "T3"), 48),
+    ("T4", ("T4",), 64),
+    ("T5_T6", ("T5", "T6"), 32),
+    ("T7_GLOBAL_FLEX", ("T7",), 16),
+)
 
 
 def event_token_cache_directory(directory: Path) -> Path:
@@ -54,6 +80,10 @@ def event_token_cache_manifest_path(directory: Path) -> Path:
 
 def event_token_cache_diagnostics_path(directory: Path) -> Path:
     return event_token_cache_directory(directory) / EVENT_TOKEN_CACHE_DIAGNOSTICS_FILENAME
+
+
+def event_token_cache_retention_receipt_path(directory: Path) -> Path:
+    return event_token_cache_directory(directory) / EVENT_TOKEN_CACHE_RETENTION_RECEIPT_FILENAME
 
 
 def has_event_token_cache_manifest(directory: Path) -> bool:
@@ -107,6 +137,117 @@ class _EventCandidate:
         return int(getattr(self.event, "source_event_index", 0))
 
 
+@dataclass(slots=True)
+class _InformativeUnit:
+    candidate: _EventCandidate
+    lag_ms: int
+    source_bucket: Literal["trade_recent_raw", "trade_older_summary", "bbo_recent_sig", "bbo_older_sig"]
+    lane_key: tuple[str, str, str]
+    burst_id: tuple[object, ...]
+    salience: float = 0.0
+    emission_tags: set[str] = field(default_factory=set)
+    matched_reasons: set[str] = field(default_factory=set)
+    canonical_significance_reason: str | None = None
+    priority_tier: str | None = None
+    best_anchor_key: tuple[float, int, int, str, str, str] | None = None
+    best_anchor_tier: str | None = None
+    best_anchor_delta_ms: int | None = None
+
+    @property
+    def event_time_ts(self) -> float:
+        return self.candidate.event_time_ts
+
+    @property
+    def exchange(self) -> str:
+        return self.candidate.exchange
+
+    @property
+    def symbol(self) -> str:
+        return self.candidate.symbol
+
+    @property
+    def stream(self) -> str:
+        return self.candidate.stream
+
+    @property
+    def source_label_id(self) -> int:
+        return self.candidate.source_label_id
+
+    @property
+    def source_event_index(self) -> int:
+        return self.candidate.source_event_index
+
+    @property
+    def is_bbo_significant(self) -> bool:
+        return self.stream == "bbo" and self.canonical_significance_reason is not None
+
+
+def _candidate_key(item: _EventCandidate | _InformativeUnit) -> tuple[float, int, int, str, str, str]:
+    return (
+        item.event_time_ts,
+        item.source_label_id,
+        item.source_event_index,
+        item.symbol,
+        item.exchange,
+        item.stream,
+    )
+
+
+def _burst_identifier(
+    lane_key: tuple[str, str, str],
+    burst: list[_EventCandidate],
+) -> tuple[object, ...]:
+    return (lane_key, _candidate_key(burst[0]), _candidate_key(burst[-1]))
+
+
+def _tier_rank(tier: str | None) -> int:
+    if tier is None:
+        return len(_TIER_ORDER)
+    return _TIER_ORDER.index(tier)
+
+
+def _priority_group_name(tier: str | None) -> str:
+    if tier in {"T0", "T1", "T4"}:
+        return tier
+    if tier in {"T2", "T3"}:
+        return "T2_T3"
+    if tier in {"T5", "T6"}:
+        return "T5_T6"
+    return "T7_GLOBAL_FLEX"
+
+
+def _canonical_significance_reason(matched_reasons: set[str]) -> str | None:
+    for reason in _SIGNIFICANCE_REASON_PRECEDENCE:
+        if reason in matched_reasons:
+            return reason
+    return None
+
+
+def _lag_bucket_rank(lag_ms: int, recent_high_fidelity_seconds: int) -> int:
+    recent_boundary_ms = recent_high_fidelity_seconds * 1000
+    if lag_ms <= recent_boundary_ms:
+        return 0
+    if lag_ms <= 15_000:
+        return 1
+    return 2
+
+
+def _base_priority_tier(*, unit: _InformativeUnit, target_symbol: str) -> str:
+    if unit.symbol == target_symbol:
+        if unit.source_bucket == "trade_recent_raw":
+            return "T0"
+        if unit.source_bucket == "bbo_recent_sig":
+            return "T1"
+        if unit.source_bucket == "trade_older_summary":
+            return "T2"
+        return "T3"
+    if unit.source_bucket == "trade_recent_raw":
+        return "T5"
+    if unit.source_bucket == "bbo_recent_sig":
+        return "T6"
+    return "T7"
+
+
 class EventTokenCacheSplitWriter:
     def __init__(
         self,
@@ -123,6 +264,13 @@ class EventTokenCacheSplitWriter:
         burst_reserve_count: int = DEFAULT_EVENT_WINDOW_BURST_RESERVE,
         burst_gap_ms: int = DEFAULT_EVENT_WINDOW_BURST_GAP_MS,
         stale_after_seconds: int = DEFAULT_EVENT_WINDOW_STALE_AFTER_SECONDS,
+        recent_high_fidelity_seconds: int = DEFAULT_EVENT_WINDOW_RECENT_HIGH_FIDELITY_SECONDS,
+        causal_horizon_ms: int = DEFAULT_EVENT_WINDOW_CAUSAL_HORIZON_MS,
+        recent_bbo_extra_significant_limit: int = DEFAULT_EVENT_WINDOW_RECENT_BBO_EXTRA_SIGNIFICANT_LIMIT,
+        bbo_mid_excursion_threshold: float = DEFAULT_BBO_MID_EXCURSION_THRESHOLD,
+        bbo_spread_regime_jump_threshold: float = DEFAULT_BBO_SPREAD_REGIME_JUMP_THRESHOLD,
+        bbo_imbalance_regime_flip_threshold: float = DEFAULT_BBO_IMBALANCE_REGIME_FLIP_THRESHOLD,
+        bbo_liquidity_vacuum_threshold: float = DEFAULT_BBO_LIQUIDITY_VACUUM_THRESHOLD,
     ) -> None:
         if token_cap <= 0:
             raise ValueError("event token cap must be positive")
@@ -138,6 +286,18 @@ class EventTokenCacheSplitWriter:
         self.burst_reserve_count = burst_reserve_count
         self.burst_gap_ms = burst_gap_ms
         self.stale_after_seconds = stale_after_seconds
+        self.selection_policy_id = EVENT_TOKEN_SELECTION_POLICY_ID
+        self.selection_hyperparameters = EventTokenSelectionHyperparameters(
+            recent_high_fidelity_seconds=recent_high_fidelity_seconds,
+            burst_gap_ms=burst_gap_ms,
+            causal_horizon_ms=causal_horizon_ms,
+            recent_bbo_extra_significant_limit=recent_bbo_extra_significant_limit,
+            bbo_mid_excursion_threshold=bbo_mid_excursion_threshold,
+            bbo_spread_regime_jump_threshold=bbo_spread_regime_jump_threshold,
+            bbo_imbalance_regime_flip_threshold=bbo_imbalance_regime_flip_threshold,
+            bbo_liquidity_vacuum_threshold=bbo_liquidity_vacuum_threshold,
+        )
+        self.selector_params_hash = hash_payload(self.selection_hyperparameters.model_dump(mode="json"))
         self.exchange_to_id = {
             exchange: index for index, exchange in enumerate(self.dataset_spec.exchanges)
         }
@@ -154,6 +314,7 @@ class EventTokenCacheSplitWriter:
         self._total_rows = 0
         self._next_shard_index = 0
         self._candidate_token_total = 0
+        self._informative_candidate_total = 0
         self._selected_token_total = 0
         self._duplicate_event_count = 0
         self._same_timestamp_tie_count = 0
@@ -161,6 +322,12 @@ class EventTokenCacheSplitWriter:
         self._dropped_by_stream: Counter[str] = Counter()
         self._dropped_by_venue: Counter[str] = Counter()
         self._dropped_by_symbol: Counter[str] = Counter()
+        self._candidate_by_stream: Counter[str] = Counter()
+        self._candidate_by_venue: Counter[str] = Counter()
+        self._informative_candidate_by_stream: Counter[str] = Counter()
+        self._informative_candidate_by_venue: Counter[str] = Counter()
+        self._selected_by_stream: Counter[str] = Counter()
+        self._selected_by_venue: Counter[str] = Counter()
         self._retained_by_symbol: Counter[str] = Counter()
         self._duplicate_dropped_by_stream: Counter[str] = Counter()
         self._duplicate_dropped_by_venue: Counter[str] = Counter()
@@ -168,13 +335,32 @@ class EventTokenCacheSplitWriter:
         self._empty_window_count = 0
         self._stale_window_count = 0
         self._truncated_row_count = 0
+        self._token_budget_pressure_row_count = 0
         self._target_symbol_retained_numerator = 0
         self._target_symbol_retained_denominator = 0
+        self._raw_target_symbol_retained_numerator = 0
+        self._raw_target_symbol_retained_denominator = 0
+        self._target_trade_retained_numerator = 0
+        self._target_trade_retained_denominator = 0
+        self._target_bbo_sig_retained_numerator = 0
+        self._target_bbo_sig_retained_denominator = 0
+        self._target_selected_token_total = 0
         self._retained_burst_count = 0
         self._burst_count = 0
         self._symbol_with_zero_retained_counts: list[int] = []
-        self._cross_venue_ordered_adjacency_count = 0
-        self._trade_to_bbo_ordered_adjacency_count = 0
+        self._symbol_candidate_row_count: Counter[str] = Counter()
+        self._symbol_zero_retained_row_count: Counter[str] = Counter()
+        self._cross_venue_ordered_adjacency_preserved_count = 0
+        self._cross_venue_ordered_adjacency_raw_count = 0
+        self._trade_to_bbo_ordered_adjacency_preserved_count = 0
+        self._trade_to_bbo_ordered_adjacency_raw_count = 0
+        self._significant_bbo_emitted_count_by_reason: Counter[str] = Counter()
+        self._significant_bbo_retained_count_by_reason: Counter[str] = Counter()
+        self._budget_fill_by_tier: Counter[str] = Counter()
+        self._drop_reason_counts_by_tier: defaultdict[str, Counter[str]] = defaultdict(Counter)
+        self._lane_cap_hit_row_count = 0
+        self._bbo_cap_hit_row_count = 0
+        self._symbol_cap_hit_row_count = 0
         self._final_diagnostics: EventTokenSplitDiagnostics | None = None
 
     def consume_record(self, record: TrajectoryRecord) -> None:
@@ -225,13 +411,13 @@ class EventTokenCacheSplitWriter:
         step: TrajectoryStep,
         trajectory_start: bool,
     ) -> None:
-        _, selected, row_stats = self._build_window(
+        _, _, selected_units, row_stats = self._build_window(
             target_symbol=record.target_symbol,
             decision_time=step.event_time,
             row_index=self._total_rows,
         )
-        for candidate in selected:
-            self._append_token(decision_time=step.event_time, candidate=candidate)
+        for unit in selected_units:
+            self._append_token(decision_time=step.event_time, candidate=unit.candidate)
         self._row_offsets.append(len(self._event_time_ms))
         self._replay_rows.append(
             EventTokenReplayRow(
@@ -239,7 +425,7 @@ class EventTokenCacheSplitWriter:
                 target_symbol=record.target_symbol,
                 trajectory_id=record.trajectory_id,
                 trajectory_start=trajectory_start,
-                token_count=len(selected),
+                token_count=len(selected_units),
                 truncated=row_stats.truncated,
                 empty_window=row_stats.empty_window,
                 stale_window=row_stats.stale_window,
@@ -247,6 +433,7 @@ class EventTokenCacheSplitWriter:
         )
         self._window_stats.append(row_stats)
         self._candidate_token_total += row_stats.candidate_token_count
+        self._informative_candidate_total += row_stats.informative_candidate_count
         self._selected_token_total += row_stats.selected_token_count
         self._duplicate_event_count += row_stats.duplicate_event_count
         self._same_timestamp_tie_count += row_stats.same_timestamp_tie_count
@@ -254,6 +441,12 @@ class EventTokenCacheSplitWriter:
         self._dropped_by_stream.update(row_stats.dropped_by_stream)
         self._dropped_by_venue.update(row_stats.dropped_by_venue)
         self._dropped_by_symbol.update(row_stats.dropped_by_symbol)
+        self._candidate_by_stream.update(row_stats.candidate_by_stream)
+        self._candidate_by_venue.update(row_stats.candidate_by_venue)
+        self._informative_candidate_by_stream.update(row_stats.informative_candidate_by_stream)
+        self._informative_candidate_by_venue.update(row_stats.informative_candidate_by_venue)
+        self._selected_by_stream.update(row_stats.retained_by_stream)
+        self._selected_by_venue.update(row_stats.retained_by_venue)
         self._retained_by_symbol.update(row_stats.retained_by_symbol)
         self._duplicate_dropped_by_stream.update(row_stats.duplicate_dropped_by_stream)
         self._duplicate_dropped_by_venue.update(row_stats.duplicate_dropped_by_venue)
@@ -265,17 +458,56 @@ class EventTokenCacheSplitWriter:
             self._stale_window_count += 1
         if row_stats.truncated:
             self._truncated_row_count += 1
+        if row_stats.token_budget_pressure:
+            self._token_budget_pressure_row_count += 1
         self._symbol_with_zero_retained_counts.append(row_stats.symbol_with_zero_retained_tokens_count)
         self._retained_burst_count += row_stats.retained_burst_count
         self._burst_count += row_stats.burst_count
-        if row_stats.has_cross_venue_ordered_adjacency:
-            self._cross_venue_ordered_adjacency_count += 1
-        if row_stats.has_trade_to_bbo_ordered_adjacency:
-            self._trade_to_bbo_ordered_adjacency_count += 1
-        target_candidates = row_stats.candidate_by_symbol.get(record.target_symbol, 0)
+        if row_stats.raw_has_target_cross_venue_ordered_adjacency:
+            self._cross_venue_ordered_adjacency_raw_count += 1
+            if row_stats.retained_has_target_cross_venue_ordered_adjacency:
+                self._cross_venue_ordered_adjacency_preserved_count += 1
+        if row_stats.raw_has_target_trade_to_bbo_ordered_adjacency:
+            self._trade_to_bbo_ordered_adjacency_raw_count += 1
+            if row_stats.retained_has_target_trade_to_bbo_ordered_adjacency:
+                self._trade_to_bbo_ordered_adjacency_preserved_count += 1
+        target_candidates = row_stats.informative_candidate_by_symbol.get(record.target_symbol, 0)
         if target_candidates > 0:
-            self._target_symbol_retained_denominator += target_candidates
             self._target_symbol_retained_numerator += row_stats.retained_by_symbol.get(record.target_symbol, 0)
+            self._target_symbol_retained_denominator += target_candidates
+        raw_target_candidates = row_stats.candidate_by_symbol.get(record.target_symbol, 0)
+        if raw_target_candidates > 0:
+            self._raw_target_symbol_retained_numerator += row_stats.retained_by_symbol.get(record.target_symbol, 0)
+            self._raw_target_symbol_retained_denominator += raw_target_candidates
+        if row_stats.target_trade_candidate_count > 0:
+            self._target_trade_retained_numerator += row_stats.retained_target_trade_count
+            self._target_trade_retained_denominator += row_stats.target_trade_candidate_count
+        if row_stats.target_bbo_sig_candidate_count > 0:
+            self._target_bbo_sig_retained_numerator += row_stats.retained_target_bbo_sig_count
+            self._target_bbo_sig_retained_denominator += row_stats.target_bbo_sig_candidate_count
+        self._target_selected_token_total += row_stats.retained_by_symbol.get(record.target_symbol, 0)
+        for symbol, count in row_stats.informative_candidate_by_symbol.items():
+            if count > 0:
+                self._symbol_candidate_row_count[symbol] += 1
+                if row_stats.retained_by_symbol.get(symbol, 0) == 0:
+                    self._symbol_zero_retained_row_count[symbol] += 1
+        self._significant_bbo_emitted_count_by_reason.update(row_stats.significant_bbo_emitted_count_by_reason)
+        self._significant_bbo_retained_count_by_reason.update(row_stats.significant_bbo_retained_count_by_reason)
+        self._budget_fill_by_tier.update(
+            {
+                key: value
+                for key, value in row_stats.budget_fill_by_tier.items()
+                if key in {"T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7"}
+            }
+        )
+        for tier, counts in row_stats.drop_reason_counts_by_tier.items():
+            self._drop_reason_counts_by_tier[tier].update(counts)
+        if row_stats.lane_cap_hit_count > 0:
+            self._lane_cap_hit_row_count += 1
+        if row_stats.bbo_cap_hit_count > 0:
+            self._bbo_cap_hit_row_count += 1
+        if row_stats.symbol_cap_hit_count > 0:
+            self._symbol_cap_hit_row_count += 1
         self._pending_rows += 1
         self._total_rows += 1
         if self._pending_rows >= self.rows_per_shard:
@@ -380,6 +612,21 @@ class EventTokenCacheSplitWriter:
             if self._target_symbol_retained_denominator > 0
             else None
         )
+        weighted_raw_target_symbol_retained_rate = (
+            self._raw_target_symbol_retained_numerator / self._raw_target_symbol_retained_denominator
+            if self._raw_target_symbol_retained_denominator > 0
+            else None
+        )
+        weighted_target_trade_retained_rate = (
+            self._target_trade_retained_numerator / self._target_trade_retained_denominator
+            if self._target_trade_retained_denominator > 0
+            else None
+        )
+        weighted_target_bbo_sig_retained_rate = (
+            self._target_bbo_sig_retained_numerator / self._target_bbo_sig_retained_denominator
+            if self._target_bbo_sig_retained_denominator > 0
+            else None
+        )
         weighted_burst_retention_rate = (
             self._retained_burst_count / self._burst_count
             if self._burst_count > 0
@@ -390,6 +637,18 @@ class EventTokenCacheSplitWriter:
             if self._symbol_with_zero_retained_counts
             else 0.0
         )
+        venue_candidate_total = sum(self._candidate_by_venue.values())
+        venue_selected_total = sum(self._selected_by_venue.values())
+        significant_bbo_emitted_total = sum(self._significant_bbo_emitted_count_by_reason.values())
+        significant_bbo_retained_total = sum(self._significant_bbo_retained_count_by_reason.values())
+        per_symbol_starvation_rate = {
+            symbol: (
+                self._symbol_zero_retained_row_count[symbol] / row_count
+                if row_count > 0
+                else 0.0
+            )
+            for symbol, row_count in sorted(self._symbol_candidate_row_count.items())
+        }
         return EventTokenSplitDiagnostics(
             split_name=self.split_name,
             row_count=self._total_rows,
@@ -400,28 +659,101 @@ class EventTokenCacheSplitWriter:
             truncated_row_count=self._truncated_row_count,
             truncation_rate=(self._truncated_row_count / self._total_rows) if self._total_rows else 0.0,
             candidate_token_total=self._candidate_token_total,
+            informative_candidate_total=self._informative_candidate_total,
             selected_token_total=self._selected_token_total,
-            dropped_token_total=max(self._candidate_token_total - self._selected_token_total, 0),
+            dropped_token_total=max(self._informative_candidate_total - self._selected_token_total, 0),
             dropped_by_stream=dict(self._dropped_by_stream),
             dropped_by_venue=dict(self._dropped_by_venue),
             dropped_by_symbol=dict(self._dropped_by_symbol),
             retained_by_symbol=dict(self._retained_by_symbol),
+            candidate_by_venue=dict(self._candidate_by_venue),
+            candidate_by_stream=dict(self._candidate_by_stream),
+            selected_by_venue=dict(self._selected_by_venue),
+            selected_by_stream=dict(self._selected_by_stream),
             duplicate_event_count=self._duplicate_event_count,
             duplicate_dropped_by_stream=dict(self._duplicate_dropped_by_stream),
             duplicate_dropped_by_venue=dict(self._duplicate_dropped_by_venue),
             same_timestamp_tie_count=self._same_timestamp_tie_count,
             source_order_inversion_count=self._source_order_inversion_count,
             weighted_target_symbol_retained_rate=weighted_target_symbol_retained_rate,
+            weighted_raw_target_symbol_retained_rate=weighted_raw_target_symbol_retained_rate,
+            weighted_target_trade_retained_rate=weighted_target_trade_retained_rate,
+            weighted_target_bbo_sig_retained_rate=weighted_target_bbo_sig_retained_rate,
             weighted_burst_retention_rate=weighted_burst_retention_rate,
+            weighted_target_selected_share=(
+                self._target_selected_token_total / self._selected_token_total
+                if self._selected_token_total > 0
+                else None
+            ),
             symbol_with_zero_retained_tokens_count_p95=symbol_zero_p95,
+            per_symbol_starvation_rate=per_symbol_starvation_rate,
+            venue_candidate_share_by_venue={
+                venue: (count / venue_candidate_total) if venue_candidate_total > 0 else 0.0
+                for venue, count in sorted(self._candidate_by_venue.items())
+            },
+            venue_selected_share_by_venue={
+                venue: (count / venue_selected_total) if venue_selected_total > 0 else 0.0
+                for venue, count in sorted(self._selected_by_venue.items())
+            },
+            venue_overrepresentation_ratio={
+                venue: (
+                    ((self._selected_by_venue.get(venue, 0) / venue_selected_total) / (count / venue_candidate_total))
+                    if venue_selected_total > 0 and venue_candidate_total > 0 and count > 0
+                    else 0.0
+                )
+                for venue, count in sorted(self._candidate_by_venue.items())
+            },
+            significant_bbo_emitted_count_by_reason=dict(self._significant_bbo_emitted_count_by_reason),
+            significant_bbo_retained_count_by_reason=dict(self._significant_bbo_retained_count_by_reason),
+            significant_bbo_preservation_rate=(
+                significant_bbo_retained_total / significant_bbo_emitted_total
+                if significant_bbo_emitted_total > 0
+                else None
+            ),
+            token_budget_pressure_row_count=self._token_budget_pressure_row_count,
+            token_budget_pressure_rate=(
+                self._token_budget_pressure_row_count / self._total_rows
+                if self._total_rows
+                else 0.0
+            ),
+            budget_fill_by_tier=dict(self._budget_fill_by_tier),
+            drop_reason_counts_by_tier={
+                tier: dict(counter)
+                for tier, counter in sorted(self._drop_reason_counts_by_tier.items())
+            },
+            compression_ratio_by_family={
+                "raw_bbo_to_significant_bbo": (
+                    self._informative_candidate_by_stream.get("bbo", 0) / self._candidate_by_stream.get("bbo", 1)
+                    if self._candidate_by_stream.get("bbo", 0) > 0
+                    else 0.0
+                ),
+                "raw_trade_to_retained_trade_units": (
+                    self._informative_candidate_by_stream.get("trade", 0) / self._candidate_by_stream.get("trade", 1)
+                    if self._candidate_by_stream.get("trade", 0) > 0
+                    else 0.0
+                ),
+                "significant_bbo_to_retained_bbo": (
+                    self._selected_by_stream.get("bbo", 0) / self._informative_candidate_by_stream.get("bbo", 1)
+                    if self._informative_candidate_by_stream.get("bbo", 0) > 0
+                    else 0.0
+                ),
+                "total_raw_to_retained": (
+                    self._selected_token_total / self._candidate_token_total
+                    if self._candidate_token_total > 0
+                    else 0.0
+                ),
+            },
+            lane_cap_hit_rate=(self._lane_cap_hit_row_count / self._total_rows) if self._total_rows else 0.0,
+            bbo_cap_hit_rate=(self._bbo_cap_hit_row_count / self._total_rows) if self._total_rows else 0.0,
+            symbol_cap_hit_rate=(self._symbol_cap_hit_row_count / self._total_rows) if self._total_rows else 0.0,
             cross_venue_ordered_adjacency_rate=(
-                self._cross_venue_ordered_adjacency_count / self._non_empty_row_count
-                if self._non_empty_row_count
+                self._cross_venue_ordered_adjacency_preserved_count / self._cross_venue_ordered_adjacency_raw_count
+                if self._cross_venue_ordered_adjacency_raw_count
                 else 0.0
             ),
             trade_to_bbo_ordered_adjacency_rate=(
-                self._trade_to_bbo_ordered_adjacency_count / self._non_empty_row_count
-                if self._non_empty_row_count
+                self._trade_to_bbo_ordered_adjacency_preserved_count / self._trade_to_bbo_ordered_adjacency_raw_count
+                if self._trade_to_bbo_ordered_adjacency_raw_count
                 else 0.0
             ),
         )
@@ -432,7 +764,7 @@ class EventTokenCacheSplitWriter:
         target_symbol: str,
         decision_time: datetime,
         row_index: int,
-    ) -> tuple[list[_EventCandidate], list[_EventCandidate], EventTokenRowWindowStats]:
+    ) -> tuple[list[_EventCandidate], list[_InformativeUnit], list[_InformativeUnit], EventTokenRowWindowStats]:
         decision_time_ts = decision_time.timestamp()
         window_start_ts = decision_time_ts - float(self.lookback_seconds)
         supported_lane_count = 0
@@ -513,56 +845,60 @@ class EventTokenCacheSplitWriter:
             if int(previous.event_time_ts * 1000) == int(current.event_time_ts * 1000):
                 same_timestamp_tie_count += 1
 
-        selected_candidates = (
-            list(deduped_candidates)
-            if len(deduped_candidates) <= self.token_cap
-            else self._select_candidates(deduped_candidates)
-        )
-
         candidate_by_symbol = Counter(candidate.symbol for candidate in deduped_candidates)
-        retained_by_symbol = Counter(candidate.symbol for candidate in selected_candidates)
+        candidate_by_venue = Counter(candidate.exchange for candidate in deduped_candidates)
+        candidate_by_stream = Counter(candidate.stream for candidate in deduped_candidates)
+        informative_units = self._emit_informative_units(
+            candidates=deduped_candidates,
+            decision_time=decision_time,
+        )
+        self._assign_priority_tiers(informative_units=informative_units, target_symbol=target_symbol)
+        selected_units, selection_meta = self._select_informative_units(
+            informative_units=informative_units,
+            target_symbol=target_symbol,
+        )
+        informative_candidate_by_symbol = Counter(unit.symbol for unit in informative_units)
+        informative_candidate_by_venue = Counter(unit.exchange for unit in informative_units)
+        informative_candidate_by_stream = Counter(unit.stream for unit in informative_units)
+        retained_by_symbol = Counter(unit.symbol for unit in selected_units)
+        retained_by_venue = Counter(unit.exchange for unit in selected_units)
+        retained_by_stream = Counter(unit.stream for unit in selected_units)
         dropped_by_symbol = Counter(
             {
-                symbol: candidate_by_symbol[symbol] - retained_by_symbol.get(symbol, 0)
-                for symbol in candidate_by_symbol
+                symbol: informative_candidate_by_symbol[symbol] - retained_by_symbol.get(symbol, 0)
+                for symbol in informative_candidate_by_symbol
             }
         )
-        dropped_by_stream = Counter(candidate.stream for candidate in deduped_candidates)
-        dropped_by_stream.subtract(Counter(candidate.stream for candidate in selected_candidates))
-        dropped_by_venue = Counter(candidate.exchange for candidate in deduped_candidates)
-        dropped_by_venue.subtract(Counter(candidate.exchange for candidate in selected_candidates))
-        burst_groups = _burst_groups(deduped_candidates, self.burst_gap_ms)
-        selected_lookup = {
-            (
-                candidate.event_time_ts,
-                candidate.source_label_id,
-                candidate.source_event_index,
-                candidate.symbol,
-                candidate.exchange,
-                candidate.stream,
-            )
-            for candidate in selected_candidates
-        }
-        retained_burst_count = 0
-        for burst in burst_groups:
-            if any(
-                (
-                    member.event_time_ts,
-                    member.source_label_id,
-                    member.source_event_index,
-                    member.symbol,
-                    member.exchange,
-                    member.stream,
-                )
-                in selected_lookup
-                for member in burst
-            ):
-                retained_burst_count += 1
-
-        target_candidate_count = candidate_by_symbol.get(target_symbol, 0)
+        dropped_by_stream = Counter(informative_candidate_by_stream)
+        dropped_by_stream.subtract(retained_by_stream)
+        dropped_by_venue = Counter(informative_candidate_by_venue)
+        dropped_by_venue.subtract(retained_by_venue)
+        informative_burst_ids = {unit.burst_id for unit in informative_units}
+        retained_burst_ids = {unit.burst_id for unit in selected_units}
+        retained_burst_count = len(retained_burst_ids)
+        target_candidate_count = informative_candidate_by_symbol.get(target_symbol, 0)
+        raw_target_candidate_count = candidate_by_symbol.get(target_symbol, 0)
+        retained_target_count = retained_by_symbol.get(target_symbol, 0)
+        target_trade_candidate_count = sum(
+            1 for unit in informative_units if unit.symbol == target_symbol and unit.stream == "trade"
+        )
+        retained_target_trade_count = sum(
+            1 for unit in selected_units if unit.symbol == target_symbol and unit.stream == "trade"
+        )
+        target_bbo_sig_candidate_count = sum(
+            1 for unit in informative_units if unit.symbol == target_symbol and unit.is_bbo_significant
+        )
+        retained_target_bbo_sig_count = sum(
+            1 for unit in selected_units if unit.symbol == target_symbol and unit.is_bbo_significant
+        )
         target_symbol_retained_rate = (
-            retained_by_symbol.get(target_symbol, 0) / target_candidate_count
+            retained_target_count / target_candidate_count
             if target_candidate_count > 0
+            else None
+        )
+        raw_target_symbol_retained_rate = (
+            retained_target_count / raw_target_candidate_count
+            if raw_target_candidate_count > 0
             else None
         )
         empty_window = len(deduped_candidates) == 0
@@ -570,16 +906,33 @@ class EventTokenCacheSplitWriter:
             latest_target_reference_ts is not None
             and (decision_time_ts - latest_target_reference_ts) > float(self.stale_after_seconds)
         )
-        has_cross_venue_ordered_adjacency = _has_ordered_pair(
-            selected_candidates,
+        raw_target_candidates = [candidate for candidate in deduped_candidates if candidate.symbol == target_symbol]
+        raw_has_cross_venue_ordered_adjacency = _has_ordered_pair(
+            raw_target_candidates,
             lambda left, right: (
                 left.symbol == right.symbol
                 and left.stream == right.stream
                 and left.exchange != right.exchange
             ),
         )
-        has_trade_to_bbo_ordered_adjacency = _has_ordered_pair(
-            selected_candidates,
+        retained_has_cross_venue_ordered_adjacency = (
+            raw_has_cross_venue_ordered_adjacency
+            and _has_ordered_pair(
+                [unit for unit in selected_units if unit.symbol == target_symbol],
+                lambda left, right: (
+                    left.symbol == right.symbol
+                    and left.stream == right.stream
+                    and left.exchange != right.exchange
+                ),
+            )
+        )
+        raw_trade_to_bbo_source = sorted(
+            [candidate for candidate in deduped_candidates if candidate.symbol == target_symbol and candidate.stream == "trade"]
+            + [unit for unit in informative_units if unit.symbol == target_symbol and unit.is_bbo_significant],
+            key=_candidate_key,
+        )
+        raw_has_trade_to_bbo_ordered_adjacency = _has_ordered_pair(
+            raw_trade_to_bbo_source,
             lambda left, right: (
                 left.symbol == right.symbol
                 and left.exchange == right.exchange
@@ -587,29 +940,107 @@ class EventTokenCacheSplitWriter:
                 and right.stream == "bbo"
             ),
         )
+        retained_has_trade_to_bbo_ordered_adjacency = (
+            raw_has_trade_to_bbo_ordered_adjacency
+            and _has_ordered_pair(
+                [unit for unit in selected_units if unit.symbol == target_symbol],
+                lambda left, right: (
+                    left.symbol == right.symbol
+                    and left.exchange == right.exchange
+                    and left.stream == "trade"
+                    and right.stream == "bbo"
+                ),
+            )
+        )
+        significant_bbo_emitted_count_by_reason = Counter(
+            unit.canonical_significance_reason
+            for unit in informative_units
+            if unit.is_bbo_significant and unit.canonical_significance_reason is not None
+        )
+        significant_bbo_retained_count_by_reason = Counter(
+            unit.canonical_significance_reason
+            for unit in selected_units
+            if unit.is_bbo_significant and unit.canonical_significance_reason is not None
+        )
+        informative_candidate_keys = {_candidate_key(unit) for unit in informative_units}
+        lost_after_compression_count = sum(
+            1 for candidate in deduped_candidates if _candidate_key(candidate) not in informative_candidate_keys
+        )
+        drop_reason_counts_by_tier = {
+            tier: dict(counter)
+            for tier, counter in selection_meta["drop_reason_counts_by_tier"].items()
+        }
+        if lost_after_compression_count > 0:
+            drop_reason_counts_by_tier.setdefault("COMPRESSION", {})
+            drop_reason_counts_by_tier["COMPRESSION"]["lost_after_compression"] = lost_after_compression_count
         row_stats = EventTokenRowWindowStats(
             row_index=row_index,
             decision_time=decision_time,
             target_symbol=target_symbol,
             candidate_token_count=len(deduped_candidates),
-            selected_token_count=len(selected_candidates),
-            dropped_token_count=max(len(deduped_candidates) - len(selected_candidates), 0),
-            truncated=len(deduped_candidates) > self.token_cap,
+            informative_candidate_count=len(informative_units),
+            selected_token_count=len(selected_units),
+            dropped_token_count=max(len(informative_units) - len(selected_units), 0),
+            truncated=len(informative_units) > self.token_cap,
+            token_budget_pressure=len(informative_units) > self.token_cap,
             candidate_by_symbol=dict(candidate_by_symbol),
+            candidate_by_venue=dict(candidate_by_venue),
+            candidate_by_stream=dict(candidate_by_stream),
+            informative_candidate_by_symbol=dict(informative_candidate_by_symbol),
+            informative_candidate_by_venue=dict(informative_candidate_by_venue),
+            informative_candidate_by_stream=dict(informative_candidate_by_stream),
             retained_by_symbol=dict(retained_by_symbol),
+            retained_by_venue=dict(retained_by_venue),
+            retained_by_stream=dict(retained_by_stream),
             dropped_by_symbol={key: value for key, value in dropped_by_symbol.items() if value > 0},
             dropped_by_stream={key: value for key, value in dropped_by_stream.items() if value > 0},
             dropped_by_venue={key: value for key, value in dropped_by_venue.items() if value > 0},
             target_symbol_retained_rate=target_symbol_retained_rate,
+            raw_target_symbol_retained_rate=raw_target_symbol_retained_rate,
+            target_trade_retained_rate=(
+                retained_target_trade_count / target_trade_candidate_count
+                if target_trade_candidate_count > 0
+                else None
+            ),
+            target_bbo_sig_retained_rate=(
+                retained_target_bbo_sig_count / target_bbo_sig_candidate_count
+                if target_bbo_sig_candidate_count > 0
+                else None
+            ),
+            target_selected_share=(
+                retained_target_count / len(selected_units)
+                if selected_units
+                else None
+            ),
+            target_trade_candidate_count=target_trade_candidate_count,
+            retained_target_trade_count=retained_target_trade_count,
+            target_bbo_sig_candidate_count=target_bbo_sig_candidate_count,
+            retained_target_bbo_sig_count=retained_target_bbo_sig_count,
             target_symbol_candidate_empty=target_candidate_count == 0,
             symbol_with_zero_retained_tokens_count=sum(
                 1
-                for symbol, count in candidate_by_symbol.items()
+                for symbol, count in informative_candidate_by_symbol.items()
                 if count > 0 and retained_by_symbol.get(symbol, 0) == 0
             ),
-            burst_count=len(burst_groups),
+            burst_count=len(informative_burst_ids),
             retained_burst_count=retained_burst_count,
-            burst_retention_rate=(retained_burst_count / len(burst_groups)) if burst_groups else None,
+            burst_retention_rate=(
+                retained_burst_count / len(informative_burst_ids)
+                if informative_burst_ids
+                else None
+            ),
+            significant_bbo_emitted_count_by_reason=dict(significant_bbo_emitted_count_by_reason),
+            significant_bbo_retained_count_by_reason=dict(significant_bbo_retained_count_by_reason),
+            significant_bbo_preservation_rate=(
+                sum(significant_bbo_retained_count_by_reason.values()) / sum(significant_bbo_emitted_count_by_reason.values())
+                if significant_bbo_emitted_count_by_reason
+                else None
+            ),
+            budget_fill_by_tier=dict(selection_meta["budget_fill_by_tier"]),
+            drop_reason_counts_by_tier=drop_reason_counts_by_tier,
+            lane_cap_hit_count=1 if selection_meta["lane_cap_hit"] else 0,
+            bbo_cap_hit_count=1 if selection_meta["bbo_cap_hit"] else 0,
+            symbol_cap_hit_count=1 if selection_meta["symbol_cap_hit"] else 0,
             duplicate_event_count=duplicate_count,
             duplicate_dropped_by_stream=dict(duplicate_dropped_by_stream),
             duplicate_dropped_by_venue=dict(duplicate_dropped_by_venue),
@@ -618,79 +1049,467 @@ class EventTokenCacheSplitWriter:
             supported_lane_count=supported_lane_count,
             empty_window=empty_window,
             stale_window=stale_window,
-            has_cross_venue_ordered_adjacency=has_cross_venue_ordered_adjacency,
-            has_trade_to_bbo_ordered_adjacency=has_trade_to_bbo_ordered_adjacency,
+            raw_has_target_cross_venue_ordered_adjacency=raw_has_cross_venue_ordered_adjacency,
+            retained_has_target_cross_venue_ordered_adjacency=retained_has_cross_venue_ordered_adjacency,
+            raw_has_target_trade_to_bbo_ordered_adjacency=raw_has_trade_to_bbo_ordered_adjacency,
+            retained_has_target_trade_to_bbo_ordered_adjacency=retained_has_trade_to_bbo_ordered_adjacency,
+            has_cross_venue_ordered_adjacency=retained_has_cross_venue_ordered_adjacency,
+            has_trade_to_bbo_ordered_adjacency=retained_has_trade_to_bbo_ordered_adjacency,
         )
-        return deduped_candidates, selected_candidates, row_stats
+        return deduped_candidates, informative_units, selected_units, row_stats
 
-    def _select_candidates(self, candidates: list[_EventCandidate]) -> list[_EventCandidate]:
-        selected_keys: set[tuple[float, int, int, str, str, str]] = set()
-
-        def _candidate_key(candidate: _EventCandidate) -> tuple[float, int, int, str, str, str]:
-            return (
-                candidate.event_time_ts,
-                candidate.source_label_id,
-                candidate.source_event_index,
-                candidate.symbol,
-                candidate.exchange,
-                candidate.stream,
-            )
-
-        newest_candidates = list(reversed(candidates))
-        for candidate in newest_candidates[: self.recency_reserve_count]:
-            selected_keys.add(_candidate_key(candidate))
-
-        burst_tail_candidates: list[_EventCandidate] = []
-        by_lane: dict[tuple[str, str, str], list[_EventCandidate]] = defaultdict(list)
+    def _emit_informative_units(
+        self,
+        *,
+        candidates: list[_EventCandidate],
+        decision_time: datetime,
+    ) -> list[_InformativeUnit]:
+        decision_time_ms = datetime_to_epoch_millis(decision_time)
+        grouped: dict[tuple[str, str, str], list[_EventCandidate]] = defaultdict(list)
         for candidate in candidates:
-            by_lane[(candidate.exchange, candidate.symbol, candidate.stream)].append(candidate)
-        for lane_candidates in by_lane.values():
-            bursts = _burst_groups(lane_candidates, self.burst_gap_ms)
-            for burst in bursts[-2:]:
-                if burst:
-                    burst_tail_candidates.append(burst[-1])
-        burst_tail_candidates.sort(key=lambda item: _candidate_key(item), reverse=True)
-        for candidate in burst_tail_candidates:
-            if len(selected_keys) >= self.recency_reserve_count + self.burst_reserve_count:
-                break
-            selected_keys.add(_candidate_key(candidate))
-        bucket_order = [
-            ("trade", "binance"),
-            ("trade", "bybit"),
-            ("trade", "okx"),
-            ("bbo", "binance"),
-            ("bbo", "bybit"),
-            ("bbo", "okx"),
-        ]
-        bucket_candidates: dict[tuple[str, str], list[_EventCandidate]] = {}
-        bucket_positions: dict[tuple[str, str], int] = {}
-        for stream, exchange in bucket_order:
-            bucket = [
-                candidate
-                for candidate in reversed(candidates)
-                if candidate.stream == stream and candidate.exchange == exchange
-                and _candidate_key(candidate) not in selected_keys
-            ]
-            bucket_candidates[(stream, exchange)] = bucket
-            bucket_positions[(stream, exchange)] = 0
-        while len(selected_keys) < self.token_cap:
-            made_progress = False
-            for bucket_key in bucket_order:
-                bucket = bucket_candidates[bucket_key]
-                position = bucket_positions[bucket_key]
-                while position < len(bucket) and _candidate_key(bucket[position]) in selected_keys:
-                    position += 1
-                bucket_positions[bucket_key] = position
-                if position >= len(bucket):
+            grouped[(candidate.exchange, candidate.symbol, candidate.stream)].append(candidate)
+        units_by_key: dict[tuple[float, int, int, str, str, str], _InformativeUnit] = {}
+        for lane_key, lane_candidates in grouped.items():
+            for burst in _burst_groups(lane_candidates, self.burst_gap_ms):
+                burst_id = _burst_identifier(lane_key, burst)
+                burst_end = burst[-1]
+                burst_end_lag_ms = max(decision_time_ms - int(burst_end.event_time_ts * 1000), 0)
+                is_recent_burst = burst_end_lag_ms <= self.selection_hyperparameters.recent_high_fidelity_seconds * 1000
+                if lane_key[2] == "trade":
+                    if is_recent_burst:
+                        for candidate in burst:
+                            self._upsert_informative_unit(
+                                units_by_key=units_by_key,
+                                candidate=candidate,
+                                source_bucket="trade_recent_raw",
+                                decision_time_ms=decision_time_ms,
+                                lane_key=lane_key,
+                                burst_id=burst_id,
+                                salience=_trade_salience(candidate),
+                                emission_tag="recent_raw",
+                            )
+                    else:
+                        self._upsert_informative_unit(
+                            units_by_key=units_by_key,
+                            candidate=burst_end,
+                            source_bucket="trade_older_summary",
+                            decision_time_ms=decision_time_ms,
+                            lane_key=lane_key,
+                            burst_id=burst_id,
+                            salience=_trade_salience(burst_end),
+                            emission_tag="burst_end",
+                        )
+                        max_abs_flow_candidate = max(
+                            burst,
+                            key=lambda item: (_trade_salience(item), _candidate_key(item)),
+                        )
+                        self._upsert_informative_unit(
+                            units_by_key=units_by_key,
+                            candidate=max_abs_flow_candidate,
+                            source_bucket="trade_older_summary",
+                            decision_time_ms=decision_time_ms,
+                            lane_key=lane_key,
+                            burst_id=burst_id,
+                            salience=_trade_salience(max_abs_flow_candidate),
+                            emission_tag="max_abs_signed_flow",
+                        )
                     continue
-                selected_keys.add(_candidate_key(bucket[position]))
-                bucket_positions[bucket_key] += 1
-                made_progress = True
-                if len(selected_keys) >= self.token_cap:
+
+                burst_start = burst[0]
+                burst_end_reasons, burst_end_salience = self._bbo_significance_assessment(
+                    burst_start=burst_start,
+                    candidate=burst_end,
+                )
+                burst_end_reasons.add("burst_boundary")
+                self._upsert_informative_unit(
+                    units_by_key=units_by_key,
+                    candidate=burst_end,
+                    source_bucket="bbo_recent_sig" if is_recent_burst else "bbo_older_sig",
+                    decision_time_ms=decision_time_ms,
+                    lane_key=lane_key,
+                    burst_id=burst_id,
+                    salience=burst_end_salience,
+                    emission_tag="burst_end",
+                    matched_reasons=burst_end_reasons,
+                )
+                significant_candidates: list[tuple[float, _EventCandidate, set[str]]] = []
+                for candidate in burst:
+                    matched_reasons, salience = self._bbo_significance_assessment(
+                        burst_start=burst_start,
+                        candidate=candidate,
+                    )
+                    if matched_reasons:
+                        significant_candidates.append((salience, candidate, matched_reasons))
+                significant_candidates.sort(
+                    key=lambda item: (-item[0], -item[1].event_time_ts, item[1].source_label_id, item[1].source_event_index)
+                )
+                extra_limit = (
+                    self.selection_hyperparameters.recent_bbo_extra_significant_limit
+                    if is_recent_burst
+                    else 1
+                )
+                for salience, candidate, matched_reasons in significant_candidates[:extra_limit]:
+                    self._upsert_informative_unit(
+                        units_by_key=units_by_key,
+                        candidate=candidate,
+                        source_bucket="bbo_recent_sig" if is_recent_burst else "bbo_older_sig",
+                        decision_time_ms=decision_time_ms,
+                        lane_key=lane_key,
+                        burst_id=burst_id,
+                        salience=salience,
+                        emission_tag="significant",
+                        matched_reasons=matched_reasons,
+                    )
+        return sorted(units_by_key.values(), key=_candidate_key)
+
+    def _assign_priority_tiers(
+        self,
+        *,
+        informative_units: list[_InformativeUnit],
+        target_symbol: str,
+    ) -> None:
+        for unit in informative_units:
+            unit.priority_tier = _base_priority_tier(unit=unit, target_symbol=target_symbol)
+        target_anchors = [
+            unit
+            for unit in informative_units
+            if unit.symbol == target_symbol and unit.priority_tier in {"T0", "T1", "T2", "T3"}
+        ]
+        for unit in informative_units:
+            if unit.priority_tier in {"T0", "T1", "T2", "T3"}:
+                continue
+            matches: list[tuple[int, int, float, float, int, int, _InformativeUnit]] = []
+            for anchor in target_anchors:
+                delta_ms = abs(int((unit.event_time_ts - anchor.event_time_ts) * 1000))
+                if delta_ms > self.selection_hyperparameters.causal_horizon_ms:
+                    continue
+                if not (
+                    (unit.symbol == anchor.symbol and unit.exchange != anchor.exchange)
+                    or (unit.exchange == anchor.exchange and unit.symbol != anchor.symbol)
+                ):
+                    continue
+                matches.append(
+                    (
+                        delta_ms,
+                        _tier_rank(anchor.priority_tier),
+                        -anchor.salience,
+                        -anchor.event_time_ts,
+                        anchor.source_label_id,
+                        anchor.source_event_index,
+                        anchor,
+                    )
+                )
+            if matches:
+                _, _, _, _, _, _, best_anchor = min(matches)
+                unit.priority_tier = "T4"
+                unit.best_anchor_key = _candidate_key(best_anchor)
+                unit.best_anchor_tier = best_anchor.priority_tier
+                unit.best_anchor_delta_ms = abs(int((unit.event_time_ts - best_anchor.event_time_ts) * 1000))
+
+    def _select_informative_units(
+        self,
+        *,
+        informative_units: list[_InformativeUnit],
+        target_symbol: str,
+    ) -> tuple[list[_InformativeUnit], dict[str, Any]]:
+        selected_keys: set[tuple[float, int, int, str, str, str]] = set()
+        selected_units: list[_InformativeUnit] = []
+        state = {
+            "total": 0,
+            "bbo": 0,
+            "lane": Counter(),
+            "symbol": Counter(),
+        }
+        selection_meta: dict[str, Any] = {
+            "budget_fill_by_tier": Counter(),
+            "drop_reason_counts_by_tier": defaultdict(Counter),
+            "lane_cap_hit": False,
+            "bbo_cap_hit": False,
+            "symbol_cap_hit": False,
+        }
+        carry_over = 0
+        group_caps = self.selection_hyperparameters.tier_token_caps
+        for group_name, tiers, _ in _TIER_CAP_GROUPS:
+            capacity = group_caps[group_name] + carry_over
+            group_units = [unit for unit in informative_units if unit.priority_tier in tiers]
+            selected_count_before = len(selected_units)
+            self._select_group_units(
+                group_name=group_name,
+                group_units=group_units,
+                capacity=capacity,
+                selected_keys=selected_keys,
+                selected_units=selected_units,
+                state=state,
+                selection_meta=selection_meta,
+                target_symbol=target_symbol,
+            )
+            selected_count_after = len(selected_units)
+            carry_over = max(capacity - (selected_count_after - selected_count_before), 0)
+            if carry_over > 0:
+                selection_meta["drop_reason_counts_by_tier"][group_name]["deferred_to_lower_tier"] += carry_over
+
+        final_selected = sorted(selected_units, key=_candidate_key)
+        for unit in informative_units:
+            if _candidate_key(unit) in selected_keys:
+                continue
+            tier_name = unit.priority_tier or _priority_group_name(unit.priority_tier)
+            drop_reason = self._final_drop_reason(unit=unit, state=state)
+            selection_meta["drop_reason_counts_by_tier"][tier_name][drop_reason] += 1
+            if drop_reason in {"lane_cap", "bbo_cap", "symbol_cap"}:
+                selection_meta[f"{drop_reason}_hit"] = True
+        return final_selected, selection_meta
+
+    def _select_group_units(
+        self,
+        *,
+        group_name: str,
+        group_units: list[_InformativeUnit],
+        capacity: int,
+        selected_keys: set[tuple[float, int, int, str, str, str]],
+        selected_units: list[_InformativeUnit],
+        state: dict[str, Any],
+        selection_meta: dict[str, Any],
+        target_symbol: str,
+    ) -> None:
+        if capacity <= 0 or not group_units:
+            return
+        group_selected_count = 0
+        sorted_group_units = sorted(
+            group_units,
+            key=lambda unit: (
+                _tier_rank(unit.priority_tier),
+                _lag_bucket_rank(unit.lag_ms, self.selection_hyperparameters.recent_high_fidelity_seconds),
+                -unit.salience,
+                -unit.event_time_ts,
+                unit.source_label_id,
+                unit.source_event_index,
+                unit.symbol,
+                unit.exchange,
+                unit.stream,
+            ),
+        )
+        local_exchange_counts: Counter[str] = Counter()
+        local_symbol_counts: Counter[str] = Counter()
+        exchange_max: int | None = None
+        floor_targets: list[tuple[str, str, int]] = []
+        if group_name == "T0":
+            exchange_max = self.selection_hyperparameters.target_floor_by_exchange["T0_max"]
+            floor_targets = [
+                ("exchange", exchange, self.selection_hyperparameters.target_floor_by_exchange["T0_min"])
+                for exchange in self.dataset_spec.exchanges
+            ]
+        elif group_name == "T1":
+            exchange_max = self.selection_hyperparameters.target_floor_by_exchange["T1_max"]
+            floor_targets = [
+                ("exchange", exchange, self.selection_hyperparameters.target_floor_by_exchange["T1_min"])
+                for exchange in self.dataset_spec.exchanges
+            ]
+        elif group_name == "T2_T3":
+            exchange_max = self.selection_hyperparameters.target_floor_by_exchange["T2_T3_max"]
+            floor_targets = [
+                ("exchange", exchange, self.selection_hyperparameters.target_floor_by_exchange["T2_T3_min"])
+                for exchange in self.dataset_spec.exchanges
+            ]
+        elif group_name == "T4":
+            floor_targets = [
+                ("symbol", symbol, self.selection_hyperparameters.t4_symbol_floor)
+                for symbol in self.dataset_spec.symbols
+                if symbol != target_symbol
+            ]
+
+        for attr_name, value, target_count in floor_targets:
+            while (
+                (local_exchange_counts[value] if attr_name == "exchange" else local_symbol_counts[value]) < target_count
+                and len(selected_units) < self.token_cap
+                and group_selected_count < capacity
+            ):
+                picked_any = False
+                for unit in sorted_group_units:
+                    if len(selected_units) >= self.token_cap:
+                        break
+                    if group_selected_count >= capacity:
+                        break
+                    if _candidate_key(unit) in selected_keys:
+                        continue
+                    if getattr(unit, attr_name) != value:
+                        continue
+                    if attr_name == "exchange" and exchange_max is not None and local_exchange_counts[value] >= exchange_max:
+                        break
+                    block_reason = self._selection_block_reason(
+                        unit=unit,
+                        state=state,
+                    )
+                    if block_reason is not None:
+                        if block_reason in {"lane_cap", "bbo_cap", "symbol_cap"}:
+                            selection_meta[f"{block_reason}_hit"] = True
+                        continue
+                    self._register_selected_unit(
+                        unit=unit,
+                        selected_keys=selected_keys,
+                        selected_units=selected_units,
+                        state=state,
+                        selection_meta=selection_meta,
+                    )
+                    group_selected_count += 1
+                    if attr_name == "exchange":
+                        local_exchange_counts[value] += 1
+                    else:
+                        local_symbol_counts[value] += 1
+                    picked_any = True
                     break
-            if not made_progress:
+                if not picked_any:
+                    break
+
+        for unit in sorted_group_units:
+            if len(selected_units) >= self.token_cap:
                 break
-        return [candidate for candidate in candidates if _candidate_key(candidate) in selected_keys]
+            if group_selected_count >= capacity:
+                break
+            if _candidate_key(unit) in selected_keys:
+                continue
+            if exchange_max is not None and local_exchange_counts[unit.exchange] >= exchange_max:
+                continue
+            block_reason = self._selection_block_reason(
+                unit=unit,
+                state=state,
+            )
+            if block_reason is not None:
+                if block_reason in {"lane_cap", "bbo_cap", "symbol_cap"}:
+                    selection_meta[f"{block_reason}_hit"] = True
+                continue
+            self._register_selected_unit(
+                unit=unit,
+                selected_keys=selected_keys,
+                selected_units=selected_units,
+                state=state,
+                selection_meta=selection_meta,
+            )
+            group_selected_count += 1
+            if exchange_max is not None:
+                local_exchange_counts[unit.exchange] += 1
+            if group_name == "T4":
+                local_symbol_counts[unit.symbol] += 1
+
+    def _selection_block_reason(
+        self,
+        *,
+        unit: _InformativeUnit,
+        state: dict[str, Any],
+    ) -> str | None:
+        if state["total"] >= self.token_cap:
+            return "bucket_overflow"
+        if unit.stream == "bbo" and state["bbo"] >= self.selection_hyperparameters.bbo_total_cap:
+            return "bbo_cap"
+        if state["lane"][unit.lane_key] >= self.selection_hyperparameters.single_lane_cap:
+            return "lane_cap"
+        if state["symbol"][unit.symbol] >= self.selection_hyperparameters.single_symbol_cap:
+            return "symbol_cap"
+        return None
+
+    def _register_selected_unit(
+        self,
+        *,
+        unit: _InformativeUnit,
+        selected_keys: set[tuple[float, int, int, str, str, str]],
+        selected_units: list[_InformativeUnit],
+        state: dict[str, Any],
+        selection_meta: dict[str, Any],
+    ) -> None:
+        selected_keys.add(_candidate_key(unit))
+        selected_units.append(unit)
+        state["total"] += 1
+        if unit.stream == "bbo":
+            state["bbo"] += 1
+        state["lane"][unit.lane_key] += 1
+        state["symbol"][unit.symbol] += 1
+        if unit.priority_tier is not None:
+            selection_meta["budget_fill_by_tier"][unit.priority_tier] += 1
+
+    def _final_drop_reason(
+        self,
+        *,
+        unit: _InformativeUnit,
+        state: dict[str, Any],
+    ) -> str:
+        if unit.stream == "bbo" and state["bbo"] >= self.selection_hyperparameters.bbo_total_cap:
+            return "bbo_cap"
+        if state["lane"][unit.lane_key] >= self.selection_hyperparameters.single_lane_cap:
+            return "lane_cap"
+        if state["symbol"][unit.symbol] >= self.selection_hyperparameters.single_symbol_cap:
+            return "symbol_cap"
+        return "bucket_overflow"
+
+    def _upsert_informative_unit(
+        self,
+        *,
+        units_by_key: dict[tuple[float, int, int, str, str, str], _InformativeUnit],
+        candidate: _EventCandidate,
+        source_bucket: Literal["trade_recent_raw", "trade_older_summary", "bbo_recent_sig", "bbo_older_sig"],
+        decision_time_ms: int,
+        lane_key: tuple[str, str, str],
+        burst_id: tuple[object, ...],
+        salience: float,
+        emission_tag: str,
+        matched_reasons: set[str] | None = None,
+    ) -> None:
+        key = _candidate_key(candidate)
+        unit = units_by_key.get(key)
+        if unit is None:
+            unit = _InformativeUnit(
+                candidate=candidate,
+                lag_ms=max(decision_time_ms - int(candidate.event_time_ts * 1000), 0),
+                source_bucket=source_bucket,
+                lane_key=lane_key,
+                burst_id=burst_id,
+                salience=salience,
+            )
+            units_by_key[key] = unit
+        unit.salience = max(unit.salience, salience)
+        unit.emission_tags.add(emission_tag)
+        if matched_reasons:
+            unit.matched_reasons.update(matched_reasons)
+        unit.canonical_significance_reason = _canonical_significance_reason(unit.matched_reasons)
+
+    def _bbo_significance_assessment(
+        self,
+        *,
+        burst_start: _EventCandidate,
+        candidate: _EventCandidate,
+    ) -> tuple[set[str], float]:
+        start_values = _bbo_state_tuple(burst_start)
+        current_values = _bbo_state_tuple(candidate)
+        if start_values is None or current_values is None:
+            return set(), 0.0
+        start_mid, start_spread, start_imbalance, start_min_side = start_values
+        current_mid, current_spread, current_imbalance, current_min_side = current_values
+        matched_reasons: set[str] = set()
+        mid_move_score = abs(current_mid - start_mid) / max(abs(start_mid), 1e-12)
+        spread_score = current_spread / max(start_spread, 1e-12) if current_spread > 0.0 else 0.0
+        imbalance_score = (
+            abs(current_imbalance - start_imbalance)
+            if start_imbalance is not None and current_imbalance is not None
+            else 0.0
+        )
+        liquidity_vacuum_score = 0.0
+        if start_min_side is not None and current_min_side is not None and start_min_side > 0.0:
+            liquidity_vacuum_score = start_min_side / max(current_min_side, 1e-12)
+        if liquidity_vacuum_score >= self.selection_hyperparameters.bbo_liquidity_vacuum_threshold:
+            matched_reasons.add("liquidity_vacuum")
+        if spread_score >= self.selection_hyperparameters.bbo_spread_regime_jump_threshold:
+            matched_reasons.add("spread_regime_jump")
+        if mid_move_score >= self.selection_hyperparameters.bbo_mid_excursion_threshold:
+            matched_reasons.add("mid_excursion")
+        sign_flip = (
+            start_imbalance is not None
+            and current_imbalance is not None
+            and (
+                (start_imbalance > 0.0 and current_imbalance < 0.0)
+                or (start_imbalance < 0.0 and current_imbalance > 0.0)
+            )
+        )
+        if sign_flip and imbalance_score >= self.selection_hyperparameters.bbo_imbalance_regime_flip_threshold:
+            matched_reasons.add("imbalance_regime_flip")
+        return matched_reasons, max(mid_move_score, spread_score, imbalance_score, liquidity_vacuum_score)
 
     def _append_token(self, *, decision_time: datetime, candidate: _EventCandidate) -> None:
         event_time_ms = datetime_to_epoch_millis(epoch_seconds_to_datetime(candidate.event_time_ts))
@@ -733,6 +1552,35 @@ def read_event_token_cache_manifest(directory: Path) -> EventTokenCacheManifest:
     )
 
 
+def build_event_token_cache_retention_receipt(directory: Path) -> EventTokenCacheRetentionReceipt:
+    payload_status = event_token_cache_payload_status(directory)
+    return EventTokenCacheRetentionReceipt(
+        source_manifest_path=_relative_cache_path(directory, event_token_cache_manifest_path(directory)),
+        retained_shard_count=payload_status.complete_shard_count,
+        missing_shard_count=payload_status.incomplete_shard_count,
+        retained_payload_count=payload_status.existing_payload_count,
+        missing_payload_count=payload_status.missing_payload_count,
+        missing_payloads=payload_status.missing_payloads,
+    )
+
+
+def write_event_token_cache_retention_receipt_atomic(
+    directory: Path,
+    receipt: EventTokenCacheRetentionReceipt,
+) -> None:
+    path = event_token_cache_retention_receipt_path(directory)
+    ensure_parent_dir(path)
+    tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+    tmp_path.write_text(receipt.model_dump_json(indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def read_event_token_cache_retention_receipt(directory: Path) -> EventTokenCacheRetentionReceipt:
+    return EventTokenCacheRetentionReceipt.model_validate_json(
+        event_token_cache_retention_receipt_path(directory).read_text(encoding="utf-8")
+    )
+
+
 def event_token_cache_payload_status(directory: Path) -> EventTokenCachePayloadStatus:
     manifest_path = event_token_cache_manifest_path(directory)
     if not manifest_path.exists():
@@ -742,28 +1590,35 @@ def event_token_cache_payload_status(directory: Path) -> EventTokenCachePayloadS
         )
     manifest = read_event_token_cache_manifest(directory)
     referenced_paths: list[str] = []
+    shard_count = 0
+    complete_shard_count = 0
+    incomplete_shard_count = 0
     for split_manifest in manifest.splits.values():
         for shard in split_manifest.shards:
-            referenced_paths.extend(
-                [
-                    shard.row_offsets_path,
-                    shard.event_time_path,
-                    shard.lag_ms_path,
-                    shard.exchange_id_path,
-                    shard.symbol_id_path,
-                    shard.stream_id_path,
-                    shard.source_label_id_path,
-                    shard.source_event_index_path,
-                    shard.payload_schema_id_path,
-                    shard.payload_row_index_path,
-                    shard.replay_path,
-                    shard.window_stats_path,
-                    shard.trade_payload_values_path,
-                    shard.trade_payload_presence_path,
-                    shard.bbo_payload_values_path,
-                    shard.bbo_payload_presence_path,
-                ]
-            )
+            shard_count += 1
+            shard_paths = [
+                shard.row_offsets_path,
+                shard.event_time_path,
+                shard.lag_ms_path,
+                shard.exchange_id_path,
+                shard.symbol_id_path,
+                shard.stream_id_path,
+                shard.source_label_id_path,
+                shard.source_event_index_path,
+                shard.payload_schema_id_path,
+                shard.payload_row_index_path,
+                shard.replay_path,
+                shard.window_stats_path,
+                shard.trade_payload_values_path,
+                shard.trade_payload_presence_path,
+                shard.bbo_payload_values_path,
+                shard.bbo_payload_presence_path,
+            ]
+            referenced_paths.extend(shard_paths)
+            if all((directory / relative_path).exists() for relative_path in shard_paths):
+                complete_shard_count += 1
+            else:
+                incomplete_shard_count += 1
     missing_payloads = sorted(
         {
             relative_path
@@ -776,6 +1631,9 @@ def event_token_cache_payload_status(directory: Path) -> EventTokenCachePayloadS
     return EventTokenCachePayloadStatus(
         manifest_present=True,
         payload_complete=len(missing_payloads) == 0,
+        shard_count=shard_count,
+        complete_shard_count=complete_shard_count,
+        incomplete_shard_count=incomplete_shard_count,
         referenced_payload_count=referenced_payload_count,
         existing_payload_count=existing_payload_count,
         missing_payload_count=len(missing_payloads),
@@ -935,6 +1793,49 @@ def _bbo_payload(candidate: _EventCandidate) -> tuple[list[float], list[bool]]:
     return values, presence
 
 
+def _trade_salience(candidate: _EventCandidate) -> float:
+    fields = candidate.event.fields
+    proxy = _field_float(fields, "side_or_signed_flow_proxy")
+    if proxy is None:
+        qty = _field_float(fields, "qty")
+        side_sign = _trade_side_sign(fields, qty)
+        if qty is not None and side_sign is not None:
+            proxy = qty * side_sign
+    event_delta = _field_float(fields, "event_delta")
+    if event_delta is None and candidate.lane_position > 0:
+        previous_fields = candidate.lane_events[candidate.lane_position - 1].fields
+        previous_price = _field_float(previous_fields, "price")
+        current_price = _field_float(fields, "price")
+        if previous_price is not None and current_price is not None:
+            event_delta = current_price - previous_price
+    return max(abs(proxy or 0.0), abs(event_delta or 0.0))
+
+
+def _bbo_state_tuple(
+    candidate: _EventCandidate,
+) -> tuple[float, float, float | None, float | None] | None:
+    fields = candidate.event.fields
+    bid_price = _field_float(fields, "bid_price", "bid")
+    ask_price = _field_float(fields, "ask_price", "ask")
+    spread = _field_float(fields, "spread")
+    if spread is None and bid_price is not None and ask_price is not None:
+        spread = ask_price - bid_price
+    mid = _field_float(fields, "mid")
+    if mid is None and bid_price is not None and ask_price is not None:
+        mid = (bid_price + ask_price) / 2.0
+    if mid is None or spread is None:
+        return None
+    bid_size = _field_float(fields, "bid_size", "bid_qty")
+    ask_size = _field_float(fields, "ask_size", "ask_qty")
+    imbalance = _field_float(fields, "imbalance_inputs", "imbalance")
+    if imbalance is None and bid_size is not None and ask_size is not None:
+        denominator = bid_size + ask_size
+        if abs(denominator) > 1e-12:
+            imbalance = (bid_size - ask_size) / denominator
+    min_side = min(bid_size, ask_size) if bid_size is not None and ask_size is not None else None
+    return mid, spread, imbalance, min_side
+
+
 def _trade_side_sign(fields: dict[str, Any], qty: float | None) -> float | None:
     string_side = None
     for key in ("aggressor_side", "side"):
@@ -1022,7 +1923,7 @@ def _burst_groups(candidates: list[_EventCandidate], burst_gap_ms: int) -> list[
 
 
 def _has_ordered_pair(
-    candidates: list[_EventCandidate],
+    candidates: list[_EventCandidate] | list[_InformativeUnit],
     predicate: Any,
 ) -> bool:
     for left_index, left in enumerate(candidates):
@@ -1091,21 +1992,27 @@ __all__ = [
     "EVENT_TOKEN_CACHE_DIRNAME",
     "EVENT_TOKEN_CACHE_FORMAT_VERSION",
     "EVENT_TOKEN_CACHE_MANIFEST_FILENAME",
+    "EVENT_TOKEN_CACHE_RETENTION_RECEIPT_FILENAME",
+    "EVENT_TOKEN_SELECTION_POLICY_ID",
     "EVENT_TOKENIZER_VERSION",
     "EVENT_WINDOW_CONTRACT_VERSION",
     "EventTokenCacheSplitWriter",
     "LoadedEventTokenCacheShard",
+    "build_event_token_cache_retention_receipt",
     "datetime_to_epoch_millis",
     "epoch_millis_to_datetime",
     "event_token_cache_diagnostics_path",
     "event_token_cache_directory",
     "event_token_cache_manifest_path",
     "event_token_cache_payload_status",
+    "event_token_cache_retention_receipt_path",
     "has_event_token_cache",
     "has_event_token_cache_manifest",
     "load_event_token_cache_shard",
     "read_event_token_cache_diagnostics",
     "read_event_token_cache_manifest",
+    "read_event_token_cache_retention_receipt",
     "write_event_token_cache_diagnostics_atomic",
     "write_event_token_cache_manifest_atomic",
+    "write_event_token_cache_retention_receipt_atomic",
 ]

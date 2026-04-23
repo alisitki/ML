@@ -46,6 +46,11 @@ def _copy_full_retained_bundle(source_root: Path, bundle_root: Path) -> Path:
         trajectories_root / "tensor_cache_v1",
         dirs_exist_ok=True,
     )
+    shutil.copytree(
+        source_root / "event_token_cache_v1",
+        trajectories_root / "event_token_cache_v1",
+        dirs_exist_ok=True,
+    )
     return bundle_root
 
 
@@ -94,6 +99,7 @@ def test_validate_retained_full_bundle_passes(
     assert report.replayable is True
     assert report.supports_phase0_empirical_closure is True
     assert report.blocking_reasons == []
+    assert report.event_token_cache_status["payload_complete"] is True
 
 
 def test_validate_retained_slim_bundle_rejects_dangling_tensor_cache_manifest(
@@ -141,6 +147,8 @@ def test_validate_retained_bundle_rejects_dangling_event_token_cache_manifest(
     assert report is not None
     assert report.bundle_payload_class == "slim"
     assert "dangling_event_token_cache_manifest" in report.blocking_reasons
+    assert report.event_token_cache_status["manifest_present"] is True
+    assert report.event_token_cache_status["incomplete_shard_count"] >= 1
 
     with pytest.raises(DanglingEventTokenCacheManifestError, match="dangling_event_token_cache_manifest"):
         validate_retained_bundle(bundle_root)

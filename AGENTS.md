@@ -124,6 +124,70 @@ When choosing between valid options, prefer the one that most directly improves 
 Do not optimize the system around laptop convenience or weak compatibility expectations if that harms the live trading objective.
 For `real_training` work on meaningful data volume, production observation surfaces, controlled reruns, or closure-grade evidence generation, the execution target is remote GPU infrastructure by default. Lack of local disk, local CUDA, or local throughput is not a reason to reinterpret that work as a local run or to treat local-machine limits as the governing constraint.
 
+## Remote-first archive-first artifact policy
+
+Heavy proof builds, heavy artifact validation, same-root reruns, remote smoke runs, and
+candidate searches default to remote compute such as Vast.ai or an equivalent provider.
+The local workstation is not the primary execution or storage surface for completed
+heavy run artifacts.
+
+The canonical archive home for heavy run outputs is:
+
+```text
+s3://quantlab-archive/quantlab/...
+```
+
+Use source-path-oriented prefixes:
+
+- local ignored output roots -> `s3://quantlab-archive/quantlab/local-outputs/...`
+- remote run roots -> `s3://quantlab-archive/quantlab/remote-runs/...`
+
+Local `outputs/` is transient unless a root is explicitly pinned. Completed heavy
+runs should leave only thin local mirrors: receipts, manifests, checksum files,
+summaries, logs, reports, configs, and small evidence files. Large proof roots,
+payload caches, policy payload copies, and replayable heavy bundles must be archived
+before local pruning.
+
+Archive-before-delete is mandatory. A local or remote heavy root may be pruned only
+after all of the following are true:
+
+- S3 upload succeeded
+- checksum or equivalent receipt verification succeeded
+- an archive manifest exists
+- a receipt records source root, archive prefix, timestamp, file inventory, digest
+  manifest, retained class, replayability, local keep/prune decisions, and remote
+  prune decisions
+
+Hard denylist for archive and prune tooling:
+
+- `.env`
+- SSH keys and SSH config material, including `.ssh`, `id_*`, `*.pem`, and `*.key`
+- `.venv`
+- `.git`
+- repo-tracked source, docs, configs, tests, scripts, and metadata
+- personal or local caches including `.aws`, `.config`, `.cache`, `.mypy_cache`,
+  `.pytest_cache`, `.ruff_cache`, `__pycache__`, and `.DS_Store`
+
+Allowed archive/prune roots are intentionally narrow:
+
+- untracked heavy roots under repo-local `outputs/`
+- explicit remote run roots under `/workspace/runs/...` or `/root/runs/...` when
+  running on the remote host
+
+Archive and prune execution must be staged:
+
+1. verify archive credentials for `s3://quantlab-archive`; dedicated
+   `S3_ARCHIVE_*` credentials are preferred, but shared `S3_COMPACT_*` credentials
+   are allowed if they verify successfully against `quantlab-archive`
+2. produce an inventory dry-run
+3. show every candidate source root, size, retained class, replayability, destination
+   prefix, thin local mirror, prune summary, and blocked entries
+4. stop for operator review
+5. upload only with explicit `--execute`
+6. verify receipts and checksum manifests
+7. produce a prune dry-run from verified receipts
+8. prune only with explicit `--execute`
+
 ---
 
 ## Required read order
