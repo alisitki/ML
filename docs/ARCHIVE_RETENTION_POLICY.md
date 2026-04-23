@@ -76,6 +76,13 @@ flow, then rerun dry-run inventory.
 
 ## Required sequence
 
+Failed and interrupted remote proof roots are still archive candidates. If a
+baseline build, selector rerun, determinism rerun, analyzer, or validator fails,
+archive the partial remote root with its logs, exit files, partial manifests, time
+logs, profiling outputs, checksum manifest, and archive receipt before any pruning.
+Successful completion is not required for archive; verified archive is required for
+delete.
+
 1. Verify `s3://quantlab-archive` credentials using a non-mutating bucket/list check.
    Dedicated `S3_ARCHIVE_*` credentials are preferred. If they are absent, shared
    `S3_COMPACT_*` credentials from the existing repo S3 path are allowed only when

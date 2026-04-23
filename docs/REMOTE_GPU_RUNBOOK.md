@@ -87,6 +87,13 @@ Archive-before-delete is mandatory. A remote or local root may be pruned only af
   digest manifest, retained class, replayability, local keep/prune lists, and remote
   prune lists
 
+Failure evidence is first-class. If a remote proof fails before completion, including
+baseline build failure, selector rerun failure, build-time gate breach, skipped
+determinism rerun, or analyzer failure, archive the partial `/workspace/runs/...`
+root to `s3://quantlab-archive/quantlab/remote-runs/...` with logs, exit files,
+partial manifests, time logs, profiling outputs, checksum manifest, and receipt.
+Do not prune that remote root unless archive verification succeeds.
+
 Hard denylist for archive and prune tooling:
 
 - `.env`

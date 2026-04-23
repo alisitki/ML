@@ -105,6 +105,14 @@ class EventTokenRowWindowStats(QuantBaseModel):
     significant_bbo_emitted_count_by_reason: dict[str, int] = Field(default_factory=dict)
     significant_bbo_retained_count_by_reason: dict[str, int] = Field(default_factory=dict)
     significant_bbo_preservation_rate: float | None = None
+    informative_candidate_by_tier: dict[str, int] = Field(default_factory=dict)
+    t4_candidate_count: int = 0
+    t4_anchor_count: int = 0
+    t4_resolution_wall_sec: float = Field(default=0.0, exclude=True)
+    bbo_significance_wall_sec: float = Field(default=0.0, exclude=True)
+    quota_fill_wall_sec: float = Field(default=0.0, exclude=True)
+    diagnostics_serialization_wall_sec: float = Field(default=0.0, exclude=True)
+    total_selector_wall_sec: float = Field(default=0.0, exclude=True)
     budget_fill_by_tier: dict[str, int] = Field(default_factory=dict)
     drop_reason_counts_by_tier: dict[str, dict[str, int]] = Field(default_factory=dict)
     lane_cap_hit_count: int = 0
@@ -240,6 +248,14 @@ class EventTokenSplitDiagnostics(QuantBaseModel):
     significant_bbo_emitted_count_by_reason: dict[str, int] = Field(default_factory=dict)
     significant_bbo_retained_count_by_reason: dict[str, int] = Field(default_factory=dict)
     significant_bbo_preservation_rate: float | None = None
+    informative_candidate_by_tier: dict[str, int] = Field(default_factory=dict)
+    t4_candidate_total: int = 0
+    t4_anchor_total: int = 0
+    t4_resolution_wall_sec: float = 0.0
+    bbo_significance_wall_sec: float = 0.0
+    quota_fill_wall_sec: float = 0.0
+    diagnostics_serialization_wall_sec: float = 0.0
+    total_selector_wall_sec: float = 0.0
     token_budget_pressure_row_count: int = 0
     token_budget_pressure_rate: float = 0.0
     budget_fill_by_tier: dict[str, int] = Field(default_factory=dict)

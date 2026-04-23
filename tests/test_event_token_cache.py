@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from quantlab_ml.contracts import DatasetSpec, NormalizedMarketEvent
 from quantlab_ml.trajectories import TrajectoryBuilder
@@ -12,6 +14,8 @@ from quantlab_ml.trajectories.event_token_cache import (
     _InformativeUnit,
     _bbo_payload,
     _trade_payload,
+    event_token_cache_directory,
+    event_token_cache_manifest_path,
     load_event_token_cache_shard,
     read_event_token_cache_diagnostics,
     read_event_token_cache_manifest,
@@ -187,6 +191,57 @@ def test_event_token_cache_compresses_bbo_flood_and_preserves_symbol_structure(
     assert train_diag.cross_venue_ordered_adjacency_rate > 0.0
     assert train_diag.trade_to_bbo_ordered_adjacency_rate > 0.0
     assert train_diag.significant_bbo_preservation_rate is not None
+    assert train_diag.informative_candidate_by_tier
+    assert train_diag.t4_anchor_total >= 0
+    assert train_diag.t4_candidate_total >= 0
+    assert train_diag.t4_resolution_wall_sec >= 0.0
+    assert train_diag.bbo_significance_wall_sec >= 0.0
+    assert train_diag.quota_fill_wall_sec >= 0.0
+    assert train_diag.diagnostics_serialization_wall_sec >= 0.0
+    assert train_diag.total_selector_wall_sec >= train_diag.diagnostics_serialization_wall_sec
+    partial_profile_path = event_token_cache_directory(tmp_path) / "train_partial_selector_profile.json"
+    partial_profile = json.loads(partial_profile_path.read_text(encoding="utf-8"))
+    assert partial_profile["partial_split_completion_status"] == "complete"
+    assert partial_profile["rows_processed"] == train_split.row_count
+    assert partial_profile["raw_candidate_count"] == train_diag.candidate_token_total
+    assert partial_profile["post_compression_informative_unit_count"] == train_diag.informative_candidate_total
+    assert partial_profile["t4_candidate_count"] == train_diag.t4_candidate_total
+    assert partial_profile["t4_anchor_count"] == train_diag.t4_anchor_total
+    assert set(partial_profile["tier_counts"]) == {"T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7"}
+    assert sum(partial_profile["tier_counts"].values()) == train_diag.informative_candidate_total
+    assert partial_profile["window_base_cache_miss_count"] >= 1
+    assert partial_profile["window_base_cache_hit_count"] >= 1
+    assert partial_profile["partial_profile_write_wall_sec"] >= 0.0
+
+
+def test_partial_selector_profile_is_written_before_event_cache_manifest(tmp_path: Path) -> None:
+    dataset_spec = _overflow_dataset_spec()
+    writer = EventTokenCacheSplitWriter(
+        directory=tmp_path,
+        split_name="development",
+        dataset_spec=dataset_spec,
+        indexed={},
+        source_labels=["synthetic://test"],
+    )
+    partial_profile_path = event_token_cache_directory(tmp_path) / "development_partial_selector_profile.json"
+
+    initialized_profile = json.loads(partial_profile_path.read_text(encoding="utf-8"))
+    assert initialized_profile["partial_split_completion_status"] == "initialized"
+    assert initialized_profile["rows_processed"] == 0
+
+    writer._append_step(
+        record=SimpleNamespace(target_symbol="BTCUSDT", trajectory_id="trajectory-0"),
+        step=SimpleNamespace(event_time=datetime(2024, 1, 1, 0, 1, tzinfo=UTC)),
+        trajectory_start=True,
+    )
+
+    partial_profile = json.loads(partial_profile_path.read_text(encoding="utf-8"))
+    assert partial_profile["partial_split_completion_status"] == "in_progress"
+    assert partial_profile["rows_processed"] == 1
+    assert partial_profile["raw_candidate_count"] == 0
+    assert partial_profile["post_compression_informative_unit_count"] == 0
+    assert set(partial_profile["tier_counts"]) == {"T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7"}
+    assert not event_token_cache_manifest_path(tmp_path).exists()
 
 
 def test_bbo_significance_uses_canonical_reason_precedence(
@@ -355,6 +410,171 @@ def test_t4_anchor_resolution_prefers_nearest_then_higher_priority_target_anchor
     )
     assert non_target.best_anchor_tier == "T0"
     assert non_target.best_anchor_delta_ms == 80
+
+
+def test_indexed_t4_anchor_resolution_matches_naive_semantics(tmp_path: Path) -> None:
+    dataset_spec = _overflow_dataset_spec()
+    writer = EventTokenCacheSplitWriter(
+        directory=tmp_path,
+        split_name="train",
+        dataset_spec=dataset_spec,
+        indexed={},
+        source_labels=["synthetic://test"],
+    )
+
+    def _unit(
+        *,
+        event_time_ts: float,
+        exchange: str,
+        symbol: str,
+        stream: str,
+        source_bucket: str,
+        salience: float,
+        source_event_index: int,
+    ) -> _InformativeUnit:
+        event = _FakeCompactEvent(
+            event_time_ts=event_time_ts,
+            fields={},
+            source_label_id=0,
+            source_event_index=source_event_index,
+        )
+        candidate = _EventCandidate(
+            event_time_ts=event_time_ts,
+            exchange=exchange,
+            symbol=symbol,
+            stream=stream,
+            event=event,
+            lane_events=[event],
+            lane_position=0,
+        )
+        return _InformativeUnit(
+            candidate=candidate,
+            lag_ms=0,
+            source_bucket=source_bucket,
+            lane_key=(exchange, symbol, stream),
+            burst_id=((exchange, symbol, stream), source_event_index),
+            salience=salience,
+        )
+
+    anchors = [
+        _unit(
+            event_time_ts=20.000,
+            exchange="binance",
+            symbol="BTCUSDT",
+            stream="trade",
+            source_bucket="trade_recent_raw",
+            salience=5.0,
+            source_event_index=10,
+        ),
+        _unit(
+            event_time_ts=20.000,
+            exchange="binance",
+            symbol="BTCUSDT",
+            stream="trade",
+            source_bucket="trade_recent_raw",
+            salience=5.0,
+            source_event_index=9,
+        ),
+        _unit(
+            event_time_ts=20.210,
+            exchange="binance",
+            symbol="BTCUSDT",
+            stream="bbo",
+            source_bucket="bbo_recent_sig",
+            salience=99.0,
+            source_event_index=11,
+        ),
+        _unit(
+            event_time_ts=20.010,
+            exchange="bybit",
+            symbol="BTCUSDT",
+            stream="trade",
+            source_bucket="trade_recent_raw",
+            salience=1.0,
+            source_event_index=12,
+        ),
+    ]
+    non_targets = [
+        _unit(
+            event_time_ts=20.010,
+            exchange="binance",
+            symbol="ETHUSDT",
+            stream="trade",
+            source_bucket="trade_recent_raw",
+            salience=1.0,
+            source_event_index=20,
+        ),
+        _unit(
+            event_time_ts=21.300,
+            exchange="binance",
+            symbol="SOLUSDT",
+            stream="trade",
+            source_bucket="trade_recent_raw",
+            salience=1.0,
+            source_event_index=21,
+        ),
+        _unit(
+            event_time_ts=20.010,
+            exchange="okx",
+            symbol="ETHUSDT",
+            stream="trade",
+            source_bucket="trade_recent_raw",
+            salience=1.0,
+            source_event_index=22,
+        ),
+    ]
+    informative_units = anchors + non_targets
+
+    writer._assign_priority_tiers(informative_units=informative_units, target_symbol="BTCUSDT")
+
+    expected_by_source_index = {
+        unit.source_event_index: _naive_t4_best_anchor(unit=unit, anchors=anchors)
+        for unit in non_targets
+    }
+    for unit in non_targets:
+        expected = expected_by_source_index[unit.source_event_index]
+        if expected is None:
+            assert unit.priority_tier in {"T5", "T6", "T7"}
+            assert unit.best_anchor_key is None
+        else:
+            assert unit.priority_tier == "T4"
+            assert unit.best_anchor_key == (
+                expected.event_time_ts,
+                expected.source_label_id,
+                expected.source_event_index,
+                expected.symbol,
+                expected.exchange,
+                expected.stream,
+            )
+
+
+def _naive_t4_best_anchor(
+    *,
+    unit: _InformativeUnit,
+    anchors: list[_InformativeUnit],
+) -> _InformativeUnit | None:
+    matches: list[tuple[int, int, float, float, int, int, _InformativeUnit]] = []
+    for anchor in anchors:
+        delta_ms = abs(int((unit.event_time_ts - anchor.event_time_ts) * 1000))
+        if delta_ms > 1000:
+            continue
+        if not (
+            (unit.symbol == anchor.symbol and unit.exchange != anchor.exchange)
+            or (unit.exchange == anchor.exchange and unit.symbol != anchor.symbol)
+        ):
+            continue
+        matches.append(
+            (
+                delta_ms,
+                {"T0": 0, "T1": 1, "T2": 2, "T3": 3}[anchor.priority_tier or "T3"],
+                -anchor.salience,
+                -anchor.event_time_ts,
+                anchor.source_label_id,
+                anchor.source_event_index,
+                anchor,
+            )
+        )
+    return min(matches)[-1] if matches else None
 
 
 @dataclass(slots=True)

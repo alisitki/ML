@@ -90,6 +90,14 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
                 f"- cross-venue adjacency rate: `{diagnostics.get('cross_venue_ordered_adjacency_rate')}`",
                 f"- trade-to-bbo adjacency rate: `{diagnostics.get('trade_to_bbo_ordered_adjacency_rate')}`",
                 f"- significant BBO preservation rate: `{diagnostics.get('significant_bbo_preservation_rate')}`",
+                f"- informative candidates by tier: `{diagnostics.get('informative_candidate_by_tier')}`",
+                f"- T4 candidates: `{diagnostics.get('t4_candidate_total')}`",
+                f"- T4 anchors: `{diagnostics.get('t4_anchor_total')}`",
+                f"- T4 resolution wall seconds: `{diagnostics.get('t4_resolution_wall_sec')}`",
+                f"- BBO significance wall seconds: `{diagnostics.get('bbo_significance_wall_sec')}`",
+                f"- quota fill wall seconds: `{diagnostics.get('quota_fill_wall_sec')}`",
+                f"- diagnostics serialization wall seconds: `{diagnostics.get('diagnostics_serialization_wall_sec')}`",
+                f"- total selector wall seconds: `{diagnostics.get('total_selector_wall_sec')}`",
                 "",
             ]
         )

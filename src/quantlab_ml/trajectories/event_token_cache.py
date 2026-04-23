@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import math
+import time
+from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -182,6 +185,33 @@ class _InformativeUnit:
         return self.stream == "bbo" and self.canonical_significance_reason is not None
 
 
+@dataclass(slots=True)
+class _SelectorProfile:
+    bbo_significance_wall_sec: float = 0.0
+    t4_resolution_wall_sec: float = 0.0
+    quota_fill_wall_sec: float = 0.0
+    diagnostics_serialization_wall_sec: float = 0.0
+    total_selector_wall_sec: float = 0.0
+    t4_anchor_count: int = 0
+
+
+@dataclass(slots=True)
+class _WindowBase:
+    informative_units: list[_InformativeUnit]
+    supported_lane_count: int
+    latest_reference_by_symbol: dict[str, float]
+    deduped_count: int
+    duplicate_count: int
+    duplicate_dropped_by_stream: Counter[str]
+    duplicate_dropped_by_venue: Counter[str]
+    same_timestamp_tie_count: int
+    source_order_inversion_count: int
+    candidate_by_symbol: Counter[str]
+    candidate_by_venue: Counter[str]
+    candidate_by_stream: Counter[str]
+    bbo_significance_wall_sec: float
+
+
 def _candidate_key(item: _EventCandidate | _InformativeUnit) -> tuple[float, int, int, str, str, str]:
     return (
         item.event_time_ts,
@@ -248,6 +278,21 @@ def _base_priority_tier(*, unit: _InformativeUnit, target_symbol: str) -> str:
     return "T7"
 
 
+def _anchor_match_key(
+    unit: _InformativeUnit,
+    anchor: _InformativeUnit,
+) -> tuple[int, int, float, float, int, int, _InformativeUnit]:
+    return (
+        abs(int((unit.event_time_ts - anchor.event_time_ts) * 1000)),
+        _tier_rank(anchor.priority_tier),
+        -anchor.salience,
+        -anchor.event_time_ts,
+        anchor.source_label_id,
+        anchor.source_event_index,
+        anchor,
+    )
+
+
 class EventTokenCacheSplitWriter:
     def __init__(
         self,
@@ -306,8 +351,17 @@ class EventTokenCacheSplitWriter:
         }
         self.stream_to_id = {stream: index for index, stream in enumerate(_EVENT_STREAM_ORDER)}
         self.split_dir = event_token_cache_directory(directory) / split_name
+        self.partial_selector_profile_path = (
+            event_token_cache_directory(directory) / f"{split_name}_partial_selector_profile.json"
+        )
         estimated_max_row_bytes = token_cap * 128
         self.rows_per_shard = max(1, shard_target_bytes // max(estimated_max_row_bytes, 1))
+        self._window_base_cache: dict[int, _WindowBase] = {}
+        self._window_base_cache_hit_count = 0
+        self._window_base_cache_miss_count = 0
+        self._window_base_precompute_wall_sec = 0.0
+        self._partial_profile_write_wall_sec = 0.0
+        self._last_decision_time: datetime | None = None
         self._reset_pending_buffers()
         self._shards: list[EventTokenShardManifest] = []
         self._pending_rows = 0
@@ -356,12 +410,21 @@ class EventTokenCacheSplitWriter:
         self._trade_to_bbo_ordered_adjacency_raw_count = 0
         self._significant_bbo_emitted_count_by_reason: Counter[str] = Counter()
         self._significant_bbo_retained_count_by_reason: Counter[str] = Counter()
+        self._informative_candidate_by_tier: Counter[str] = Counter()
+        self._t4_candidate_total = 0
+        self._t4_anchor_total = 0
+        self._t4_resolution_wall_sec = 0.0
+        self._bbo_significance_wall_sec = 0.0
+        self._quota_fill_wall_sec = 0.0
+        self._diagnostics_serialization_wall_sec = 0.0
+        self._total_selector_wall_sec = 0.0
         self._budget_fill_by_tier: Counter[str] = Counter()
         self._drop_reason_counts_by_tier: defaultdict[str, Counter[str]] = defaultdict(Counter)
         self._lane_cap_hit_row_count = 0
         self._bbo_cap_hit_row_count = 0
         self._symbol_cap_hit_row_count = 0
         self._final_diagnostics: EventTokenSplitDiagnostics | None = None
+        self._write_partial_selector_profile(status="initialized")
 
     def consume_record(self, record: TrajectoryRecord) -> None:
         trajectory_start = True
@@ -373,6 +436,7 @@ class EventTokenCacheSplitWriter:
         if self._pending_rows > 0:
             self._flush()
         self._final_diagnostics = self._build_split_diagnostics()
+        self._write_partial_selector_profile(status="complete")
         return EventTokenSplitManifest(
             split_name=self.split_name,
             row_count=self._total_rows,
@@ -493,6 +557,14 @@ class EventTokenCacheSplitWriter:
                     self._symbol_zero_retained_row_count[symbol] += 1
         self._significant_bbo_emitted_count_by_reason.update(row_stats.significant_bbo_emitted_count_by_reason)
         self._significant_bbo_retained_count_by_reason.update(row_stats.significant_bbo_retained_count_by_reason)
+        self._informative_candidate_by_tier.update(row_stats.informative_candidate_by_tier)
+        self._t4_candidate_total += row_stats.t4_candidate_count
+        self._t4_anchor_total += row_stats.t4_anchor_count
+        self._t4_resolution_wall_sec += row_stats.t4_resolution_wall_sec
+        self._bbo_significance_wall_sec += row_stats.bbo_significance_wall_sec
+        self._quota_fill_wall_sec += row_stats.quota_fill_wall_sec
+        self._diagnostics_serialization_wall_sec += row_stats.diagnostics_serialization_wall_sec
+        self._total_selector_wall_sec += row_stats.total_selector_wall_sec
         self._budget_fill_by_tier.update(
             {
                 key: value
@@ -512,6 +584,7 @@ class EventTokenCacheSplitWriter:
         self._total_rows += 1
         if self._pending_rows >= self.rows_per_shard:
             self._flush()
+        self._write_partial_selector_profile(status="in_progress")
 
     def _flush(self) -> None:
         if self._pending_rows <= 0:
@@ -564,7 +637,9 @@ class EventTokenCacheSplitWriter:
             np.asarray(self._bbo_payload_presence, dtype=np.bool_).reshape(-1, 7),
         )
         _write_jsonl(replay_path, self._replay_rows)
+        diagnostics_start = time.perf_counter()
         _write_jsonl(window_stats_path, self._window_stats)
+        self._diagnostics_serialization_wall_sec += time.perf_counter() - diagnostics_start
         first_event_time = (
             epoch_millis_to_datetime(self._event_time_ms[0])
             if self._event_time_ms
@@ -605,6 +680,44 @@ class EventTokenCacheSplitWriter:
         )
         self._pending_rows = 0
         self._reset_pending_buffers()
+
+    def _write_partial_selector_profile(self, *, status: str) -> None:
+        started = time.perf_counter()
+        tier_counts = {tier: int(self._informative_candidate_by_tier.get(tier, 0)) for tier in _TIER_ORDER}
+        payload = {
+            "format_version": "event_token_partial_selector_profile_v1",
+            "selection_policy_id": self.selection_policy_id,
+            "selector_params_hash": self.selector_params_hash,
+            "split_name": self.split_name,
+            "partial_split_completion_status": status,
+            "rows_processed": self._total_rows,
+            "pending_rows": self._pending_rows,
+            "shard_count": len(self._shards),
+            "raw_candidate_count": self._candidate_token_total,
+            "post_compression_informative_unit_count": self._informative_candidate_total,
+            "tier_counts": tier_counts,
+            "t4_candidate_count": self._t4_candidate_total,
+            "t4_anchor_count": self._t4_anchor_total,
+            "t4_resolution_wall_sec": self._t4_resolution_wall_sec,
+            "bbo_significance_wall_sec": self._bbo_significance_wall_sec,
+            "quota_fill_wall_sec": self._quota_fill_wall_sec,
+            "diagnostics_serialization_wall_sec": self._diagnostics_serialization_wall_sec,
+            "per_split_total_selector_wall_sec": (
+                self._total_selector_wall_sec + self._diagnostics_serialization_wall_sec
+            ),
+            "window_base_cache_hit_count": self._window_base_cache_hit_count,
+            "window_base_cache_miss_count": self._window_base_cache_miss_count,
+            "window_base_precompute_wall_sec": self._window_base_precompute_wall_sec,
+            "partial_profile_write_wall_sec": self._partial_profile_write_wall_sec,
+            "last_decision_time": self._last_decision_time.isoformat() if self._last_decision_time else None,
+        }
+        ensure_parent_dir(self.partial_selector_profile_path)
+        tmp_path = self.partial_selector_profile_path.with_suffix(
+            f"{self.partial_selector_profile_path.suffix}.tmp"
+        )
+        tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp_path.replace(self.partial_selector_profile_path)
+        self._partial_profile_write_wall_sec += time.perf_counter() - started
 
     def _build_split_diagnostics(self) -> EventTokenSplitDiagnostics:
         weighted_target_symbol_retained_rate = (
@@ -710,6 +823,16 @@ class EventTokenCacheSplitWriter:
                 if significant_bbo_emitted_total > 0
                 else None
             ),
+            informative_candidate_by_tier=dict(self._informative_candidate_by_tier),
+            t4_candidate_total=self._t4_candidate_total,
+            t4_anchor_total=self._t4_anchor_total,
+            t4_resolution_wall_sec=self._t4_resolution_wall_sec,
+            bbo_significance_wall_sec=self._bbo_significance_wall_sec,
+            quota_fill_wall_sec=self._quota_fill_wall_sec,
+            diagnostics_serialization_wall_sec=self._diagnostics_serialization_wall_sec,
+            total_selector_wall_sec=(
+                self._total_selector_wall_sec + self._diagnostics_serialization_wall_sec
+            ),
             token_budget_pressure_row_count=self._token_budget_pressure_row_count,
             token_budget_pressure_rate=(
                 self._token_budget_pressure_row_count / self._total_rows
@@ -765,10 +888,255 @@ class EventTokenCacheSplitWriter:
         decision_time: datetime,
         row_index: int,
     ) -> tuple[list[_EventCandidate], list[_InformativeUnit], list[_InformativeUnit], EventTokenRowWindowStats]:
+        selector_start = time.perf_counter()
+        decision_time_ts = decision_time.timestamp()
+        window_start_ts = decision_time_ts - float(self.lookback_seconds)
+        window_base, cache_hit = self._window_base(decision_time=decision_time)
+        self._last_decision_time = decision_time
+
+        profile = _SelectorProfile(
+            bbo_significance_wall_sec=0.0 if cache_hit else window_base.bbo_significance_wall_sec
+        )
+        informative_units = list(window_base.informative_units)
+        self._reset_target_priority_annotations(informative_units)
+        self._assign_priority_tiers(
+            informative_units=informative_units,
+            target_symbol=target_symbol,
+            profile=profile,
+        )
+        selected_units, selection_meta = self._select_informative_units(
+            informative_units=informative_units,
+            target_symbol=target_symbol,
+            profile=profile,
+        )
+        informative_candidate_by_tier = Counter(
+            unit.priority_tier or "UNKNOWN" for unit in informative_units
+        )
+        informative_candidate_by_symbol = Counter(unit.symbol for unit in informative_units)
+        informative_candidate_by_venue = Counter(unit.exchange for unit in informative_units)
+        informative_candidate_by_stream = Counter(unit.stream for unit in informative_units)
+        retained_by_symbol = Counter(unit.symbol for unit in selected_units)
+        retained_by_venue = Counter(unit.exchange for unit in selected_units)
+        retained_by_stream = Counter(unit.stream for unit in selected_units)
+        dropped_by_symbol = Counter(
+            {
+                symbol: informative_candidate_by_symbol[symbol] - retained_by_symbol.get(symbol, 0)
+                for symbol in informative_candidate_by_symbol
+            }
+        )
+        dropped_by_stream = Counter(informative_candidate_by_stream)
+        dropped_by_stream.subtract(retained_by_stream)
+        dropped_by_venue = Counter(informative_candidate_by_venue)
+        dropped_by_venue.subtract(retained_by_venue)
+        informative_burst_ids = {unit.burst_id for unit in informative_units}
+        retained_burst_ids = {unit.burst_id for unit in selected_units}
+        retained_burst_count = len(retained_burst_ids)
+        target_candidate_count = informative_candidate_by_symbol.get(target_symbol, 0)
+        raw_target_candidate_count = window_base.candidate_by_symbol.get(target_symbol, 0)
+        retained_target_count = retained_by_symbol.get(target_symbol, 0)
+        target_trade_candidate_count = sum(
+            1 for unit in informative_units if unit.symbol == target_symbol and unit.stream == "trade"
+        )
+        retained_target_trade_count = sum(
+            1 for unit in selected_units if unit.symbol == target_symbol and unit.stream == "trade"
+        )
+        target_bbo_sig_candidate_count = sum(
+            1 for unit in informative_units if unit.symbol == target_symbol and unit.is_bbo_significant
+        )
+        retained_target_bbo_sig_count = sum(
+            1 for unit in selected_units if unit.symbol == target_symbol and unit.is_bbo_significant
+        )
+        target_symbol_retained_rate = (
+            retained_target_count / target_candidate_count
+            if target_candidate_count > 0
+            else None
+        )
+        raw_target_symbol_retained_rate = (
+            retained_target_count / raw_target_candidate_count
+            if raw_target_candidate_count > 0
+            else None
+        )
+        empty_window = window_base.deduped_count == 0
+        latest_target_reference_ts = window_base.latest_reference_by_symbol.get(target_symbol)
+        stale_window = bool(
+            latest_target_reference_ts is not None
+            and (decision_time_ts - latest_target_reference_ts) > float(self.stale_after_seconds)
+        )
+        raw_target_candidates = self._target_deduped_candidates(
+            target_symbol=target_symbol,
+            decision_time_ts=decision_time_ts,
+            window_start_ts=window_start_ts,
+        )
+        raw_has_cross_venue_ordered_adjacency = _has_ordered_pair(
+            raw_target_candidates,
+            lambda left, right: (
+                left.symbol == right.symbol
+                and left.stream == right.stream
+                and left.exchange != right.exchange
+            ),
+        )
+        retained_has_cross_venue_ordered_adjacency = (
+            raw_has_cross_venue_ordered_adjacency
+            and _has_ordered_pair(
+                [unit for unit in selected_units if unit.symbol == target_symbol],
+                lambda left, right: (
+                    left.symbol == right.symbol
+                    and left.stream == right.stream
+                    and left.exchange != right.exchange
+                ),
+            )
+        )
+        raw_trade_to_bbo_source = sorted(
+            [candidate for candidate in raw_target_candidates if candidate.stream == "trade"]
+            + [unit for unit in informative_units if unit.symbol == target_symbol and unit.is_bbo_significant],
+            key=_candidate_key,
+        )
+        raw_has_trade_to_bbo_ordered_adjacency = _has_ordered_pair(
+            raw_trade_to_bbo_source,
+            lambda left, right: (
+                left.symbol == right.symbol
+                and left.exchange == right.exchange
+                and left.stream == "trade"
+                and right.stream == "bbo"
+            ),
+        )
+        retained_has_trade_to_bbo_ordered_adjacency = (
+            raw_has_trade_to_bbo_ordered_adjacency
+            and _has_ordered_pair(
+                [unit for unit in selected_units if unit.symbol == target_symbol],
+                lambda left, right: (
+                    left.symbol == right.symbol
+                    and left.exchange == right.exchange
+                    and left.stream == "trade"
+                    and right.stream == "bbo"
+                ),
+            )
+        )
+        significant_bbo_emitted_count_by_reason = Counter(
+            unit.canonical_significance_reason
+            for unit in informative_units
+            if unit.is_bbo_significant and unit.canonical_significance_reason is not None
+        )
+        significant_bbo_retained_count_by_reason = Counter(
+            unit.canonical_significance_reason
+            for unit in selected_units
+            if unit.is_bbo_significant and unit.canonical_significance_reason is not None
+        )
+        lost_after_compression_count = max(window_base.deduped_count - len(informative_units), 0)
+        drop_reason_counts_by_tier = {
+            tier: dict(counter)
+            for tier, counter in selection_meta["drop_reason_counts_by_tier"].items()
+        }
+        if lost_after_compression_count > 0:
+            drop_reason_counts_by_tier.setdefault("COMPRESSION", {})
+            drop_reason_counts_by_tier["COMPRESSION"]["lost_after_compression"] = lost_after_compression_count
+        profile.total_selector_wall_sec = time.perf_counter() - selector_start
+        row_stats = EventTokenRowWindowStats(
+            row_index=row_index,
+            decision_time=decision_time,
+            target_symbol=target_symbol,
+            candidate_token_count=window_base.deduped_count,
+            informative_candidate_count=len(informative_units),
+            selected_token_count=len(selected_units),
+            dropped_token_count=max(len(informative_units) - len(selected_units), 0),
+            truncated=len(informative_units) > self.token_cap,
+            token_budget_pressure=len(informative_units) > self.token_cap,
+            candidate_by_symbol=dict(window_base.candidate_by_symbol),
+            candidate_by_venue=dict(window_base.candidate_by_venue),
+            candidate_by_stream=dict(window_base.candidate_by_stream),
+            informative_candidate_by_symbol=dict(informative_candidate_by_symbol),
+            informative_candidate_by_venue=dict(informative_candidate_by_venue),
+            informative_candidate_by_stream=dict(informative_candidate_by_stream),
+            retained_by_symbol=dict(retained_by_symbol),
+            retained_by_venue=dict(retained_by_venue),
+            retained_by_stream=dict(retained_by_stream),
+            dropped_by_symbol={key: value for key, value in dropped_by_symbol.items() if value > 0},
+            dropped_by_stream={key: value for key, value in dropped_by_stream.items() if value > 0},
+            dropped_by_venue={key: value for key, value in dropped_by_venue.items() if value > 0},
+            target_symbol_retained_rate=target_symbol_retained_rate,
+            raw_target_symbol_retained_rate=raw_target_symbol_retained_rate,
+            target_trade_retained_rate=(
+                retained_target_trade_count / target_trade_candidate_count
+                if target_trade_candidate_count > 0
+                else None
+            ),
+            target_bbo_sig_retained_rate=(
+                retained_target_bbo_sig_count / target_bbo_sig_candidate_count
+                if target_bbo_sig_candidate_count > 0
+                else None
+            ),
+            target_selected_share=(
+                retained_target_count / len(selected_units)
+                if selected_units
+                else None
+            ),
+            target_trade_candidate_count=target_trade_candidate_count,
+            retained_target_trade_count=retained_target_trade_count,
+            target_bbo_sig_candidate_count=target_bbo_sig_candidate_count,
+            retained_target_bbo_sig_count=retained_target_bbo_sig_count,
+            target_symbol_candidate_empty=target_candidate_count == 0,
+            symbol_with_zero_retained_tokens_count=sum(
+                1
+                for symbol, count in informative_candidate_by_symbol.items()
+                if count > 0 and retained_by_symbol.get(symbol, 0) == 0
+            ),
+            burst_count=len(informative_burst_ids),
+            retained_burst_count=retained_burst_count,
+            burst_retention_rate=(
+                retained_burst_count / len(informative_burst_ids)
+                if informative_burst_ids
+                else None
+            ),
+            significant_bbo_emitted_count_by_reason=dict(significant_bbo_emitted_count_by_reason),
+            significant_bbo_retained_count_by_reason=dict(significant_bbo_retained_count_by_reason),
+            significant_bbo_preservation_rate=(
+                sum(significant_bbo_retained_count_by_reason.values()) / sum(significant_bbo_emitted_count_by_reason.values())
+                if significant_bbo_emitted_count_by_reason
+                else None
+            ),
+            informative_candidate_by_tier=dict(informative_candidate_by_tier),
+            t4_candidate_count=informative_candidate_by_tier.get("T4", 0),
+            t4_anchor_count=profile.t4_anchor_count,
+            t4_resolution_wall_sec=profile.t4_resolution_wall_sec,
+            bbo_significance_wall_sec=profile.bbo_significance_wall_sec,
+            quota_fill_wall_sec=profile.quota_fill_wall_sec,
+            diagnostics_serialization_wall_sec=profile.diagnostics_serialization_wall_sec,
+            total_selector_wall_sec=profile.total_selector_wall_sec,
+            budget_fill_by_tier=dict(selection_meta["budget_fill_by_tier"]),
+            drop_reason_counts_by_tier=drop_reason_counts_by_tier,
+            lane_cap_hit_count=1 if selection_meta["lane_cap_hit"] else 0,
+            bbo_cap_hit_count=1 if selection_meta["bbo_cap_hit"] else 0,
+            symbol_cap_hit_count=1 if selection_meta["symbol_cap_hit"] else 0,
+            duplicate_event_count=window_base.duplicate_count,
+            duplicate_dropped_by_stream=dict(window_base.duplicate_dropped_by_stream),
+            duplicate_dropped_by_venue=dict(window_base.duplicate_dropped_by_venue),
+            same_timestamp_tie_count=window_base.same_timestamp_tie_count,
+            source_order_inversion_count=window_base.source_order_inversion_count,
+            supported_lane_count=window_base.supported_lane_count,
+            empty_window=empty_window,
+            stale_window=stale_window,
+            raw_has_target_cross_venue_ordered_adjacency=raw_has_cross_venue_ordered_adjacency,
+            retained_has_target_cross_venue_ordered_adjacency=retained_has_cross_venue_ordered_adjacency,
+            raw_has_target_trade_to_bbo_ordered_adjacency=raw_has_trade_to_bbo_ordered_adjacency,
+            retained_has_target_trade_to_bbo_ordered_adjacency=retained_has_trade_to_bbo_ordered_adjacency,
+            has_cross_venue_ordered_adjacency=retained_has_cross_venue_ordered_adjacency,
+            has_trade_to_bbo_ordered_adjacency=retained_has_trade_to_bbo_ordered_adjacency,
+        )
+        return raw_target_candidates, informative_units, selected_units, row_stats
+
+    def _window_base(self, *, decision_time: datetime) -> tuple[_WindowBase, bool]:
+        decision_time_ms = datetime_to_epoch_millis(decision_time)
+        cached = self._window_base_cache.get(decision_time_ms)
+        if cached is not None:
+            self._window_base_cache_hit_count += 1
+            return cached, True
+
+        self._window_base_cache_miss_count += 1
+        precompute_start = time.perf_counter()
         decision_time_ts = decision_time.timestamp()
         window_start_ts = decision_time_ts - float(self.lookback_seconds)
         supported_lane_count = 0
-        latest_target_reference_ts: float | None = None
+        latest_reference_by_symbol: dict[str, float] = {}
         raw_candidates: list[_EventCandidate] = []
         source_order_inversion_count = 0
         for exchange in self.dataset_spec.exchanges:
@@ -784,8 +1152,8 @@ class EventTokenCacheSplitWriter:
                     if times_arr.size <= 0:
                         continue
                     last_pos = int(np.searchsorted(times_arr, decision_time_ts, side="right")) - 1
-                    if symbol == target_symbol and last_pos >= 0:
-                        latest_target_reference_ts = times_arr[last_pos]
+                    if last_pos >= 0:
+                        latest_reference_by_symbol[symbol] = times_arr[last_pos]
                     start_pos = int(np.searchsorted(times_arr, window_start_ts, side="left"))
                     end_pos = int(np.searchsorted(times_arr, decision_time_ts, side="right"))
                     if end_pos <= start_pos:
@@ -848,221 +1216,96 @@ class EventTokenCacheSplitWriter:
         candidate_by_symbol = Counter(candidate.symbol for candidate in deduped_candidates)
         candidate_by_venue = Counter(candidate.exchange for candidate in deduped_candidates)
         candidate_by_stream = Counter(candidate.stream for candidate in deduped_candidates)
+        profile = _SelectorProfile()
         informative_units = self._emit_informative_units(
             candidates=deduped_candidates,
             decision_time=decision_time,
+            profile=profile,
         )
-        self._assign_priority_tiers(informative_units=informative_units, target_symbol=target_symbol)
-        selected_units, selection_meta = self._select_informative_units(
+        window_base = _WindowBase(
             informative_units=informative_units,
-            target_symbol=target_symbol,
-        )
-        informative_candidate_by_symbol = Counter(unit.symbol for unit in informative_units)
-        informative_candidate_by_venue = Counter(unit.exchange for unit in informative_units)
-        informative_candidate_by_stream = Counter(unit.stream for unit in informative_units)
-        retained_by_symbol = Counter(unit.symbol for unit in selected_units)
-        retained_by_venue = Counter(unit.exchange for unit in selected_units)
-        retained_by_stream = Counter(unit.stream for unit in selected_units)
-        dropped_by_symbol = Counter(
-            {
-                symbol: informative_candidate_by_symbol[symbol] - retained_by_symbol.get(symbol, 0)
-                for symbol in informative_candidate_by_symbol
-            }
-        )
-        dropped_by_stream = Counter(informative_candidate_by_stream)
-        dropped_by_stream.subtract(retained_by_stream)
-        dropped_by_venue = Counter(informative_candidate_by_venue)
-        dropped_by_venue.subtract(retained_by_venue)
-        informative_burst_ids = {unit.burst_id for unit in informative_units}
-        retained_burst_ids = {unit.burst_id for unit in selected_units}
-        retained_burst_count = len(retained_burst_ids)
-        target_candidate_count = informative_candidate_by_symbol.get(target_symbol, 0)
-        raw_target_candidate_count = candidate_by_symbol.get(target_symbol, 0)
-        retained_target_count = retained_by_symbol.get(target_symbol, 0)
-        target_trade_candidate_count = sum(
-            1 for unit in informative_units if unit.symbol == target_symbol and unit.stream == "trade"
-        )
-        retained_target_trade_count = sum(
-            1 for unit in selected_units if unit.symbol == target_symbol and unit.stream == "trade"
-        )
-        target_bbo_sig_candidate_count = sum(
-            1 for unit in informative_units if unit.symbol == target_symbol and unit.is_bbo_significant
-        )
-        retained_target_bbo_sig_count = sum(
-            1 for unit in selected_units if unit.symbol == target_symbol and unit.is_bbo_significant
-        )
-        target_symbol_retained_rate = (
-            retained_target_count / target_candidate_count
-            if target_candidate_count > 0
-            else None
-        )
-        raw_target_symbol_retained_rate = (
-            retained_target_count / raw_target_candidate_count
-            if raw_target_candidate_count > 0
-            else None
-        )
-        empty_window = len(deduped_candidates) == 0
-        stale_window = bool(
-            latest_target_reference_ts is not None
-            and (decision_time_ts - latest_target_reference_ts) > float(self.stale_after_seconds)
-        )
-        raw_target_candidates = [candidate for candidate in deduped_candidates if candidate.symbol == target_symbol]
-        raw_has_cross_venue_ordered_adjacency = _has_ordered_pair(
-            raw_target_candidates,
-            lambda left, right: (
-                left.symbol == right.symbol
-                and left.stream == right.stream
-                and left.exchange != right.exchange
-            ),
-        )
-        retained_has_cross_venue_ordered_adjacency = (
-            raw_has_cross_venue_ordered_adjacency
-            and _has_ordered_pair(
-                [unit for unit in selected_units if unit.symbol == target_symbol],
-                lambda left, right: (
-                    left.symbol == right.symbol
-                    and left.stream == right.stream
-                    and left.exchange != right.exchange
-                ),
-            )
-        )
-        raw_trade_to_bbo_source = sorted(
-            [candidate for candidate in deduped_candidates if candidate.symbol == target_symbol and candidate.stream == "trade"]
-            + [unit for unit in informative_units if unit.symbol == target_symbol and unit.is_bbo_significant],
-            key=_candidate_key,
-        )
-        raw_has_trade_to_bbo_ordered_adjacency = _has_ordered_pair(
-            raw_trade_to_bbo_source,
-            lambda left, right: (
-                left.symbol == right.symbol
-                and left.exchange == right.exchange
-                and left.stream == "trade"
-                and right.stream == "bbo"
-            ),
-        )
-        retained_has_trade_to_bbo_ordered_adjacency = (
-            raw_has_trade_to_bbo_ordered_adjacency
-            and _has_ordered_pair(
-                [unit for unit in selected_units if unit.symbol == target_symbol],
-                lambda left, right: (
-                    left.symbol == right.symbol
-                    and left.exchange == right.exchange
-                    and left.stream == "trade"
-                    and right.stream == "bbo"
-                ),
-            )
-        )
-        significant_bbo_emitted_count_by_reason = Counter(
-            unit.canonical_significance_reason
-            for unit in informative_units
-            if unit.is_bbo_significant and unit.canonical_significance_reason is not None
-        )
-        significant_bbo_retained_count_by_reason = Counter(
-            unit.canonical_significance_reason
-            for unit in selected_units
-            if unit.is_bbo_significant and unit.canonical_significance_reason is not None
-        )
-        informative_candidate_keys = {_candidate_key(unit) for unit in informative_units}
-        lost_after_compression_count = sum(
-            1 for candidate in deduped_candidates if _candidate_key(candidate) not in informative_candidate_keys
-        )
-        drop_reason_counts_by_tier = {
-            tier: dict(counter)
-            for tier, counter in selection_meta["drop_reason_counts_by_tier"].items()
-        }
-        if lost_after_compression_count > 0:
-            drop_reason_counts_by_tier.setdefault("COMPRESSION", {})
-            drop_reason_counts_by_tier["COMPRESSION"]["lost_after_compression"] = lost_after_compression_count
-        row_stats = EventTokenRowWindowStats(
-            row_index=row_index,
-            decision_time=decision_time,
-            target_symbol=target_symbol,
-            candidate_token_count=len(deduped_candidates),
-            informative_candidate_count=len(informative_units),
-            selected_token_count=len(selected_units),
-            dropped_token_count=max(len(informative_units) - len(selected_units), 0),
-            truncated=len(informative_units) > self.token_cap,
-            token_budget_pressure=len(informative_units) > self.token_cap,
-            candidate_by_symbol=dict(candidate_by_symbol),
-            candidate_by_venue=dict(candidate_by_venue),
-            candidate_by_stream=dict(candidate_by_stream),
-            informative_candidate_by_symbol=dict(informative_candidate_by_symbol),
-            informative_candidate_by_venue=dict(informative_candidate_by_venue),
-            informative_candidate_by_stream=dict(informative_candidate_by_stream),
-            retained_by_symbol=dict(retained_by_symbol),
-            retained_by_venue=dict(retained_by_venue),
-            retained_by_stream=dict(retained_by_stream),
-            dropped_by_symbol={key: value for key, value in dropped_by_symbol.items() if value > 0},
-            dropped_by_stream={key: value for key, value in dropped_by_stream.items() if value > 0},
-            dropped_by_venue={key: value for key, value in dropped_by_venue.items() if value > 0},
-            target_symbol_retained_rate=target_symbol_retained_rate,
-            raw_target_symbol_retained_rate=raw_target_symbol_retained_rate,
-            target_trade_retained_rate=(
-                retained_target_trade_count / target_trade_candidate_count
-                if target_trade_candidate_count > 0
-                else None
-            ),
-            target_bbo_sig_retained_rate=(
-                retained_target_bbo_sig_count / target_bbo_sig_candidate_count
-                if target_bbo_sig_candidate_count > 0
-                else None
-            ),
-            target_selected_share=(
-                retained_target_count / len(selected_units)
-                if selected_units
-                else None
-            ),
-            target_trade_candidate_count=target_trade_candidate_count,
-            retained_target_trade_count=retained_target_trade_count,
-            target_bbo_sig_candidate_count=target_bbo_sig_candidate_count,
-            retained_target_bbo_sig_count=retained_target_bbo_sig_count,
-            target_symbol_candidate_empty=target_candidate_count == 0,
-            symbol_with_zero_retained_tokens_count=sum(
-                1
-                for symbol, count in informative_candidate_by_symbol.items()
-                if count > 0 and retained_by_symbol.get(symbol, 0) == 0
-            ),
-            burst_count=len(informative_burst_ids),
-            retained_burst_count=retained_burst_count,
-            burst_retention_rate=(
-                retained_burst_count / len(informative_burst_ids)
-                if informative_burst_ids
-                else None
-            ),
-            significant_bbo_emitted_count_by_reason=dict(significant_bbo_emitted_count_by_reason),
-            significant_bbo_retained_count_by_reason=dict(significant_bbo_retained_count_by_reason),
-            significant_bbo_preservation_rate=(
-                sum(significant_bbo_retained_count_by_reason.values()) / sum(significant_bbo_emitted_count_by_reason.values())
-                if significant_bbo_emitted_count_by_reason
-                else None
-            ),
-            budget_fill_by_tier=dict(selection_meta["budget_fill_by_tier"]),
-            drop_reason_counts_by_tier=drop_reason_counts_by_tier,
-            lane_cap_hit_count=1 if selection_meta["lane_cap_hit"] else 0,
-            bbo_cap_hit_count=1 if selection_meta["bbo_cap_hit"] else 0,
-            symbol_cap_hit_count=1 if selection_meta["symbol_cap_hit"] else 0,
-            duplicate_event_count=duplicate_count,
-            duplicate_dropped_by_stream=dict(duplicate_dropped_by_stream),
-            duplicate_dropped_by_venue=dict(duplicate_dropped_by_venue),
+            supported_lane_count=supported_lane_count,
+            latest_reference_by_symbol=latest_reference_by_symbol,
+            deduped_count=len(deduped_candidates),
+            duplicate_count=duplicate_count,
+            duplicate_dropped_by_stream=duplicate_dropped_by_stream,
+            duplicate_dropped_by_venue=duplicate_dropped_by_venue,
             same_timestamp_tie_count=same_timestamp_tie_count,
             source_order_inversion_count=source_order_inversion_count,
-            supported_lane_count=supported_lane_count,
-            empty_window=empty_window,
-            stale_window=stale_window,
-            raw_has_target_cross_venue_ordered_adjacency=raw_has_cross_venue_ordered_adjacency,
-            retained_has_target_cross_venue_ordered_adjacency=retained_has_cross_venue_ordered_adjacency,
-            raw_has_target_trade_to_bbo_ordered_adjacency=raw_has_trade_to_bbo_ordered_adjacency,
-            retained_has_target_trade_to_bbo_ordered_adjacency=retained_has_trade_to_bbo_ordered_adjacency,
-            has_cross_venue_ordered_adjacency=retained_has_cross_venue_ordered_adjacency,
-            has_trade_to_bbo_ordered_adjacency=retained_has_trade_to_bbo_ordered_adjacency,
+            candidate_by_symbol=candidate_by_symbol,
+            candidate_by_venue=candidate_by_venue,
+            candidate_by_stream=candidate_by_stream,
+            bbo_significance_wall_sec=profile.bbo_significance_wall_sec,
         )
-        return deduped_candidates, informative_units, selected_units, row_stats
+        self._window_base_cache[decision_time_ms] = window_base
+        self._window_base_precompute_wall_sec += time.perf_counter() - precompute_start
+        return window_base, False
+
+    def _target_deduped_candidates(
+        self,
+        *,
+        target_symbol: str,
+        decision_time_ts: float,
+        window_start_ts: float,
+    ) -> list[_EventCandidate]:
+        raw_candidates: list[_EventCandidate] = []
+        for exchange in self.dataset_spec.exchanges:
+            for stream in _EVENT_STREAM_ORDER:
+                if not self.dataset_spec.stream_available(exchange, stream):
+                    continue
+                bucket = self.indexed.get((target_symbol, exchange, stream))
+                if bucket is None:
+                    continue
+                times_arr, lane_events = bucket
+                if times_arr.size <= 0:
+                    continue
+                start_pos = int(np.searchsorted(times_arr, window_start_ts, side="left"))
+                end_pos = int(np.searchsorted(times_arr, decision_time_ts, side="right"))
+                if end_pos <= start_pos:
+                    continue
+                for offset, event in enumerate(lane_events[start_pos:end_pos], start=start_pos):
+                    raw_candidates.append(
+                        _EventCandidate(
+                            event_time_ts=float(getattr(event, "event_time_ts")),
+                            exchange=exchange,
+                            symbol=target_symbol,
+                            stream=stream,
+                            event=event,
+                            lane_events=lane_events,
+                            lane_position=offset,
+                        )
+                    )
+        raw_candidates.sort(key=_candidate_key)
+        deduped_candidates: list[_EventCandidate] = []
+        seen: set[tuple[str, str, str, int, str]] = set()
+        for candidate in raw_candidates:
+            dedup_key = (
+                candidate.exchange,
+                candidate.symbol,
+                candidate.stream,
+                int(candidate.event_time_ts * 1000),
+                _canonical_payload_hash(candidate.event.fields),
+            )
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            deduped_candidates.append(candidate)
+        return deduped_candidates
+
+    @staticmethod
+    def _reset_target_priority_annotations(informative_units: list[_InformativeUnit]) -> None:
+        for unit in informative_units:
+            unit.priority_tier = None
+            unit.best_anchor_key = None
+            unit.best_anchor_tier = None
+            unit.best_anchor_delta_ms = None
 
     def _emit_informative_units(
         self,
         *,
         candidates: list[_EventCandidate],
         decision_time: datetime,
+        profile: _SelectorProfile | None = None,
     ) -> list[_InformativeUnit]:
         decision_time_ms = datetime_to_epoch_millis(decision_time)
         grouped: dict[tuple[str, str, str], list[_EventCandidate]] = defaultdict(list)
@@ -1116,10 +1359,13 @@ class EventTokenCacheSplitWriter:
                     continue
 
                 burst_start = burst[0]
+                bbo_start = time.perf_counter()
                 burst_end_reasons, burst_end_salience = self._bbo_significance_assessment(
                     burst_start=burst_start,
                     candidate=burst_end,
                 )
+                if profile is not None:
+                    profile.bbo_significance_wall_sec += time.perf_counter() - bbo_start
                 burst_end_reasons.add("burst_boundary")
                 self._upsert_informative_unit(
                     units_by_key=units_by_key,
@@ -1134,10 +1380,13 @@ class EventTokenCacheSplitWriter:
                 )
                 significant_candidates: list[tuple[float, _EventCandidate, set[str]]] = []
                 for candidate in burst:
+                    bbo_start = time.perf_counter()
                     matched_reasons, salience = self._bbo_significance_assessment(
                         burst_start=burst_start,
                         candidate=candidate,
                     )
+                    if profile is not None:
+                        profile.bbo_significance_wall_sec += time.perf_counter() - bbo_start
                     if matched_reasons:
                         significant_candidates.append((salience, candidate, matched_reasons))
                 significant_candidates.sort(
@@ -1167,6 +1416,7 @@ class EventTokenCacheSplitWriter:
         *,
         informative_units: list[_InformativeUnit],
         target_symbol: str,
+        profile: _SelectorProfile | None = None,
     ) -> None:
         for unit in informative_units:
             unit.priority_tier = _base_priority_tier(unit=unit, target_symbol=target_symbol)
@@ -1175,43 +1425,85 @@ class EventTokenCacheSplitWriter:
             for unit in informative_units
             if unit.symbol == target_symbol and unit.priority_tier in {"T0", "T1", "T2", "T3"}
         ]
+        if profile is not None:
+            profile.t4_anchor_count = len(target_anchors)
+        anchors_by_exchange: dict[str, list[_InformativeUnit]] = defaultdict(list)
+        anchors_by_symbol: dict[str, list[_InformativeUnit]] = defaultdict(list)
+        for anchor in target_anchors:
+            anchors_by_exchange[anchor.exchange].append(anchor)
+            anchors_by_symbol[anchor.symbol].append(anchor)
+        exchange_indexes = {
+            key: (tuple(anchor.event_time_ts for anchor in anchors), anchors)
+            for key, anchors in anchors_by_exchange.items()
+        }
+        symbol_indexes = {
+            key: (tuple(anchor.event_time_ts for anchor in anchors), anchors)
+            for key, anchors in anchors_by_symbol.items()
+        }
+        resolution_start = time.perf_counter()
         for unit in informative_units:
             if unit.priority_tier in {"T0", "T1", "T2", "T3"}:
                 continue
-            matches: list[tuple[int, int, float, float, int, int, _InformativeUnit]] = []
-            for anchor in target_anchors:
-                delta_ms = abs(int((unit.event_time_ts - anchor.event_time_ts) * 1000))
-                if delta_ms > self.selection_hyperparameters.causal_horizon_ms:
+            matches = self._t4_anchor_matches(
+                unit=unit,
+                exchange_indexes=exchange_indexes,
+                symbol_indexes=symbol_indexes,
+            )
+            if matches:
+                best_anchor = min(matches)[-1]
+                unit.priority_tier = "T4"
+                unit.best_anchor_key = _candidate_key(best_anchor)
+                unit.best_anchor_tier = best_anchor.priority_tier
+                unit.best_anchor_delta_ms = abs(int((unit.event_time_ts - best_anchor.event_time_ts) * 1000))
+        if profile is not None:
+            profile.t4_resolution_wall_sec += time.perf_counter() - resolution_start
+
+    def _t4_anchor_matches(
+        self,
+        *,
+        unit: _InformativeUnit,
+        exchange_indexes: dict[str, tuple[tuple[float, ...], list[_InformativeUnit]]],
+        symbol_indexes: dict[str, tuple[tuple[float, ...], list[_InformativeUnit]]],
+    ) -> list[tuple[int, int, float, float, int, int, _InformativeUnit]]:
+        horizon_seconds = self.selection_hyperparameters.causal_horizon_ms / 1000.0
+        lower = unit.event_time_ts - horizon_seconds
+        upper = unit.event_time_ts + horizon_seconds
+        matches: list[tuple[int, int, float, float, int, int, _InformativeUnit]] = []
+        seen_anchor_keys: set[tuple[float, int, int, str, str, str]] = set()
+        candidate_indexes = (
+            exchange_indexes.get(unit.exchange),
+            symbol_indexes.get(unit.symbol),
+        )
+        for index in candidate_indexes:
+            if index is None:
+                continue
+            times, anchors = index
+            start = bisect_left(times, lower)
+            stop = bisect_right(times, upper)
+            for anchor in anchors[start:stop]:
+                anchor_key = _candidate_key(anchor)
+                if anchor_key in seen_anchor_keys:
                     continue
+                seen_anchor_keys.add(anchor_key)
                 if not (
                     (unit.symbol == anchor.symbol and unit.exchange != anchor.exchange)
                     or (unit.exchange == anchor.exchange and unit.symbol != anchor.symbol)
                 ):
                     continue
-                matches.append(
-                    (
-                        delta_ms,
-                        _tier_rank(anchor.priority_tier),
-                        -anchor.salience,
-                        -anchor.event_time_ts,
-                        anchor.source_label_id,
-                        anchor.source_event_index,
-                        anchor,
-                    )
-                )
-            if matches:
-                _, _, _, _, _, _, best_anchor = min(matches)
-                unit.priority_tier = "T4"
-                unit.best_anchor_key = _candidate_key(best_anchor)
-                unit.best_anchor_tier = best_anchor.priority_tier
-                unit.best_anchor_delta_ms = abs(int((unit.event_time_ts - best_anchor.event_time_ts) * 1000))
+                delta_ms = abs(int((unit.event_time_ts - anchor.event_time_ts) * 1000))
+                if delta_ms > self.selection_hyperparameters.causal_horizon_ms:
+                    continue
+                matches.append(_anchor_match_key(unit, anchor))
+        return matches
 
     def _select_informative_units(
         self,
         *,
         informative_units: list[_InformativeUnit],
         target_symbol: str,
+        profile: _SelectorProfile | None = None,
     ) -> tuple[list[_InformativeUnit], dict[str, Any]]:
+        quota_start = time.perf_counter()
         selected_keys: set[tuple[float, int, int, str, str, str]] = set()
         selected_units: list[_InformativeUnit] = []
         state = {
@@ -1257,6 +1549,8 @@ class EventTokenCacheSplitWriter:
             selection_meta["drop_reason_counts_by_tier"][tier_name][drop_reason] += 1
             if drop_reason in {"lane_cap", "bbo_cap", "symbol_cap"}:
                 selection_meta[f"{drop_reason}_hit"] = True
+        if profile is not None:
+            profile.quota_fill_wall_sec += time.perf_counter() - quota_start
         return final_selected, selection_meta
 
     def _select_group_units(
