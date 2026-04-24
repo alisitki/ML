@@ -212,6 +212,13 @@ class _WindowBase:
     bbo_significance_wall_sec: float
 
 
+@dataclass(slots=True)
+class _WindowBaseComputation:
+    window_base: _WindowBase
+    raw_candidates: list[_EventCandidate]
+    deduped_candidates: list[_EventCandidate]
+
+
 def _candidate_key(item: _EventCandidate | _InformativeUnit) -> tuple[float, int, int, str, str, str]:
     return (
         item.event_time_ts,
@@ -290,6 +297,34 @@ def _anchor_match_key(
         anchor.source_label_id,
         anchor.source_event_index,
         anchor,
+    )
+
+
+def _canonical_payload_identity(fields: dict[str, Any]) -> tuple[tuple[str, tuple[str, object]], ...]:
+    values: list[tuple[str, tuple[str, object]]] = []
+    for key, value in sorted(fields.items()):
+        if value is None:
+            values.append((key, ("none", None)))
+        elif isinstance(value, bool):
+            values.append((key, ("bool", value)))
+        elif isinstance(value, int):
+            values.append((key, ("int", value)))
+        elif isinstance(value, float):
+            values.append((key, ("float", repr(value))))
+        elif isinstance(value, str):
+            values.append((key, ("str", value)))
+    return tuple(values)
+
+
+def _candidate_dedup_key(
+    candidate: _EventCandidate,
+) -> tuple[str, str, str, int, tuple[tuple[str, tuple[str, object]], ...]]:
+    return (
+        candidate.exchange,
+        candidate.symbol,
+        candidate.stream,
+        int(candidate.event_time_ts * 1000),
+        _canonical_payload_identity(candidate.event.fields),
     )
 
 
@@ -1133,6 +1168,17 @@ class EventTokenCacheSplitWriter:
 
         self._window_base_cache_miss_count += 1
         precompute_start = time.perf_counter()
+        computation = self._compute_window_base_optimized(decision_time=decision_time)
+        window_base = computation.window_base
+        self._window_base_cache[decision_time_ms] = window_base
+        self._window_base_precompute_wall_sec += time.perf_counter() - precompute_start
+        return window_base, False
+
+    def _compute_window_base_slow_reference(
+        self,
+        *,
+        decision_time: datetime,
+    ) -> _WindowBaseComputation:
         decision_time_ts = decision_time.timestamp()
         window_start_ts = decision_time_ts - float(self.lookback_seconds)
         supported_lane_count = 0
@@ -1177,29 +1223,14 @@ class EventTokenCacheSplitWriter:
                             )
                         )
 
-        raw_candidates.sort(
-            key=lambda item: (
-                item.event_time_ts,
-                item.source_label_id,
-                item.source_event_index,
-                item.symbol,
-                item.exchange,
-                item.stream,
-            )
-        )
+        raw_candidates.sort(key=_candidate_key)
         deduped_candidates: list[_EventCandidate] = []
-        seen: set[tuple[str, str, str, int, str]] = set()
+        seen: set[tuple[str, str, str, int, tuple[tuple[str, tuple[str, object]], ...]]] = set()
         duplicate_count = 0
         duplicate_dropped_by_stream: Counter[str] = Counter()
         duplicate_dropped_by_venue: Counter[str] = Counter()
         for candidate in raw_candidates:
-            dedup_key = (
-                candidate.exchange,
-                candidate.symbol,
-                candidate.stream,
-                int(candidate.event_time_ts * 1000),
-                _canonical_payload_hash(candidate.event.fields),
-            )
+            dedup_key = _candidate_dedup_key(candidate)
             if dedup_key in seen:
                 duplicate_count += 1
                 duplicate_dropped_by_stream[candidate.stream] += 1
@@ -1207,7 +1238,34 @@ class EventTokenCacheSplitWriter:
                 continue
             seen.add(dedup_key)
             deduped_candidates.append(candidate)
+        return self._finish_window_base_computation(
+            raw_candidates=raw_candidates,
+            deduped_candidates=deduped_candidates,
+            supported_lane_count=supported_lane_count,
+            latest_reference_by_symbol=latest_reference_by_symbol,
+            duplicate_count=duplicate_count,
+            duplicate_dropped_by_stream=duplicate_dropped_by_stream,
+            duplicate_dropped_by_venue=duplicate_dropped_by_venue,
+            source_order_inversion_count=source_order_inversion_count,
+            decision_time=decision_time,
+        )
 
+    def _compute_window_base_optimized(self, *, decision_time: datetime) -> _WindowBaseComputation:
+        return self._compute_window_base_slow_reference(decision_time=decision_time)
+
+    def _finish_window_base_computation(
+        self,
+        *,
+        raw_candidates: list[_EventCandidate],
+        deduped_candidates: list[_EventCandidate],
+        supported_lane_count: int,
+        latest_reference_by_symbol: dict[str, float],
+        duplicate_count: int,
+        duplicate_dropped_by_stream: Counter[str],
+        duplicate_dropped_by_venue: Counter[str],
+        source_order_inversion_count: int,
+        decision_time: datetime,
+    ) -> _WindowBaseComputation:
         same_timestamp_tie_count = 0
         for previous, current in zip(deduped_candidates, deduped_candidates[1:]):
             if int(previous.event_time_ts * 1000) == int(current.event_time_ts * 1000):
@@ -1237,9 +1295,11 @@ class EventTokenCacheSplitWriter:
             candidate_by_stream=candidate_by_stream,
             bbo_significance_wall_sec=profile.bbo_significance_wall_sec,
         )
-        self._window_base_cache[decision_time_ms] = window_base
-        self._window_base_precompute_wall_sec += time.perf_counter() - precompute_start
-        return window_base, False
+        return _WindowBaseComputation(
+            window_base=window_base,
+            raw_candidates=raw_candidates,
+            deduped_candidates=deduped_candidates,
+        )
 
     def _target_deduped_candidates(
         self,
@@ -1277,15 +1337,9 @@ class EventTokenCacheSplitWriter:
                     )
         raw_candidates.sort(key=_candidate_key)
         deduped_candidates: list[_EventCandidate] = []
-        seen: set[tuple[str, str, str, int, str]] = set()
+        seen: set[tuple[str, str, str, int, tuple[tuple[str, tuple[str, object]], ...]]] = set()
         for candidate in raw_candidates:
-            dedup_key = (
-                candidate.exchange,
-                candidate.symbol,
-                candidate.stream,
-                int(candidate.event_time_ts * 1000),
-                _canonical_payload_hash(candidate.event.fields),
-            )
+            dedup_key = _candidate_dedup_key(candidate)
             if dedup_key in seen:
                 continue
             seen.add(dedup_key)
@@ -1360,12 +1414,17 @@ class EventTokenCacheSplitWriter:
 
                 burst_start = burst[0]
                 bbo_start = time.perf_counter()
-                burst_end_reasons, burst_end_salience = self._bbo_significance_assessment(
-                    burst_start=burst_start,
-                    candidate=burst_end,
-                )
+                bbo_assessments = [
+                    (candidate, *self._bbo_significance_assessment(burst_start=burst_start, candidate=candidate))
+                    for candidate in burst
+                ]
                 if profile is not None:
                     profile.bbo_significance_wall_sec += time.perf_counter() - bbo_start
+                burst_end_reasons, burst_end_salience = next(
+                    (set(reasons), salience)
+                    for candidate, reasons, salience in bbo_assessments
+                    if candidate is burst_end
+                )
                 burst_end_reasons.add("burst_boundary")
                 self._upsert_informative_unit(
                     units_by_key=units_by_key,
@@ -1379,14 +1438,7 @@ class EventTokenCacheSplitWriter:
                     matched_reasons=burst_end_reasons,
                 )
                 significant_candidates: list[tuple[float, _EventCandidate, set[str]]] = []
-                for candidate in burst:
-                    bbo_start = time.perf_counter()
-                    matched_reasons, salience = self._bbo_significance_assessment(
-                        burst_start=burst_start,
-                        candidate=candidate,
-                    )
-                    if profile is not None:
-                        profile.bbo_significance_wall_sec += time.perf_counter() - bbo_start
+                for candidate, matched_reasons, salience in bbo_assessments:
                     if matched_reasons:
                         significant_candidates.append((salience, candidate, matched_reasons))
                 significant_candidates.sort(
@@ -1432,31 +1484,139 @@ class EventTokenCacheSplitWriter:
         for anchor in target_anchors:
             anchors_by_exchange[anchor.exchange].append(anchor)
             anchors_by_symbol[anchor.symbol].append(anchor)
+        sorted_anchors_by_exchange = {
+            key: sorted(anchors, key=_candidate_key) for key, anchors in anchors_by_exchange.items()
+        }
+        sorted_anchors_by_symbol = {
+            key: sorted(anchors, key=_candidate_key) for key, anchors in anchors_by_symbol.items()
+        }
         exchange_indexes = {
             key: (tuple(anchor.event_time_ts for anchor in anchors), anchors)
-            for key, anchors in anchors_by_exchange.items()
+            for key, anchors in sorted_anchors_by_exchange.items()
         }
         symbol_indexes = {
             key: (tuple(anchor.event_time_ts for anchor in anchors), anchors)
-            for key, anchors in anchors_by_symbol.items()
+            for key, anchors in sorted_anchors_by_symbol.items()
         }
         resolution_start = time.perf_counter()
         for unit in informative_units:
             if unit.priority_tier in {"T0", "T1", "T2", "T3"}:
                 continue
-            matches = self._t4_anchor_matches(
+            match = self._best_t4_anchor_match(
                 unit=unit,
                 exchange_indexes=exchange_indexes,
                 symbol_indexes=symbol_indexes,
             )
-            if matches:
-                best_anchor = min(matches)[-1]
+            if match is not None:
+                best_anchor = match[-1]
                 unit.priority_tier = "T4"
                 unit.best_anchor_key = _candidate_key(best_anchor)
                 unit.best_anchor_tier = best_anchor.priority_tier
                 unit.best_anchor_delta_ms = abs(int((unit.event_time_ts - best_anchor.event_time_ts) * 1000))
         if profile is not None:
             profile.t4_resolution_wall_sec += time.perf_counter() - resolution_start
+
+    def _best_t4_anchor_match(
+        self,
+        *,
+        unit: _InformativeUnit,
+        exchange_indexes: dict[str, tuple[tuple[float, ...], list[_InformativeUnit]]],
+        symbol_indexes: dict[str, tuple[tuple[float, ...], list[_InformativeUnit]]],
+    ) -> tuple[int, int, float, float, int, int, _InformativeUnit] | None:
+        horizon_seconds = self.selection_hyperparameters.causal_horizon_ms / 1000.0
+        best: tuple[int, int, float, float, int, int, _InformativeUnit] | None = None
+        seen_anchor_keys: set[tuple[float, int, int, str, str, str]] = set()
+        candidate_indexes = (
+            exchange_indexes.get(unit.exchange),
+            symbol_indexes.get(unit.symbol),
+        )
+        for index in candidate_indexes:
+            if index is None:
+                continue
+            match = self._best_t4_anchor_match_in_index(
+                unit=unit,
+                times=index[0],
+                anchors=index[1],
+                horizon_seconds=horizon_seconds,
+                seen_anchor_keys=seen_anchor_keys,
+            )
+            if match is not None and (best is None or match < best):
+                best = match
+        return best
+
+    def _best_t4_anchor_match_in_index(
+        self,
+        *,
+        unit: _InformativeUnit,
+        times: tuple[float, ...],
+        anchors: list[_InformativeUnit],
+        horizon_seconds: float,
+        seen_anchor_keys: set[tuple[float, int, int, str, str, str]],
+    ) -> tuple[int, int, float, float, int, int, _InformativeUnit] | None:
+        center = bisect_left(times, unit.event_time_ts)
+        left = center - 1
+        right = center
+        best: tuple[int, int, float, float, int, int, _InformativeUnit] | None = None
+
+        while left >= 0 or right < len(anchors):
+            left_delta = abs(unit.event_time_ts - times[left]) if left >= 0 else math.inf
+            right_delta = abs(times[right] - unit.event_time_ts) if right < len(anchors) else math.inf
+            next_delta = min(left_delta, right_delta)
+            if next_delta > horizon_seconds:
+                break
+            next_delta_ms = int(next_delta * 1000)
+            if best is not None and next_delta_ms > best[0]:
+                break
+
+            if left_delta <= right_delta:
+                anchor = anchors[left]
+                left -= 1
+                match = self._t4_anchor_match_if_valid(
+                    unit=unit,
+                    anchor=anchor,
+                    horizon_seconds=horizon_seconds,
+                    seen_anchor_keys=seen_anchor_keys,
+                )
+                if match is not None and (best is None or match < best):
+                    best = match
+                continue
+
+            anchor = anchors[right]
+            right += 1
+            match = self._t4_anchor_match_if_valid(
+                unit=unit,
+                anchor=anchor,
+                horizon_seconds=horizon_seconds,
+                seen_anchor_keys=seen_anchor_keys,
+            )
+            if match is not None and (best is None or match < best):
+                best = match
+
+        return best
+
+    def _t4_anchor_match_if_valid(
+        self,
+        *,
+        unit: _InformativeUnit,
+        anchor: _InformativeUnit,
+        horizon_seconds: float,
+        seen_anchor_keys: set[tuple[float, int, int, str, str, str]],
+    ) -> tuple[int, int, float, float, int, int, _InformativeUnit] | None:
+        anchor_key = _candidate_key(anchor)
+        if anchor_key in seen_anchor_keys:
+            return None
+        seen_anchor_keys.add(anchor_key)
+        if abs(unit.event_time_ts - anchor.event_time_ts) > horizon_seconds:
+            return None
+        if not (
+            (unit.symbol == anchor.symbol and unit.exchange != anchor.exchange)
+            or (unit.exchange == anchor.exchange and unit.symbol != anchor.symbol)
+        ):
+            return None
+        delta_ms = abs(int((unit.event_time_ts - anchor.event_time_ts) * 1000))
+        if delta_ms > self.selection_hyperparameters.causal_horizon_ms:
+            return None
+        return _anchor_match_key(unit, anchor)
 
     def _t4_anchor_matches(
         self,
@@ -1770,8 +1930,17 @@ class EventTokenCacheSplitWriter:
         burst_start: _EventCandidate,
         candidate: _EventCandidate,
     ) -> tuple[set[str], float]:
-        start_values = _bbo_state_tuple(burst_start)
-        current_values = _bbo_state_tuple(candidate)
+        return self._bbo_significance_assessment_from_values(
+            start_values=_bbo_state_tuple(burst_start),
+            current_values=_bbo_state_tuple(candidate),
+        )
+
+    def _bbo_significance_assessment_from_values(
+        self,
+        *,
+        start_values: tuple[float, float, float | None, float | None] | None,
+        current_values: tuple[float, float, float | None, float | None] | None,
+    ) -> tuple[set[str], float]:
         if start_values is None or current_values is None:
             return set(), 0.0
         start_mid, start_spread, start_imbalance, start_min_side = start_values

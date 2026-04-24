@@ -6,6 +6,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
+
 from quantlab_ml.contracts import DatasetSpec, NormalizedMarketEvent
 from quantlab_ml.trajectories import TrajectoryBuilder
 from quantlab_ml.trajectories.event_token_cache import (
@@ -13,6 +15,8 @@ from quantlab_ml.trajectories.event_token_cache import (
     _EventCandidate,
     _InformativeUnit,
     _bbo_payload,
+    _canonical_payload_hash,
+    _canonical_payload_identity,
     _trade_payload,
     event_token_cache_directory,
     event_token_cache_manifest_path,
@@ -548,6 +552,243 @@ def test_indexed_t4_anchor_resolution_matches_naive_semantics(tmp_path: Path) ->
             )
 
 
+def test_t4_anchor_resolution_matches_naive_semantics_across_dense_ties(tmp_path: Path) -> None:
+    dataset_spec = _overflow_dataset_spec()
+    writer = EventTokenCacheSplitWriter(
+        directory=tmp_path,
+        split_name="train",
+        dataset_spec=dataset_spec,
+        indexed={},
+        source_labels=["synthetic://test"],
+    )
+
+    anchors = [
+        _make_unit(
+            event_time_ts=30.0000,
+            exchange="binance",
+            symbol="BTCUSDT",
+            stream="trade",
+            source_bucket="trade_recent_raw",
+            salience=4.0,
+            source_event_index=1,
+        ),
+        _make_unit(
+            event_time_ts=30.0004,
+            exchange="binance",
+            symbol="BTCUSDT",
+            stream="bbo",
+            source_bucket="bbo_recent_sig",
+            salience=50.0,
+            source_event_index=2,
+        ),
+        _make_unit(
+            event_time_ts=30.0008,
+            exchange="binance",
+            symbol="BTCUSDT",
+            stream="trade",
+            source_bucket="trade_recent_raw",
+            salience=1.0,
+            source_event_index=0,
+        ),
+        _make_unit(
+            event_time_ts=30.0500,
+            exchange="bybit",
+            symbol="BTCUSDT",
+            stream="trade",
+            source_bucket="trade_recent_raw",
+            salience=100.0,
+            source_event_index=3,
+        ),
+    ]
+    non_targets = [
+        _make_unit(
+            event_time_ts=30.0009,
+            exchange="binance",
+            symbol="ETHUSDT",
+            stream="trade",
+            source_bucket="trade_recent_raw",
+            salience=1.0,
+            source_event_index=10,
+        ),
+        _make_unit(
+            event_time_ts=29.0010,
+            exchange="binance",
+            symbol="SOLUSDT",
+            stream="bbo",
+            source_bucket="bbo_recent_sig",
+            salience=2.0,
+            source_event_index=11,
+        ),
+    ]
+    informative_units = anchors + non_targets
+
+    writer._assign_priority_tiers(informative_units=informative_units, target_symbol="BTCUSDT")
+
+    for unit in non_targets:
+        expected = _naive_t4_best_anchor(unit=unit, anchors=anchors)
+        if expected is None:
+            assert unit.priority_tier in {"T5", "T6", "T7"}
+            assert unit.best_anchor_key is None
+        else:
+            assert unit.priority_tier == "T4"
+            assert unit.best_anchor_key == (
+                expected.event_time_ts,
+                expected.source_label_id,
+                expected.source_event_index,
+                expected.symbol,
+                expected.exchange,
+                expected.stream,
+            )
+            assert unit.best_anchor_tier == expected.priority_tier
+
+
+def test_canonical_payload_identity_preserves_hash_dedupe_semantics() -> None:
+    first = {
+        "price": 100.0,
+        "qty": 1,
+        "is_buyer_maker": False,
+        "nested_ignored": {"not": "canonical"},
+        "none_value": None,
+    }
+    same = {
+        "none_value": None,
+        "nested_ignored": ["also", "ignored"],
+        "is_buyer_maker": False,
+        "qty": 1,
+        "price": 100.0,
+    }
+    different_numeric_type = {
+        "price": 100,
+        "qty": 1,
+        "is_buyer_maker": False,
+        "none_value": None,
+    }
+    different_bool_type = {
+        "price": 100.0,
+        "qty": 1,
+        "is_buyer_maker": 0,
+        "none_value": None,
+    }
+
+    assert _canonical_payload_hash(first) == _canonical_payload_hash(same)
+    assert _canonical_payload_identity(first) == _canonical_payload_identity(same)
+    assert _canonical_payload_hash(first) != _canonical_payload_hash(different_numeric_type)
+    assert _canonical_payload_identity(first) != _canonical_payload_identity(different_numeric_type)
+    assert _canonical_payload_hash(first) != _canonical_payload_hash(different_bool_type)
+    assert _canonical_payload_identity(first) != _canonical_payload_identity(different_bool_type)
+
+
+def test_r5_window_base_optimized_path_matches_slow_reference_ordered_output(tmp_path: Path) -> None:
+    writer, decision_time = _r5_window_base_writer(tmp_path)
+
+    for offset_seconds in (0, 1, 60):
+        row_time = decision_time + timedelta(seconds=offset_seconds)
+        slow = writer._compute_window_base_slow_reference(decision_time=row_time)
+        optimized = writer._compute_window_base_optimized(decision_time=row_time)
+
+        assert [_candidate_snapshot(candidate) for candidate in optimized.raw_candidates] == [
+            _candidate_snapshot(candidate) for candidate in slow.raw_candidates
+        ]
+        assert [_candidate_snapshot(candidate) for candidate in optimized.deduped_candidates] == [
+            _candidate_snapshot(candidate) for candidate in slow.deduped_candidates
+        ]
+        assert _window_base_snapshot(optimized.window_base) == _window_base_snapshot(slow.window_base)
+
+
+def test_r5_window_base_precompute_does_not_leak_future_events_or_bursts(tmp_path: Path) -> None:
+    clean_writer, decision_time = _r5_window_base_writer(tmp_path / "clean", include_future_events=False)
+    future_writer, _ = _r5_window_base_writer(tmp_path / "future", include_future_events=True)
+
+    clean = clean_writer._compute_window_base_optimized(decision_time=decision_time)
+    future = future_writer._compute_window_base_optimized(decision_time=decision_time)
+    future_slow = future_writer._compute_window_base_slow_reference(decision_time=decision_time)
+
+    assert [_candidate_snapshot(candidate) for candidate in future.raw_candidates] == [
+        _candidate_snapshot(candidate) for candidate in clean.raw_candidates
+    ]
+    assert [_candidate_snapshot(candidate) for candidate in future.deduped_candidates] == [
+        _candidate_snapshot(candidate) for candidate in clean.deduped_candidates
+    ]
+    assert _window_base_snapshot(future.window_base) == _window_base_snapshot(clean.window_base)
+    assert _window_base_snapshot(future.window_base) == _window_base_snapshot(future_slow.window_base)
+
+
+def test_r5_bbo_burst_clipping_and_reason_precedence_match_slow_reference(tmp_path: Path) -> None:
+    writer, decision_time = _r5_window_base_writer(tmp_path)
+    row_times = [
+        decision_time,
+        decision_time + timedelta(seconds=1),
+        decision_time + timedelta(seconds=60),
+    ]
+
+    for row_time in row_times:
+        slow = writer._compute_window_base_slow_reference(decision_time=row_time)
+        optimized = writer._compute_window_base_optimized(decision_time=row_time)
+        assert _window_base_snapshot(optimized.window_base) == _window_base_snapshot(slow.window_base)
+
+    optimized = writer._compute_window_base_optimized(decision_time=decision_time)
+    units_by_source = {unit.source_event_index: unit for unit in optimized.window_base.informative_units}
+    collision_unit = units_by_source[1005]
+    burst_end_unit = units_by_source[1006]
+
+    assert 1001 not in units_by_source
+    assert 1002 not in units_by_source
+    assert collision_unit.canonical_significance_reason == "liquidity_vacuum"
+    assert {"liquidity_vacuum", "spread_regime_jump", "mid_excursion", "imbalance_regime_flip"} <= (
+        collision_unit.matched_reasons
+    )
+    assert "burst_boundary" in burst_end_unit.matched_reasons
+
+
+def test_r5_bbo_identity_precompute_preserves_lane_and_source_boundaries(tmp_path: Path) -> None:
+    writer, decision_time = _r5_window_base_writer(tmp_path)
+
+    slow = writer._compute_window_base_slow_reference(decision_time=decision_time)
+    optimized = writer._compute_window_base_optimized(decision_time=decision_time)
+    deduped = [_candidate_snapshot(candidate) for candidate in optimized.deduped_candidates]
+    same_timestamp_ms = int((decision_time.timestamp() - 30.000) * 1000)
+    duplicate_like_ms = int((decision_time.timestamp() - 59.890) * 1000)
+
+    assert _window_base_snapshot(optimized.window_base) == _window_base_snapshot(slow.window_base)
+    assert optimized.window_base.duplicate_count == slow.window_base.duplicate_count == 1
+    assert (
+        same_timestamp_ms,
+        "bybit",
+        "BTCUSDT",
+        "bbo",
+        1,
+        2000,
+        _canonical_payload_identity(_bbo_fields(mid=100.0, bid_size=10.0, ask_size=10.0)),
+    ) in deduped
+    assert (
+        same_timestamp_ms,
+        "binance",
+        "ETHUSDT",
+        "bbo",
+        1,
+        3000,
+        _canonical_payload_identity(_bbo_fields(mid=100.0, bid_size=10.0, ask_size=10.0)),
+    ) in deduped
+    assert (
+        duplicate_like_ms,
+        "binance",
+        "BTCUSDT",
+        "bbo",
+        1,
+        1005,
+        _canonical_payload_identity(_bbo_fields(mid=101.0, bid_size=1, ask_size=9.0, spread=0.6)),
+    ) in deduped
+    assert (
+        duplicate_like_ms,
+        "binance",
+        "BTCUSDT",
+        "bbo",
+        1,
+        1006,
+        _canonical_payload_identity(_bbo_fields(mid=101.0, bid_size=1.0, ask_size=9.0, spread=0.6)),
+    ) in deduped
+
+
 def _naive_t4_best_anchor(
     *,
     unit: _InformativeUnit,
@@ -577,12 +818,179 @@ def _naive_t4_best_anchor(
     return min(matches)[-1] if matches else None
 
 
+def _make_unit(
+    *,
+    event_time_ts: float,
+    exchange: str,
+    symbol: str,
+    stream: str,
+    source_bucket: str,
+    salience: float,
+    source_event_index: int,
+) -> _InformativeUnit:
+    event = _FakeCompactEvent(
+        event_time_ts=event_time_ts,
+        fields={},
+        source_label_id=0,
+        source_event_index=source_event_index,
+    )
+    candidate = _EventCandidate(
+        event_time_ts=event_time_ts,
+        exchange=exchange,
+        symbol=symbol,
+        stream=stream,
+        event=event,
+        lane_events=[event],
+        lane_position=0,
+    )
+    return _InformativeUnit(
+        candidate=candidate,
+        lag_ms=0,
+        source_bucket=source_bucket,
+        lane_key=(exchange, symbol, stream),
+        burst_id=((exchange, symbol, stream), source_event_index),
+        salience=salience,
+    )
+
+
 @dataclass(slots=True)
 class _FakeCompactEvent:
     event_time_ts: float
-    fields: dict[str, float | str | bool]
+    fields: dict[str, object]
     source_label_id: int = 0
     source_event_index: int = 0
+
+
+def _r5_window_base_writer(
+    tmp_path: Path,
+    *,
+    include_future_events: bool = False,
+) -> tuple[EventTokenCacheSplitWriter, datetime]:
+    dataset_spec = _overflow_dataset_spec()
+    decision_time = datetime(2024, 1, 1, 0, 59, tzinfo=UTC)
+    base_ts = decision_time.timestamp()
+    lanes: dict[tuple[str, str, str], list[_FakeCompactEvent]] = {
+        ("BTCUSDT", "binance", "bbo"): [
+            _fake_event(base_ts - 60.200, _bbo_fields(mid=90.0, bid_size=50.0, ask_size=50.0), 1, 1000),
+            _fake_event(base_ts - 60.000, _bbo_fields(mid=100.0, bid_size=12.0, ask_size=8.0), 1, 1001),
+            _fake_event(base_ts - 59.950, _bbo_fields(mid=100.0, bid_size=12.0, ask_size=8.0), 1, 1002),
+            _fake_event(base_ts - 59.900, _bbo_fields(mid=101.0, bid_size=1.0, ask_size=9.0, spread=0.6), 1, 1003),
+            _fake_event(base_ts - 59.900, _bbo_fields(mid=101.0, bid_size=1.0, ask_size=9.0, spread=0.6), 1, 1004),
+            _fake_event(base_ts - 59.890, _bbo_fields(mid=101.0, bid_size=1, ask_size=9.0, spread=0.6), 1, 1005),
+            _fake_event(base_ts - 59.890, _bbo_fields(mid=101.0, bid_size=1.0, ask_size=9.0, spread=0.6), 1, 1006),
+            _fake_event(base_ts - 30.000, _bbo_fields(mid=100.0, bid_size=10.0, ask_size=10.0), 1, 1008),
+            _fake_event(base_ts - 0.150, _bbo_fields(mid=102.0, bid_size=11.0, ask_size=11.0), 1, 1009),
+            _fake_event(base_ts - 0.050, _bbo_fields(mid=103.0, bid_size=2.0, ask_size=12.0), 1, 1010),
+            _fake_event(base_ts + 60.000, _bbo_fields(mid=103.5, bid_size=2.0, ask_size=12.0), 1, 1011),
+        ],
+        ("BTCUSDT", "binance", "trade"): [
+            _fake_event(base_ts - 30.000, {"price": 100.1, "qty": 1.0, "side_or_signed_flow_proxy": 1.0}, 1, 1012),
+            _fake_event(base_ts - 30.000, {"price": 100.2, "qty": 2.0, "side_or_signed_flow_proxy": -2.0}, 1, 1014),
+            _fake_event(base_ts - 30.000, {"price": 100.3, "qty": 3.0, "side_or_signed_flow_proxy": 3.0}, 1, 1013),
+        ],
+        ("BTCUSDT", "bybit", "bbo"): [
+            _fake_event(base_ts - 30.000, _bbo_fields(mid=100.0, bid_size=10.0, ask_size=10.0), 1, 2000),
+        ],
+        ("ETHUSDT", "binance", "bbo"): [
+            _fake_event(base_ts - 30.000, _bbo_fields(mid=100.0, bid_size=10.0, ask_size=10.0), 1, 3000),
+            _fake_event(base_ts - 29.900, _bbo_fields(mid=100.5, bid_size=4.0, ask_size=14.0), 1, 3001),
+        ],
+        ("SOLUSDT", "okx", "trade"): [
+            _fake_event(base_ts - 30.000, {"price": 20.0, "qty": 1.0, "side_or_signed_flow_proxy": 1.0}, 1, 4000),
+        ],
+    }
+    if include_future_events:
+        lanes[("BTCUSDT", "binance", "bbo")].append(
+            _fake_event(base_ts + 0.100, _bbo_fields(mid=180.0, bid_size=0.1, ask_size=100.0), 1, 1015)
+        )
+    indexed = {
+        lane_key: (np.asarray([event.event_time_ts for event in events], dtype=float), events)
+        for lane_key, events in lanes.items()
+    }
+    writer = EventTokenCacheSplitWriter(
+        directory=tmp_path,
+        split_name="train",
+        dataset_spec=dataset_spec,
+        indexed=indexed,
+        source_labels=["synthetic://r5"],
+    )
+    return writer, decision_time
+
+
+def _fake_event(
+    event_time_ts: float,
+    fields: dict[str, object],
+    source_label_id: int,
+    source_event_index: int,
+) -> _FakeCompactEvent:
+    return _FakeCompactEvent(
+        event_time_ts=event_time_ts,
+        fields=fields,
+        source_label_id=source_label_id,
+        source_event_index=source_event_index,
+    )
+
+
+def _bbo_fields(
+    *,
+    mid: float,
+    bid_size: object,
+    ask_size: object,
+    spread: float = 0.2,
+) -> dict[str, object]:
+    bid_price = mid - (spread / 2.0)
+    ask_price = mid + (spread / 2.0)
+    return {
+        "bid_price": bid_price,
+        "ask_price": ask_price,
+        "bid_size": bid_size,
+        "ask_size": ask_size,
+        "spread": spread,
+        "mid": mid,
+    }
+
+
+def _candidate_snapshot(
+    candidate: _EventCandidate,
+) -> tuple[int, str, str, str, int, int, tuple[tuple[str, tuple[str, object]], ...]]:
+    return (
+        int(candidate.event_time_ts * 1000),
+        candidate.exchange,
+        candidate.symbol,
+        candidate.stream,
+        candidate.source_label_id,
+        candidate.source_event_index,
+        _canonical_payload_identity(candidate.event.fields),
+    )
+
+
+def _window_base_snapshot(window_base) -> dict[str, object]:
+    return {
+        "units": [
+            (
+                _candidate_snapshot(unit.candidate),
+                unit.source_bucket,
+                unit.lane_key,
+                unit.burst_id,
+                round(unit.salience, 12),
+                sorted(unit.emission_tags),
+                sorted(unit.matched_reasons),
+                unit.canonical_significance_reason,
+            )
+            for unit in window_base.informative_units
+        ],
+        "supported_lane_count": window_base.supported_lane_count,
+        "latest_reference_by_symbol": dict(window_base.latest_reference_by_symbol),
+        "deduped_count": window_base.deduped_count,
+        "duplicate_count": window_base.duplicate_count,
+        "duplicate_dropped_by_stream": dict(window_base.duplicate_dropped_by_stream),
+        "duplicate_dropped_by_venue": dict(window_base.duplicate_dropped_by_venue),
+        "same_timestamp_tie_count": window_base.same_timestamp_tie_count,
+        "source_order_inversion_count": window_base.source_order_inversion_count,
+        "candidate_by_symbol": dict(window_base.candidate_by_symbol),
+        "candidate_by_venue": dict(window_base.candidate_by_venue),
+        "candidate_by_stream": dict(window_base.candidate_by_stream),
+    }
 
 
 def test_event_token_payload_formulas_are_frozen() -> None:

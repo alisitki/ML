@@ -115,13 +115,17 @@ Result:
 - current_scope:
   - `Phase A` and `Phase B` remain implemented as an additive offline-only event-depth surface
   - current `HEAD` writes `event_token_cache_v1` beside `tensor_cache_v1`
-  - active work is narrowed to `R1` retention-policy redesign spec, `R2` artifact/diagnostics implementation, and later `R3` proof-slice revalidation
+  - `R1` retention-policy redesign spec, `R2` artifact/diagnostics implementation, and `R3` last-mile profiling/caching evidence have landed
+  - `R4` hot-path optimization reduced T4 resolution from the dominant blocker to a small cost, but the remote proof slice still failed the build-time gate before full `event_token_cache_v1` manifest/shards were produced
+  - `R5` equivalence-first window-base/BBO hardening tests landed, but the remote proof slice failed before full `event_token_cache_v1` manifest/shards were produced
+  - `R5` rejected eager full-split precompute because it hit exit `137` before partial selector profiling, and rejected the k-way/global-BBO-cache path because archived partial profiles classified the blocker as `window_base_miss_path`
+  - the current blocker remains first-pass target-independent window-base/BBO miss-path cost inside the development split, not T4 anchor resolution, archive discipline, replay ordering, artifact schema, row alignment semantics, or venue identity
   - `Phase C` stays gated until the redesigned retention policy proves replayable, stable, and informative on proof-slice evidence
 - next_action:
-  - finish `significant_bbo_priority_window_v2` as the proof-slice retention policy for `trade + bbo`
-  - version selector hyperparameters explicitly in manifest and diagnostics rather than treating current numbers as universal truths
-  - keep `60s` cadence fixed for the next proof slice
-  - add strict target/burst/cross-venue diagnostics plus retained-bundle survivability metadata
+  - run the next narrow hardening pass from the archived R5 evidence, starting with a lower-risk BBO-local significance implementation that avoids global per-event caches and does not replace the proven global-sort ordering path unless ordered equivalence and throughput are both demonstrated
+  - keep `significant_bbo_priority_window_v2`, selector hyperparameters, quotas, tier meanings, BBO precedence, replay ordering, row alignment, artifact schema, and venue/symbol identity unchanged
+  - keep `60s` cadence fixed for the next proof slice and rerun the same proof-slice gate after equivalence tests
+  - preserve strict target/burst/cross-venue diagnostics plus retained-bundle survivability metadata
   - do not start `Phase C`, model work, or runtime broadening from this item
 - evidence_needed:
   - explicit acceptance criteria per expansion item
