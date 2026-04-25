@@ -57,6 +57,8 @@ THIN_KEEP_NAMES = {
     "normalization_receipt.json",
     "offline_evidence_pack.json",
     "offline_evidence_pack.md",
+    "post_prune_thin_mirror_manifest.json",
+    "post_prune_thin_mirror_manifest.sha256",
     "ql031_status.json",
     "retained_root_discovery.json",
     "score.json",

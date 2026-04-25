@@ -2,7 +2,9 @@
 
 ## Verdict
 
-`QL-033 R5` did not pass proof-slice acceptance.
+`QL-033 R5` did not pass proof-slice acceptance. The latest retained attempt is
+classified as `RUN_CONTROL_FAILURE` for acceptance purposes, not as a successful
+performance result.
 
 `Phase C1` remains closed. This evidence does not claim offline closure PASS, model
 adaptation readiness, runtime readiness, or live readiness.
@@ -180,8 +182,8 @@ window_base_miss_path
 
 Interpretation:
 
-The deterministic k-way merge path was semantically covered by tests but rejected on
-throughput. It was slower than the old global-sort path on the proof surface.
+The deterministic k-way merge path remained non-accepted. Its 15-row partial profile
+was useful only as hotspot localization evidence, not as proof-slice acceptance.
 
 ### Rerun 2
 
@@ -235,8 +237,12 @@ window_base_miss_path
 
 Interpretation:
 
-Restoring the old global-sort order avoided the eager-memory blocker, but the global
-BBO assessment cache still did not produce acceptable proof-slice throughput.
+`run_a` exited with `143` (`SIGTERM`) after `1091.23s`, below the `2207s` build gate.
+The retained evidence does not prove a normal build-gate timeout, a manual
+interruption, or an external resource issue. Because only 19 rows were processed,
+`run_a` did not produce full manifest/shards, and `run_b` did not start, this attempt
+is `RUN_CONTROL_FAILURE` for acceptance. The partial selector profile may only
+localize the next R6 target to the first-pass `window_base`/BBO miss-path.
 
 ## Acceptance Status
 
@@ -247,12 +253,17 @@ R5 failed required acceptance:
 - row/shard alignment: fail, not available
 - semantic payload tree hash match: fail, not available
 - retention/adjacency/starvation thresholds: fail, not available
+- latest `run_a` exit reason: `143` / `SIGTERM`, below the build gate, so acceptance
+  classification is `RUN_CONTROL_FAILURE`
+- incomplete build-time and artifact-size multipliers are not pass evidence
 - archive upload and receipt verification: pass for all three attempts
 - thin mirror and remote prune: pass for all three attempts
 
 ## Next Blocker
 
-The next blocker is still `window_base_miss_path`.
+The next R6 target is localized to `window_base_miss_path` / BBO-local cost by the
+partial profiles. That localization is not acceptance evidence and must not be read
+as R5 performance PASS.
 
 The next narrow pass should not broaden into Phase C, model work, runtime work, or a
 general selector refactor. It should start from the archived R5 evidence and use a
@@ -261,8 +272,45 @@ lower-risk implementation shape:
 - keep the proven global-sort order unless an alternative is both ordered-equivalent
   and faster on a representative local/remote micro-slice
 - remove global per-event BBO assessment caches from the hot path
+- measure and target the dominant `window_base_miss_path` sub-costs; BBO-local
+  optimization is acceptable only if it projects enough improvement under the `2.25x`
+  gate
 - if optimizing BBO, compute burst-start BBO tuple once per window-local burst and
   current BBO tuple once per candidate without retaining unbounded split-level state
 - keep the slow reference path and ordered equivalence tests
-- rerun the same proof slice only after local micro-profile evidence shows a real
-  speedup on the development miss path
+- run a representative micro-profile over the first-pass miss-only region, roughly the
+  first 359 miss rows plus the first cache-reuse transition when feasible, before any
+  full paid proof rerun
+
+## R6 Candidate Micro-Profile Status
+
+Current `HEAD` now includes a narrow R6 candidate implementation for
+`window_base_miss_path` / BBO-local work:
+
+- the slow reference path remains available
+- deterministic global-sort ordering and dedupe semantics are unchanged
+- R4 T4 nearest-anchor behavior is unchanged
+- BBO burst-start tuple extraction is reused only within the current window-local
+  burst
+- no global per-event BBO cache was added
+
+Local continuity smoke profile:
+
+```text
+outputs/analysis/ql033-r6-windowbase-micro-profile/ql033_r6_window_base_micro_profile.synthetic.json
+```
+
+Validation report:
+
+```text
+outputs/analysis/ql033-r6-windowbase-micro-profile/ql033_r6_window_base_micro_profile.validation.json
+```
+
+The smoke profile covered `360` synthetic first-pass miss rows plus `360` cache-reuse
+rows over the proof-slice-shaped market scope and produced ordered reference/candidate
+equivalence. It is not representative proof-slice market-data evidence because the
+local QL-033 mirrors retain manifests and diagnostics only; event shard payloads are
+absent. The micro-profile validator therefore classifies it as
+`insufficient_evidence`, blocked by missing first-pass miss-region evidence and absent
+projected build-gate multiplier. Full remote R6 proof remains blocked pending a
+representative micro-profile on the real problematic development split region.

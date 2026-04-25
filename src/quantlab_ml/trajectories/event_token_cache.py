@@ -187,6 +187,12 @@ class _InformativeUnit:
 
 @dataclass(slots=True)
 class _SelectorProfile:
+    lane_range_extraction_wall_sec: float = 0.0
+    raw_candidate_assembly_wall_sec: float = 0.0
+    deterministic_ordering_wall_sec: float = 0.0
+    dedupe_wall_sec: float = 0.0
+    bbo_tuple_extraction_wall_sec: float = 0.0
+    bbo_burst_significance_wall_sec: float = 0.0
     bbo_significance_wall_sec: float = 0.0
     t4_resolution_wall_sec: float = 0.0
     quota_fill_wall_sec: float = 0.0
@@ -209,6 +215,12 @@ class _WindowBase:
     candidate_by_symbol: Counter[str]
     candidate_by_venue: Counter[str]
     candidate_by_stream: Counter[str]
+    lane_range_extraction_wall_sec: float
+    raw_candidate_assembly_wall_sec: float
+    deterministic_ordering_wall_sec: float
+    dedupe_wall_sec: float
+    bbo_tuple_extraction_wall_sec: float
+    bbo_burst_significance_wall_sec: float
     bbo_significance_wall_sec: float
 
 
@@ -217,6 +229,7 @@ class _WindowBaseComputation:
     window_base: _WindowBase
     raw_candidates: list[_EventCandidate]
     deduped_candidates: list[_EventCandidate]
+    profile: _SelectorProfile
 
 
 def _candidate_key(item: _EventCandidate | _InformativeUnit) -> tuple[float, int, int, str, str, str]:
@@ -1179,8 +1192,26 @@ class EventTokenCacheSplitWriter:
         *,
         decision_time: datetime,
     ) -> _WindowBaseComputation:
+        return self._compute_window_base_reference_like(
+            decision_time=decision_time,
+            bbo_assessment_mode="reference_repeated_tuple",
+        )
+
+    def _compute_window_base_optimized(self, *, decision_time: datetime) -> _WindowBaseComputation:
+        return self._compute_window_base_reference_like(
+            decision_time=decision_time,
+            bbo_assessment_mode="window_local_tuple",
+        )
+
+    def _compute_window_base_reference_like(
+        self,
+        *,
+        decision_time: datetime,
+        bbo_assessment_mode: Literal["reference_repeated_tuple", "window_local_tuple"],
+    ) -> _WindowBaseComputation:
         decision_time_ts = decision_time.timestamp()
         window_start_ts = decision_time_ts - float(self.lookback_seconds)
+        profile = _SelectorProfile()
         supported_lane_count = 0
         latest_reference_by_symbol: dict[str, float] = {}
         raw_candidates: list[_EventCandidate] = []
@@ -1197,14 +1228,17 @@ class EventTokenCacheSplitWriter:
                     times_arr, lane_events = bucket
                     if times_arr.size <= 0:
                         continue
+                    range_start = time.perf_counter()
                     last_pos = int(np.searchsorted(times_arr, decision_time_ts, side="right")) - 1
                     if last_pos >= 0:
                         latest_reference_by_symbol[symbol] = times_arr[last_pos]
                     start_pos = int(np.searchsorted(times_arr, window_start_ts, side="left"))
                     end_pos = int(np.searchsorted(times_arr, decision_time_ts, side="right"))
+                    lane_slice = lane_events[start_pos:end_pos] if end_pos > start_pos else []
+                    profile.lane_range_extraction_wall_sec += time.perf_counter() - range_start
                     if end_pos <= start_pos:
                         continue
-                    lane_slice = lane_events[start_pos:end_pos]
+                    raw_start = time.perf_counter()
                     previous_source_key: tuple[int, int] | None = None
                     for offset, event in enumerate(lane_slice, start=start_pos):
                         source_key = (int(getattr(event, "source_label_id", 0)), int(getattr(event, "source_event_index", 0)))
@@ -1222,8 +1256,13 @@ class EventTokenCacheSplitWriter:
                                 lane_position=offset,
                             )
                         )
+                    profile.raw_candidate_assembly_wall_sec += time.perf_counter() - raw_start
 
+        ordering_start = time.perf_counter()
         raw_candidates.sort(key=_candidate_key)
+        profile.deterministic_ordering_wall_sec += time.perf_counter() - ordering_start
+
+        dedupe_start = time.perf_counter()
         deduped_candidates: list[_EventCandidate] = []
         seen: set[tuple[str, str, str, int, tuple[tuple[str, tuple[str, object]], ...]]] = set()
         duplicate_count = 0
@@ -1238,6 +1277,7 @@ class EventTokenCacheSplitWriter:
                 continue
             seen.add(dedup_key)
             deduped_candidates.append(candidate)
+        profile.dedupe_wall_sec += time.perf_counter() - dedupe_start
         return self._finish_window_base_computation(
             raw_candidates=raw_candidates,
             deduped_candidates=deduped_candidates,
@@ -1248,10 +1288,9 @@ class EventTokenCacheSplitWriter:
             duplicate_dropped_by_venue=duplicate_dropped_by_venue,
             source_order_inversion_count=source_order_inversion_count,
             decision_time=decision_time,
+            profile=profile,
+            bbo_assessment_mode=bbo_assessment_mode,
         )
-
-    def _compute_window_base_optimized(self, *, decision_time: datetime) -> _WindowBaseComputation:
-        return self._compute_window_base_slow_reference(decision_time=decision_time)
 
     def _finish_window_base_computation(
         self,
@@ -1265,6 +1304,8 @@ class EventTokenCacheSplitWriter:
         duplicate_dropped_by_venue: Counter[str],
         source_order_inversion_count: int,
         decision_time: datetime,
+        profile: _SelectorProfile,
+        bbo_assessment_mode: Literal["reference_repeated_tuple", "window_local_tuple"],
     ) -> _WindowBaseComputation:
         same_timestamp_tie_count = 0
         for previous, current in zip(deduped_candidates, deduped_candidates[1:]):
@@ -1274,11 +1315,11 @@ class EventTokenCacheSplitWriter:
         candidate_by_symbol = Counter(candidate.symbol for candidate in deduped_candidates)
         candidate_by_venue = Counter(candidate.exchange for candidate in deduped_candidates)
         candidate_by_stream = Counter(candidate.stream for candidate in deduped_candidates)
-        profile = _SelectorProfile()
         informative_units = self._emit_informative_units(
             candidates=deduped_candidates,
             decision_time=decision_time,
             profile=profile,
+            bbo_assessment_mode=bbo_assessment_mode,
         )
         window_base = _WindowBase(
             informative_units=informative_units,
@@ -1293,12 +1334,19 @@ class EventTokenCacheSplitWriter:
             candidate_by_symbol=candidate_by_symbol,
             candidate_by_venue=candidate_by_venue,
             candidate_by_stream=candidate_by_stream,
+            lane_range_extraction_wall_sec=profile.lane_range_extraction_wall_sec,
+            raw_candidate_assembly_wall_sec=profile.raw_candidate_assembly_wall_sec,
+            deterministic_ordering_wall_sec=profile.deterministic_ordering_wall_sec,
+            dedupe_wall_sec=profile.dedupe_wall_sec,
+            bbo_tuple_extraction_wall_sec=profile.bbo_tuple_extraction_wall_sec,
+            bbo_burst_significance_wall_sec=profile.bbo_burst_significance_wall_sec,
             bbo_significance_wall_sec=profile.bbo_significance_wall_sec,
         )
         return _WindowBaseComputation(
             window_base=window_base,
             raw_candidates=raw_candidates,
             deduped_candidates=deduped_candidates,
+            profile=profile,
         )
 
     def _target_deduped_candidates(
@@ -1360,6 +1408,7 @@ class EventTokenCacheSplitWriter:
         candidates: list[_EventCandidate],
         decision_time: datetime,
         profile: _SelectorProfile | None = None,
+        bbo_assessment_mode: Literal["reference_repeated_tuple", "window_local_tuple"] = "reference_repeated_tuple",
     ) -> list[_InformativeUnit]:
         decision_time_ms = datetime_to_epoch_millis(decision_time)
         grouped: dict[tuple[str, str, str], list[_EventCandidate]] = defaultdict(list)
@@ -1412,14 +1461,11 @@ class EventTokenCacheSplitWriter:
                         )
                     continue
 
-                burst_start = burst[0]
-                bbo_start = time.perf_counter()
-                bbo_assessments = [
-                    (candidate, *self._bbo_significance_assessment(burst_start=burst_start, candidate=candidate))
-                    for candidate in burst
-                ]
-                if profile is not None:
-                    profile.bbo_significance_wall_sec += time.perf_counter() - bbo_start
+                bbo_assessments = self._bbo_burst_assessments(
+                    burst=burst,
+                    profile=profile,
+                    bbo_assessment_mode=bbo_assessment_mode,
+                )
                 burst_end_reasons, burst_end_salience = next(
                     (set(reasons), salience)
                     for candidate, reasons, salience in bbo_assessments
@@ -1462,6 +1508,81 @@ class EventTokenCacheSplitWriter:
                         matched_reasons=matched_reasons,
                     )
         return sorted(units_by_key.values(), key=_candidate_key)
+
+    def _bbo_burst_assessments(
+        self,
+        *,
+        burst: list[_EventCandidate],
+        profile: _SelectorProfile | None,
+        bbo_assessment_mode: Literal["reference_repeated_tuple", "window_local_tuple"],
+    ) -> list[tuple[_EventCandidate, set[str], float]]:
+        if bbo_assessment_mode == "window_local_tuple":
+            return self._bbo_burst_assessments_window_local(
+                burst=burst,
+                profile=profile,
+            )
+        return self._bbo_burst_assessments_reference_repeated_tuple(
+            burst=burst,
+            profile=profile,
+        )
+
+    def _bbo_burst_assessments_reference_repeated_tuple(
+        self,
+        *,
+        burst: list[_EventCandidate],
+        profile: _SelectorProfile | None,
+    ) -> list[tuple[_EventCandidate, set[str], float]]:
+        total_start = time.perf_counter()
+        burst_start = burst[0]
+        tuple_start = time.perf_counter()
+        value_pairs = [
+            (candidate, _bbo_state_tuple(burst_start), _bbo_state_tuple(candidate))
+            for candidate in burst
+        ]
+        if profile is not None:
+            profile.bbo_tuple_extraction_wall_sec += time.perf_counter() - tuple_start
+
+        significance_start = time.perf_counter()
+        assessments: list[tuple[_EventCandidate, set[str], float]] = []
+        for candidate, start_values, current_values in value_pairs:
+            matched_reasons, salience = self._bbo_significance_assessment_from_values(
+                start_values=start_values,
+                current_values=current_values,
+            )
+            assessments.append((candidate, matched_reasons, salience))
+        if profile is not None:
+            profile.bbo_burst_significance_wall_sec += time.perf_counter() - significance_start
+            profile.bbo_significance_wall_sec += time.perf_counter() - total_start
+        return assessments
+
+    def _bbo_burst_assessments_window_local(
+        self,
+        *,
+        burst: list[_EventCandidate],
+        profile: _SelectorProfile | None,
+    ) -> list[tuple[_EventCandidate, set[str], float]]:
+        total_start = time.perf_counter()
+        tuple_start = time.perf_counter()
+        start_values = _bbo_state_tuple(burst[0])
+        current_values_by_candidate = [
+            (candidate, _bbo_state_tuple(candidate))
+            for candidate in burst
+        ]
+        if profile is not None:
+            profile.bbo_tuple_extraction_wall_sec += time.perf_counter() - tuple_start
+
+        significance_start = time.perf_counter()
+        assessments: list[tuple[_EventCandidate, set[str], float]] = []
+        for candidate, current_values in current_values_by_candidate:
+            matched_reasons, salience = self._bbo_significance_assessment_from_values(
+                start_values=start_values,
+                current_values=current_values,
+            )
+            assessments.append((candidate, matched_reasons, salience))
+        if profile is not None:
+            profile.bbo_burst_significance_wall_sec += time.perf_counter() - significance_start
+            profile.bbo_significance_wall_sec += time.perf_counter() - total_start
+        return assessments
 
     def _assign_priority_tiers(
         self,

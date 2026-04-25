@@ -345,3 +345,37 @@ Current target for the next proof-slice is still:
 - prove that retention policy v2 preserves useful market structure before any Phase C work begins
 
 Current `HEAD` does not start `Phase C`.
+
+## R6 preflight / micro-profile gate
+
+Before any full R6 proof rerun, run a bounded representative micro-profile over the
+problematic development split region.
+
+Minimum coverage:
+
+- include the first-pass miss-only region, not only the first few rows
+- cover approximately the first `359` miss rows observed before cache reuse in prior
+  runs, or record an explicit equivalent bounded region
+- include the first cache-reuse transition if feasible
+- if that coverage is unavailable, classify the result as insufficient evidence
+
+The micro-profile must compare reference and candidate optimized modes over the exact
+same rows and report:
+
+- rows processed and last decision timestamp
+- cache hit/miss
+- lane/range extraction
+- raw candidate assembly
+- deterministic ordering/global-sort or equivalent ordering cost
+- dedupe cost
+- BBO tuple extraction
+- BBO burst/significance cost
+- T4 cost
+- quota fill
+- candidate counters
+- projected build-gate impact
+
+R6 optimization must target the dominant `window_base_miss_path` sub-costs. BBO-local
+significance optimization is allowed only if it preserves ordered equivalence and
+projects enough improvement to justify the full paid proof. A green micro-profile
+permits review only; it never proves R6 PASS or opens Phase C1.

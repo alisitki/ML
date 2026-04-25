@@ -110,3 +110,44 @@ def test_prune_execute_writes_thin_mirror_and_cache_summary(
     assert report.exists()
     assert (source_root / "trajectories" / "tensor_cache_v1" / "tensor_cache_manifest.summary.json").exists()
     assert (source_root / "local_prune_receipt.json").exists()
+    thin_manifest_path = source_root / "post_prune_thin_mirror_manifest.json"
+    thin_manifest_sha_path = source_root / "post_prune_thin_mirror_manifest.sha256"
+    assert thin_manifest_path.exists()
+    assert thin_manifest_sha_path.exists()
+
+
+def test_post_prune_thin_manifest_hashes_retained_files_only(
+    repo_root: Path,
+    tmp_path: Path,
+) -> None:
+    prune = _load_prune_module(repo_root)
+    source_root = tmp_path / "outputs" / "run"
+    cache_root = source_root / "trajectories" / "tensor_cache_v1" / "train"
+    cache_root.mkdir(parents=True)
+    (source_root / "SHA256SUMS").write_text("old-full-archive-checksums\n", encoding="utf-8")
+    (source_root / "validation_report.md").write_text("keep\n", encoding="utf-8")
+    (source_root / "trajectories" / "tensor_cache_v1" / "tensor_cache_manifest.json").write_text(
+        '{"format_version": "tensor_cache_v1"}\n',
+        encoding="utf-8",
+    )
+    heavy_shard = cache_root / "shard_00000_X.pt"
+    heavy_shard.write_bytes(b"x" * 1024)
+    receipt = _write_receipt(source_root)
+
+    plan = prune.build_prune_plan(source_root, receipt_path=receipt, repo_root=tmp_path)
+    result = prune.execute_prune_plan(plan)
+
+    assert not heavy_shard.exists()
+    thin_manifest = json.loads(
+        (source_root / "post_prune_thin_mirror_manifest.json").read_text(encoding="utf-8")
+    )
+    retained_paths = {record["path"] for record in thin_manifest["file_inventory"]}
+    assert "trajectories/tensor_cache_v1/train/shard_00000_X.pt" not in retained_paths
+    assert "validation_report.md" in retained_paths
+    assert "SHA256SUMS" in retained_paths
+    assert thin_manifest["self_included_in_file_inventory"] is False
+    assert "post_prune_thin_mirror_manifest.json" not in retained_paths
+    assert "post_prune_thin_mirror_manifest.sha256" not in retained_paths
+    assert thin_manifest["heavy_artifact_class_check"]["passed"] is True
+    assert thin_manifest["pre_prune_archive_evidence"]["checksum_manifest"] == "SHA256SUMS"
+    assert result["post_prune_thin_mirror_manifest"]["sha256"]

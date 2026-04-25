@@ -79,10 +79,17 @@ def _write_r4_fixture(
     *,
     include_run_b_manifest: bool = True,
     omit_run_b_payload: bool = False,
+    include_analysis: bool = True,
+    empty_analysis: bool = False,
+    run_b_not_started: bool = False,
 ) -> None:
     _write_json(root / "baseline_head" / "build.time.json", {"real_seconds": 100.0})
     _write_json(root / "run_a" / "build.time.json", {"real_seconds": 210.0})
-    _write_json(root / "run_b" / "build.time.json", {"real_seconds": 211.0})
+    if run_b_not_started:
+        (root / "run_b").mkdir(parents=True, exist_ok=True)
+        (root / "run_b" / "not_started.exit").write_text("not_started\n", encoding="utf-8")
+    else:
+        _write_json(root / "run_b" / "build.time.json", {"real_seconds": 211.0})
     (root / "baseline_head" / "trajectories" / "manifest.json").parent.mkdir(parents=True, exist_ok=True)
     (root / "baseline_head" / "trajectories" / "manifest.json").write_text("{}\n", encoding="utf-8")
     (root / "baseline_head" / "trajectories" / "payload.bin").write_bytes(b"x" * 10_000)
@@ -91,28 +98,33 @@ def _write_r4_fixture(
             _write_event_manifest(root, run_name, omit_first_payload=run_name == "run_b" and omit_run_b_payload)
         (root / run_name / "trajectories" / "payload.bin").parent.mkdir(parents=True, exist_ok=True)
         (root / run_name / "trajectories" / "payload.bin").write_bytes(b"x" * 1100)
-        _write_json(
-            root / f"{run_name}_event_token_analysis.json",
-            {
-                "row_alignment_ok": True,
-                "splits": {
-                    "development": {
-                        "diagnostics": {
-                            "truncation_rate": 0.20,
-                            "weighted_target_symbol_retained_rate": 0.80,
-                            "weighted_burst_retention_rate": 0.75,
-                            "cross_venue_ordered_adjacency_rate": 0.90,
-                            "trade_to_bbo_ordered_adjacency_rate": 0.85,
-                            "per_symbol_starvation_rate": {
-                                "BTCUSDT": 0.0,
-                                "ETHUSDT": 0.01,
+        if include_analysis:
+            _write_json(
+                root / f"{run_name}_event_token_analysis.json",
+                {"row_alignment_ok": False, "splits": {}}
+                if empty_analysis
+                else {
+                    "row_alignment_ok": True,
+                    "splits": {
+                        "development": {
+                            "event_token_rows": 10,
+                            "diagnostics": {
+                                "row_count": 10,
+                                "truncation_rate": 0.20,
+                                "weighted_target_symbol_retained_rate": 0.80,
+                                "weighted_burst_retention_rate": 0.75,
+                                "cross_venue_ordered_adjacency_rate": 0.90,
+                                "trade_to_bbo_ordered_adjacency_rate": 0.85,
+                                "per_symbol_starvation_rate": {
+                                    "BTCUSDT": 0.0,
+                                    "ETHUSDT": 0.01,
+                                },
+                                "symbol_with_zero_retained_tokens_count_p95": 0.0,
                             },
-                            "symbol_with_zero_retained_tokens_count_p95": 0.0,
                         }
-                    }
+                    },
                 },
-            },
-        )
+            )
     semantic_hash = {
         "status": "ok",
         "file_count": 2,
@@ -172,3 +184,106 @@ def test_validate_ql033_r4_fails_missing_shard_payload(repo_root: Path, tmp_path
     assert report["checks"]["run_b_complete"]["passed"] is False
     assert report["checks"]["run_b_complete"]["value"]["manifest_present"] is True
     assert report["checks"]["run_b_complete"]["value"]["missing_payload_count"] == 1
+
+
+def test_missing_analysis_blocks_all_analysis_metrics_and_aggregate_pass(
+    repo_root: Path,
+    tmp_path: Path,
+) -> None:
+    validator = _load_validator_module(repo_root)
+    run_root = tmp_path / "r4"
+    _write_r4_fixture(run_root, include_analysis=False)
+
+    report = validator.build_report(run_root=run_root, require_archive=True)
+
+    assert report["executive_verdict"]["classification"] == "fail"
+    assert report["executive_verdict"]["proceed"] is False
+    assert "run_a_analysis_evaluable" in report["executive_verdict"]["unknown_blocking"]
+    for metric in (
+        "truncation_rate",
+        "weighted_target_symbol_retained_rate",
+        "weighted_burst_retention_rate",
+        "cross_venue_ordered_adjacency_rate",
+        "trade_to_bbo_ordered_adjacency_rate",
+        "per_symbol_starvation_rate",
+        "symbol_with_zero_retained_tokens_count_p95",
+    ):
+        assert report["checks"][metric]["passed"] is False
+        assert report["checks"][metric]["status"] == validator.UNKNOWN_BLOCKING
+
+
+def test_empty_analysis_does_not_pass_starvation_or_aggregate_verdict(
+    repo_root: Path,
+    tmp_path: Path,
+) -> None:
+    validator = _load_validator_module(repo_root)
+    run_root = tmp_path / "r4"
+    _write_r4_fixture(run_root, empty_analysis=True)
+
+    report = validator.build_report(run_root=run_root, require_archive=True)
+
+    assert report["executive_verdict"]["classification"] == "fail"
+    assert report["executive_verdict"]["proceed"] is False
+    assert report["metrics"]["max_per_symbol_starvation_rate"] is None
+    assert report["checks"]["per_symbol_starvation_rate"]["passed"] is False
+    assert report["checks"]["per_symbol_starvation_rate"]["status"] == validator.UNKNOWN_BLOCKING
+    assert report["checks"]["symbol_with_zero_retained_tokens_count_p95"]["passed"] is False
+    assert report["checks"]["symbol_with_zero_retained_tokens_count_p95"]["status"] == validator.UNKNOWN_BLOCKING
+
+
+def test_incomplete_run_cannot_pass_from_small_build_or_artifact_multiplier(
+    repo_root: Path,
+    tmp_path: Path,
+) -> None:
+    validator = _load_validator_module(repo_root)
+    run_root = tmp_path / "r4"
+    _write_r4_fixture(run_root, include_run_b_manifest=False)
+
+    report = validator.build_report(run_root=run_root, require_archive=True)
+
+    assert report["metrics"]["build_time_multiplier"] is not None
+    assert report["metrics"]["artifact_size_multiplier"] is not None
+    assert report["checks"]["build_time_multiplier"]["passed"] is False
+    assert report["checks"]["build_time_multiplier"]["status"] == validator.UNKNOWN_BLOCKING
+    assert report["checks"]["artifact_size_multiplier"]["passed"] is False
+    assert report["checks"]["artifact_size_multiplier"]["status"] == validator.UNKNOWN_BLOCKING
+
+
+def test_run_b_not_started_blocks_final_pass(repo_root: Path, tmp_path: Path) -> None:
+    validator = _load_validator_module(repo_root)
+    run_root = tmp_path / "r4"
+    _write_r4_fixture(run_root, run_b_not_started=True)
+
+    report = validator.build_report(run_root=run_root, require_archive=True)
+
+    assert report["executive_verdict"]["classification"] == "fail"
+    assert report["checks"]["run_b_started"]["passed"] is False
+    assert "run_b_started" in report["executive_verdict"]["blocked_by"]
+
+
+def test_missing_semantic_payload_tree_hash_is_hard_failure(
+    repo_root: Path,
+    tmp_path: Path,
+) -> None:
+    validator = _load_validator_module(repo_root)
+    run_root = tmp_path / "r4"
+    _write_r4_fixture(run_root)
+    (run_root / "run_b_hashes.json").unlink()
+
+    report = validator.build_report(run_root=run_root, require_archive=True)
+
+    assert report["checks"]["determinism"]["passed"] is False
+    assert report["checks"]["determinism"]["status"] == validator.FAIL
+    assert "determinism" in report["executive_verdict"]["blocked_by"]
+
+
+def test_unknown_blocking_status_blocks_aggregate_pass(repo_root: Path, tmp_path: Path) -> None:
+    validator = _load_validator_module(repo_root)
+    run_root = tmp_path / "r4"
+    _write_r4_fixture(run_root, empty_analysis=True)
+
+    report = validator.build_report(run_root=run_root, require_archive=True)
+
+    assert report["executive_verdict"]["unknown_blocking"]
+    assert report["executive_verdict"]["classification"] == "fail"
+    assert report["executive_verdict"]["proceed"] is False

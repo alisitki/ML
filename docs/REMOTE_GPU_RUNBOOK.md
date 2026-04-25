@@ -117,6 +117,41 @@ Operator sequence:
 6. run prune dry-run from verified receipts
 7. prune only with explicit `--execute`
 
+Post-prune local evidence is intentionally separate from the archive receipt. A
+pre-prune `SHA256SUMS` file proves the archived source root, not the pruned local thin
+mirror. After pruning, retain `post_prune_thin_mirror_manifest.json` plus
+`post_prune_thin_mirror_manifest.sha256` as the checksum surface for retained thin
+files only.
+
+## Proof provenance guard
+
+Before any future paid proof rerun, record current-code provenance and fail closed on
+unexpected local/remote drift:
+
+```bash
+python scripts/remote_proof_provenance.py \
+  --repo-root . \
+  --expected-local-head "$LOCAL_HEAD_EXPECTED" \
+  --baseline-import-proof-commit "$BASELINE_IMPORT_PROOF_COMMIT" \
+  --runner-script "$RUNNER_SCRIPT" \
+  --validator-script scripts/validate_ql033_r4.py \
+  --output-json "$RUN_ROOT/proof_provenance.json"
+```
+
+The provenance record must distinguish:
+
+- current local HEAD expected for the proof code
+- current remote HEAD actual for the proof code
+- pinned baseline import proof commit
+- runner script SHA256
+- validator script SHA256
+- clean/dirty marker and short git status
+- explicit override reason if a current local/remote HEAD mismatch is allowed
+
+The baseline import proof commit is not a substitute for current proof-code
+provenance. If current local and remote HEAD differ without an explicit override
+reason, stop before expensive build work and archive the failed preflight evidence.
+
 ## Controlled first-run posture
 
 Path classification:

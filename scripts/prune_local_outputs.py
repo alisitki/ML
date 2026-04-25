@@ -35,6 +35,9 @@ CACHE_MANIFESTS = {
 EVENT_RETENTION_RECEIPT = (
     "trajectories/event_token_cache_v1/event_token_cache_retention_receipt.json"
 )
+POST_PRUNE_THIN_MIRROR_MANIFEST = "post_prune_thin_mirror_manifest.json"
+POST_PRUNE_THIN_MIRROR_MANIFEST_SHA256 = "post_prune_thin_mirror_manifest.sha256"
+HEAVY_ARTIFACT_SUFFIXES = (".jsonl", ".npy", ".npz", ".parquet", ".pt")
 
 
 @dataclass(frozen=True)
@@ -245,15 +248,80 @@ def execute_prune_plan(plan: PrunePlan) -> dict[str, Any]:
         ),
         "what_was_pruned_locally": pruned,
         "what_was_pruned_remotely": [],
+        "post_prune_thin_mirror_manifest": POST_PRUNE_THIN_MIRROR_MANIFEST,
+        "post_prune_thin_mirror_manifest_sha256": POST_PRUNE_THIN_MIRROR_MANIFEST_SHA256,
     }
     prune_receipt_path = plan.source_root / "local_prune_receipt.json"
     prune_receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    thin_manifest_result = write_post_prune_thin_mirror_manifest(plan)
     return {
         "source_root": str(plan.source_root),
         "pruned_file_count": len(pruned),
         "pruned_bytes": sum(item["size_bytes"] for item in pruned),
         "pruned_human": human_size(sum(item["size_bytes"] for item in pruned)),
         "local_prune_receipt": str(prune_receipt_path),
+        "post_prune_thin_mirror_manifest": thin_manifest_result,
+    }
+
+
+def write_post_prune_thin_mirror_manifest(plan: PrunePlan) -> dict[str, Any]:
+    manifest_path = plan.source_root / POST_PRUNE_THIN_MIRROR_MANIFEST
+    checksum_path = plan.source_root / POST_PRUNE_THIN_MIRROR_MANIFEST_SHA256
+    excluded_names = {POST_PRUNE_THIN_MIRROR_MANIFEST, POST_PRUNE_THIN_MIRROR_MANIFEST_SHA256}
+    file_records: list[dict[str, Any]] = []
+    retained_heavy_files: list[dict[str, Any]] = []
+    for path in iter_files(plan.source_root):
+        relative = path.relative_to(plan.source_root).as_posix()
+        if relative in excluded_names:
+            continue
+        record = {
+            "path": relative,
+            "size_bytes": path.stat().st_size,
+            "sha256": sha256_file(path),
+        }
+        file_records.append(record)
+        if path.suffix in HEAVY_ARTIFACT_SUFFIXES:
+            retained_heavy_files.append(record)
+    payload = {
+        "manifest_version": "post_prune_thin_mirror_manifest_v1",
+        "created_at": utc_now(),
+        "source_root": str(plan.source_root),
+        "archive_receipt_path": str(plan.receipt_path),
+        "archive_destination_prefix": plan.archive_destination_prefix,
+        "pre_prune_archive_evidence": {
+            "source": "archive_receipt",
+            "checksum_manifest": "SHA256SUMS",
+            "note": "pre-prune archive checksums are separate from post-prune thin mirror checksums",
+        },
+        "self_included_in_file_inventory": False,
+        "self_checksum_path": POST_PRUNE_THIN_MIRROR_MANIFEST_SHA256,
+        "post_manifest_reports_excluded": [
+            POST_PRUNE_THIN_MIRROR_MANIFEST,
+            POST_PRUNE_THIN_MIRROR_MANIFEST_SHA256,
+        ],
+        "file_count": len(file_records),
+        "size_bytes": sum(int(record["size_bytes"]) for record in file_records),
+        "size_human": human_size(sum(int(record["size_bytes"]) for record in file_records)),
+        "file_inventory": file_records,
+        "heavy_artifact_class_check": {
+            "passed": not retained_heavy_files,
+            "retained_heavy_file_count": len(retained_heavy_files),
+            "retained_heavy_files": retained_heavy_files,
+        },
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest_sha256 = sha256_file(manifest_path)
+    checksum_path.write_text(
+        f"{manifest_sha256}  {POST_PRUNE_THIN_MIRROR_MANIFEST}\n",
+        encoding="utf-8",
+    )
+    return {
+        "path": str(manifest_path),
+        "sha256_path": str(checksum_path),
+        "sha256": manifest_sha256,
+        "file_count": payload["file_count"],
+        "size_bytes": payload["size_bytes"],
+        "heavy_artifact_class_check": payload["heavy_artifact_class_check"],
     }
 
 

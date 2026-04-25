@@ -75,3 +75,19 @@ def test_archive_plan_keeps_thin_files_and_marks_heavy_payloads(repo_root: Path,
     assert "validation_report.md" in plan.thin_keep_files
     assert "trajectories/manifest.json" in plan.thin_keep_files
     assert "trajectories/tensor_cache_v1/train/shard_00000_X.pt" in plan.prune_candidate_files
+
+
+def test_archive_plan_keeps_post_prune_thin_mirror_evidence(repo_root: Path, tmp_path: Path) -> None:
+    archive = _load_archive_module(repo_root)
+    source_root = tmp_path / "outputs" / "proof"
+    source_root.mkdir(parents=True)
+    (source_root / "post_prune_thin_mirror_manifest.json").write_text("{}\n", encoding="utf-8")
+    (source_root / "post_prune_thin_mirror_manifest.sha256").write_text(
+        "abc  post_prune_thin_mirror_manifest.json\n",
+        encoding="utf-8",
+    )
+
+    plan = archive.build_archive_plan(source_root=source_root, repo_root=tmp_path)
+
+    assert "post_prune_thin_mirror_manifest.json" in plan.thin_keep_files
+    assert "post_prune_thin_mirror_manifest.sha256" in plan.thin_keep_files

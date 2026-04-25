@@ -153,6 +153,19 @@ When cache payloads are pruned locally, canonical cache manifests that would bec
 dangling must be replaced by summary artifacts rather than left as replayable-looking
 manifests.
 
+Post-prune thin mirror evidence is separate from pre-prune archive evidence.
+
+- `SHA256SUMS` and `archive_receipt.json` describe the archived pre-prune source root.
+- They must not be used as a local checksum validation surface after thin pruning.
+- After prune execution, tooling writes `post_prune_thin_mirror_manifest.json` from
+  the retained local files only.
+- That post-prune manifest excludes itself from its file inventory and records its own
+  checksum in `post_prune_thin_mirror_manifest.sha256`.
+- If new reports are written after the post-prune manifest, either regenerate the
+  manifest or keep those reports explicitly outside the post-prune checksum evidence.
+- Reports must distinguish archive completeness, archive checksum/receipt
+  verification, local thin mirror hygiene, and remote prune completion.
+
 ## Supported tooling
 
 Primary operator scripts:

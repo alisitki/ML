@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+import quantlab_ml.trajectories.event_token_cache as event_token_cache_module
 from quantlab_ml.contracts import DatasetSpec, NormalizedMarketEvent
 from quantlab_ml.trajectories import TrajectoryBuilder
 from quantlab_ml.trajectories.event_token_cache import (
@@ -693,6 +694,46 @@ def test_r5_window_base_optimized_path_matches_slow_reference_ordered_output(tmp
             _candidate_snapshot(candidate) for candidate in slow.deduped_candidates
         ]
         assert _window_base_snapshot(optimized.window_base) == _window_base_snapshot(slow.window_base)
+
+
+def test_r6_window_local_bbo_optimization_reduces_repeated_tuple_extraction(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    writer, decision_time = _r5_window_base_writer(tmp_path)
+    real_bbo_state_tuple = event_token_cache_module._bbo_state_tuple
+    tuple_calls: list[tuple[str, str, str, int]] = []
+
+    def _counting_bbo_state_tuple(candidate):
+        tuple_calls.append(
+            (
+                candidate.exchange,
+                candidate.symbol,
+                candidate.stream,
+                candidate.source_event_index,
+            )
+        )
+        return real_bbo_state_tuple(candidate)
+
+    monkeypatch.setattr(event_token_cache_module, "_bbo_state_tuple", _counting_bbo_state_tuple)
+
+    slow = writer._compute_window_base_slow_reference(decision_time=decision_time)
+    slow_tuple_calls = len(tuple_calls)
+    tuple_calls.clear()
+    optimized = writer._compute_window_base_optimized(decision_time=decision_time)
+    optimized_tuple_calls = len(tuple_calls)
+
+    assert [_candidate_snapshot(candidate) for candidate in optimized.raw_candidates] == [
+        _candidate_snapshot(candidate) for candidate in slow.raw_candidates
+    ]
+    assert [_candidate_snapshot(candidate) for candidate in optimized.deduped_candidates] == [
+        _candidate_snapshot(candidate) for candidate in slow.deduped_candidates
+    ]
+    assert _window_base_snapshot(optimized.window_base) == _window_base_snapshot(slow.window_base)
+    assert optimized_tuple_calls < slow_tuple_calls
+    assert optimized.profile.bbo_tuple_extraction_wall_sec >= 0.0
+    assert optimized.profile.bbo_burst_significance_wall_sec >= 0.0
+    assert optimized.profile.deterministic_ordering_wall_sec >= 0.0
 
 
 def test_r5_window_base_precompute_does_not_leak_future_events_or_bursts(tmp_path: Path) -> None:
